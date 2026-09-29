@@ -32,10 +32,51 @@ const BATTLE_MS = 30_000
 const COUNTDOWN_MS = 3_000
 const MOVE_SPEED = 34
 const MOVE_SEND_MS = 40
-const ACTION_MS = 140
+const ACTION_MS = 90
 const RECONCILE_MS = 1000
 /** How long a peer-broadcast position overrides the server snapshot */
 const REMOTE_POS_TTL = 5000
+const COLLECT_RADIUS = 9
+const STEAL_RADIUS = 10
+const PLAYER_HIT_R = 3.2
+
+/**
+ * Obstacle hitboxes in arena % coords (matches .obstacle.one / .obstacle.two CSS).
+ * Rotated rectangles — collision is done in each obstacle's local space.
+ */
+const OBSTACLES: Array<{ cx: number; cy: number; w: number; h: number; angleDeg: number }> = [
+  { cx: 29, cy: 31, w: 16, h: 5.5, angleDeg: 28 },
+  { cx: 71, cy: 69, w: 16, h: 5.5, angleDeg: -32 },
+]
+
+function hitsObstacle(x: number, y: number, radius = PLAYER_HIT_R): boolean {
+  for (const o of OBSTACLES) {
+    const rad = (-o.angleDeg * Math.PI) / 180
+    const dx = x - o.cx
+    const dy = y - o.cy
+    const lx = dx * Math.cos(rad) - dy * Math.sin(rad)
+    const ly = dx * Math.sin(rad) + dy * Math.cos(rad)
+    if (Math.abs(lx) <= o.w / 2 + radius && Math.abs(ly) <= o.h / 2 + radius) return true
+  }
+  return false
+}
+
+/** Try full move, then slide on X, then slide on Y (wall-slide). */
+function resolveMove(
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number,
+): { x: number; y: number } {
+  const x = Math.max(5, Math.min(95, toX))
+  const y = Math.max(7, Math.min(93, toY))
+  if (!hitsObstacle(x, y)) return { x, y }
+  const onlyX = { x, y: fromY }
+  if (!hitsObstacle(onlyX.x, onlyX.y)) return onlyX
+  const onlyY = { x: fromX, y }
+  if (!hitsObstacle(onlyY.x, onlyY.y)) return onlyY
+  return { x: fromX, y: fromY }
+}
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
 const supabaseKey =
@@ -372,19 +413,46 @@ export default function Page() {
         }
       }
 
+      // Merge coins: never revive a coin we (or peer) already marked collected locally
+      const prevCoins = stateRef.current.coins || []
+      const localCollected = new Map(
+        prevCoins.filter((c) => c.collectedBy).map((c) => [c.id, c.collectedBy as string]),
+      )
+      const serverCoins = Array.isArray(raw.coins) ? raw.coins : spawnCoins()
+      const mergedCoins = serverCoins.map((c) => {
+        if (c.collectedBy) return c
+        const by = localCollected.get(c.id)
+        return by ? { ...c, collectedBy: by } : c
+      })
+
+      let players = applyPositions(
+        raw.players,
+        meRef.current,
+        nextPhase,
+        localPosition.current,
+        remoteMap.current,
+      )
+      // Keep optimistic mission counters if server lags
+      if (nextPhase === 'battle') {
+        const prevPlayers = stateRef.current.players
+        players = players.map((p) => {
+          const prev = prevPlayers.find((x) => x.id === p.id)
+          if (!prev) return p
+          return {
+            ...p,
+            coins: Math.max(p.coins || 0, prev.coins || 0),
+            stolen: Math.max(p.stolen || 0, prev.stolen || 0),
+          }
+        })
+      }
+
       const next: State = {
         ...raw,
         phase: nextPhase,
         countdownEndsAt,
         endsAt,
-        coins: Array.isArray(raw.coins) ? raw.coins : spawnCoins(),
-        players: applyPositions(
-          raw.players,
-          meRef.current,
-          nextPhase,
-          localPosition.current,
-          remoteMap.current,
-        ),
+        coins: mergedCoins,
+        players,
       }
 
       setState(next)
@@ -446,6 +514,7 @@ export default function Page() {
     let rafId = 0
     let lastSentAt = 0
     let lastActionAt = 0
+    let lastStealAt = 0
     let lastFrameTime = performance.now()
     let actionInFlight = false
 
@@ -470,8 +539,10 @@ export default function Page() {
       if (dx !== 0 || dy !== 0) {
         const length = Math.hypot(dx, dy) || 1
         const step = MOVE_SPEED * dt
-        const x = Math.max(5, Math.min(95, localPosition.current.x + (dx / length) * step))
-        const y = Math.max(7, Math.min(93, localPosition.current.y + (dy / length) * step))
+        const from = localPosition.current
+        const desiredX = from.x + (dx / length) * step
+        const desiredY = from.y + (dy / length) * step
+        const { x, y } = resolveMove(from.x, from.y, desiredX, desiredY)
         localPosition.current = { x, y }
 
         setState((prev) => {
@@ -495,30 +566,90 @@ export default function Page() {
         }
       }
 
-      if (supabase && now - lastActionAt >= ACTION_MS && !actionInFlight) {
+      // ---- Coin collect + steal (optimistic client + server RPC) ----
+      if (now - lastActionAt >= ACTION_MS && !actionInFlight) {
         lastActionAt = now
         const { x, y } = localPosition.current
+        const meId = meRef.current
         const nearbyCoins = stateRef.current.coins.filter(
-          (c) => !c.collectedBy && Math.hypot(x - c.x, y - c.y) < 10,
+          (c) => !c.collectedBy && Math.hypot(x - c.x, y - c.y) < COLLECT_RADIUS,
         )
         const nearOpponent = stateRef.current.players.some(
-          (pl) => pl.id !== meRef.current && Math.hypot(x - pl.x, y - pl.y) < 9,
+          (pl) => pl.id !== meId && Math.hypot(x - pl.x, y - pl.y) < STEAL_RADIUS,
         )
+
         if (nearbyCoins.length || nearOpponent) {
           actionInFlight = true
-          void Promise.allSettled([
-            ...nearbyCoins.map((coin) =>
-              supabase.rpc('duo_collect', {
-                p_code: codeRef.current,
-                p_token: getToken(),
-                p_coin_id: coin.id,
-              }),
-            ),
-            supabase.rpc('duo_steal', {
-              p_code: codeRef.current,
-              p_token: getToken(),
-            }),
-          ]).finally(() => {
+
+          // Optimistic local updates so coins disappear / counters tick immediately
+          if (nearbyCoins.length) {
+            const collectedIds = new Set(nearbyCoins.map((c) => c.id))
+            setState((prev) => {
+              if (prev.phase !== 'battle') return prev
+              const coins = prev.coins.map((c) =>
+                collectedIds.has(c.id) ? { ...c, collectedBy: meId } : c,
+              )
+              const players = prev.players.map((p) => {
+                if (p.id !== meId) return p
+                const gained = nearbyCoins.length
+                return {
+                  ...p,
+                  coins: p.coins + gained,
+                  // score bump is server-authoritative; keep local progress for mission UI
+                }
+              })
+              return { ...prev, coins, players }
+            })
+            // Tell peers immediately so coins vanish on their screen too
+            channelRef.current?.send({
+              type: 'broadcast',
+              event: 'collect',
+              payload: { ids: nearbyCoins.map((c) => c.id), by: meId },
+            })
+          }
+
+          // Steal has its own longer cooldown so standing on opponent doesn't farm +1 every 90ms
+          let didSteal = false
+          if (nearOpponent && now - lastStealAt >= 700) {
+            lastStealAt = now
+            didSteal = true
+            setState((prev) => {
+              if (prev.phase !== 'battle') return prev
+              const players = prev.players.map((p) => {
+                if (p.id !== meId) return p
+                return { ...p, stolen: Math.min(3, p.stolen + 1) }
+              })
+              return { ...prev, players }
+            })
+            channelRef.current?.send({
+              type: 'broadcast',
+              event: 'steal',
+              payload: { by: meId },
+            })
+          }
+
+          const rpcs: Promise<unknown>[] = []
+          if (supabase) {
+            for (const coin of nearbyCoins) {
+              rpcs.push(
+                supabase.rpc('duo_collect', {
+                  p_code: codeRef.current,
+                  p_token: getToken(),
+                  p_coin_id: coin.id,
+                }),
+              )
+            }
+            if (didSteal) {
+              rpcs.push(
+                supabase.rpc('duo_steal', {
+                  p_code: codeRef.current,
+                  p_token: getToken(),
+                }),
+              )
+            }
+          }
+
+          void Promise.allSettled(rpcs).finally(() => {
             actionInFlight = false
             channelRef.current?.send({ type: 'broadcast', event: 'refresh', payload: {} })
             void refreshAuthoritative()
@@ -643,6 +774,38 @@ export default function Page() {
     channel.on('broadcast', { event: 'pos' }, onMove)
     channel.on('broadcast', { event: 'refresh' }, () => {
       void refreshAuthoritative(normalizedCode)
+    })
+    channel.on('broadcast', { event: 'collect' }, ({ payload }) => {
+      const data = payload as { ids?: number[]; by?: string } | undefined
+      if (!data?.ids?.length) return
+      const ids = new Set(data.ids)
+      const by = data.by || 'opponent'
+      setState((prev) => {
+        if (prev.phase !== 'battle') return prev
+        const coins = prev.coins.map((c) =>
+          ids.has(c.id) && !c.collectedBy ? { ...c, collectedBy: by } : c,
+        )
+        // Don't double-count if we are the collector (already optimistic)
+        const players =
+          by === meRef.current
+            ? prev.players
+            : prev.players.map((p) =>
+                p.id === by ? { ...p, coins: p.coins + data.ids!.length } : p,
+              )
+        return { ...prev, coins, players }
+      })
+    })
+    channel.on('broadcast', { event: 'steal' }, ({ payload }) => {
+      const data = payload as { by?: string } | undefined
+      const by = data?.by
+      if (!by || by === meRef.current) return
+      setState((prev) => {
+        if (prev.phase !== 'battle') return prev
+        const players = prev.players.map((p) =>
+          p.id === by ? { ...p, stolen: Math.min(3, p.stolen + 1) } : p,
+        )
+        return { ...prev, players }
+      })
     })
 
     // Presence as backup path for positions
