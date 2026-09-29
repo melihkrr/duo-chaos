@@ -8,6 +8,7 @@ import {
   BATTLE_MS,
   BUMP_SLOW_MS,
   BUMP_SPEED_MULTIPLIER,
+  chaosEventForRound,
   CLOCK_TICK_MS,
   COLLECT_RADIUS,
   COUNTDOWN_MS,
@@ -27,18 +28,26 @@ import {
   defaultObjectiveForPlayer,
   generateObjectivePair,
   spawnCoins,
+  spawnResourceWave,
   spawnFor,
 } from '@/lib/config'
 import { clampPos, resolveMove } from '@/lib/movement'
 import { missionDoneForDisplay, missionLabel, objectiveOf, objectiveSatisfied, progressOf, targetOf } from '@/lib/display'
 import type { Coin, Phase, Player, RemotePos, State } from '@/lib/types'
 
-type ProfileProgress = { xp: number; level: number; title: string }
+type ProfileProgress = { xp: number; level: number; title: string; unlocks: string[] }
 
 const profileForXp = (xp: number): ProfileProgress => {
   const level = Math.max(1, Math.floor(xp / 250) + 1)
   const title = xp >= 1500 ? 'Chaos Master' : xp >= 1000 ? 'Risk Taker' : xp >= 650 ? 'Coin Thief' : xp >= 300 ? 'Chaos Rookie' : 'Rookie'
-  return { xp, level, title }
+  const unlocks = [
+    'Rookie badge',
+    ...(xp >= 300 ? ['Chaos Rookie title', 'Confetti emote'] : []),
+    ...(xp >= 650 ? ['Coin Thief title', 'Neon trail'] : []),
+    ...(xp >= 1000 ? ['Risk Taker title', 'Victory burst'] : []),
+    ...(xp >= 1500 ? ['Chaos Master title'] : []),
+  ]
+  return { xp, level, title, unlocks }
 }
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -61,7 +70,6 @@ const initialState: State = {
   round: 1,
   roundScores: {},
   matchScores: {},
-  chaosEvent: nextChaosEvent(),
 }
 
 function parseServerTime(raw: unknown, now: number): number {
@@ -158,7 +166,7 @@ export default function Page() {
   const [notice, setNotice] = useState('')
   const [leaving, setLeaving] = useState(false)
   const [confirmLeave, setConfirmLeave] = useState(false)
-  const [profile, setProfile] = useState<ProfileProgress>({ xp: 0, level: 1, title: 'Rookie' })
+  const [profile, setProfile] = useState<ProfileProgress>(profileForXp(0))
   const [, setClock] = useState(0)
 
   const channelRef = useRef<RealtimeChannel | null>(null)
@@ -186,6 +194,7 @@ export default function Page() {
   const slowedUntil = useRef(0)
   const lastBumpAt = useRef(0)
   const lastMagnetAt = useRef(0)
+  const lastResourceWave = useRef(-1)
   const progressionAwardedRound = useRef(0)
 
   function applyChaosEffect(eventId: string | undefined, nextPlayers: Player[]) {
@@ -361,7 +370,9 @@ export default function Page() {
         prevCoins.filter((c) => c.collectedBy).map((c) => [c.id, c.collectedBy as string]),
       )
       const serverCoins: Coin[] = Array.isArray(raw.coins) ? raw.coins : spawnCoins()
-      const mergedCoins = serverCoins.map((c) => {
+      const serverIds = new Set(serverCoins.map((coin) => coin.id))
+      const localWaves = prevCoins.filter((coin) => coin.id >= 1000 && !serverIds.has(coin.id))
+      const mergedCoins = [...serverCoins, ...localWaves].map((c) => {
         if (c.collectedBy) return c
         const by = localCollected.get(c.id)
         return by ? { ...c, collectedBy: by } : c
@@ -374,6 +385,16 @@ export default function Page() {
         localPosition.current,
         remoteMap.current,
       )
+
+      if (nextPhase === 'countdown' && (phaseRef.current === 'lobby' || phaseRef.current === 'results')) {
+        const [p1Objective, p2Objective] = generateObjectivePair(
+          `${codeRef.current}:${Math.max(raw.round || 1, stateRef.current.round)}`,
+        )
+        players = players.map((player) => ({
+          ...player,
+          objective: player.id === 'p1' ? p1Objective : p2Objective,
+        }))
+      }
 
       // SADECE battle sırasında, sunucu gecikirse sayaçları akıcı göstermek için
       // iyimser coin/steal değerini koru. Skor ve results/matchover HER ZAMAN sunucudan.
@@ -493,10 +514,10 @@ export default function Page() {
       const dt = Math.min(0.05, (now - lastFrameTime) / 1000)
       lastFrameTime = now
 
-      if (now - lastChaosSwapAt.current >= 15_000) {
+      if (now - lastChaosSwapAt.current >= BATTLE_MS / 2 && stateRef.current.chaosEvent?.id === undefined) {
         lastChaosSwapAt.current = now
         setState((prev) => {
-          const nextEvent = nextChaosEvent()
+          const nextEvent = chaosEventForRound(`${codeRef.current}:${prev.round}`)
           const players =
             nextEvent.id === 'swap'
               ? applyChaosEffect(nextEvent.id, prev.players.map((p) => ({ ...p })))
@@ -506,11 +527,21 @@ export default function Page() {
             nextEvent.id === 'jackpot' && !hasDiamond
               ? [...prev.coins, { id: 900 + prev.round, x: 50, y: 50, type: 'diamond' as const }]
               : prev.coins
-          return { ...prev, chaosEvent: nextEvent, players, coins }
+          return {
+            ...prev,
+            chaosEvent: nextEvent,
+            chaosEventEndsAt: now + 15_000,
+            players,
+            coins,
+          }
         })
       }
 
-      if (stateRef.current.chaosEvent?.id === 'magnet' && now - lastMagnetAt.current >= 120) {
+      if (
+        stateRef.current.chaosEvent?.id === 'magnet' &&
+        now < (stateRef.current.chaosEventEndsAt || Number.POSITIVE_INFINITY) &&
+        now - lastMagnetAt.current >= 120
+      ) {
         lastMagnetAt.current = now
         setState((prev) => ({
           ...prev,
@@ -520,6 +551,16 @@ export default function Page() {
             const dy = 50 - coin.y
             return { ...coin, x: coin.x + dx * 0.018, y: coin.y + dy * 0.018 }
           }),
+        }))
+      }
+
+      const roundStart = lockedPhase.current === 'battle' ? lockedDeadline.current - BATTLE_MS : 0
+      const wave = roundStart > 0 ? Math.floor((now - roundStart) / 12_000) : 0
+      if (wave > 0 && wave !== lastResourceWave.current) {
+        lastResourceWave.current = wave
+        setState((prev) => ({
+          ...prev,
+          coins: [...prev.coins, ...spawnResourceWave(prev.round, wave)],
         }))
       }
 
@@ -587,7 +628,9 @@ export default function Page() {
                 sum +
                 getCoinValue(
                   coin.type,
-                  stateRef.current.chaosEvent?.id,
+                  stateRef.current.chaosEventEndsAt && Date.now() >= stateRef.current.chaosEventEndsAt
+                    ? undefined
+                    : stateRef.current.chaosEvent?.id,
                   stateRef.current.players.find((player) => player.id === meId)?.objective,
                 ),
               0,
@@ -659,7 +702,7 @@ export default function Page() {
           const rpcs: Promise<unknown>[] = []
           if (supabase) {
             for (const coin of nearbyCoins) {
-              if (coin.type === 'diamond') continue
+              if (coin.type === 'diamond' || coin.id >= 1000) continue
               rpcs.push(
                 supabase.rpc('duo_collect', {
                   p_code: codeRef.current,
@@ -1043,8 +1086,8 @@ export default function Page() {
 
     const ends = Date.now() + COUNTDOWN_MS
     lastChaosSwapAt.current = ends
-    const firstEvent = nextChaosEvent()
-    const [p1Objective, p2Objective] = generateObjectivePair()
+    lastResourceWave.current = -1
+    const [p1Objective, p2Objective] = generateObjectivePair(`${room}:1`)
     lockDeadline('countdown', COUNTDOWN_MS)
     lockedDeadline.current = ends
     setState((prev) => ({
@@ -1052,7 +1095,8 @@ export default function Page() {
       phase: 'countdown',
       countdownEndsAt: ends,
       endsAt: ends + BATTLE_MS,
-      chaosEvent: firstEvent,
+      chaosEvent: undefined,
+      chaosEventEndsAt: 0,
       players: prev.players.map((p, index) => ({
         ...p,
         objective: index === 0 ? p1Objective : p2Objective,
@@ -1081,9 +1125,10 @@ export default function Page() {
     }
 
     const nextRound = state.round + 1
-    const [p1Objective, p2Objective] = generateObjectivePair()
+    const [p1Objective, p2Objective] = generateObjectivePair(`${room}:${nextRound}`)
     const ends = Date.now() + COUNTDOWN_MS
     lastChaosSwapAt.current = ends
+    lastResourceWave.current = -1
     lockDeadline('countdown', COUNTDOWN_MS)
     lockedDeadline.current = ends
     setState((prev) => ({
@@ -1093,7 +1138,8 @@ export default function Page() {
       countdownEndsAt: ends,
       endsAt: ends + BATTLE_MS,
       coins: spawnCoins(),
-      chaosEvent: nextChaosEvent(),
+      chaosEvent: undefined,
+      chaosEventEndsAt: 0,
       players: prev.players.map((p, index) => ({
         ...p,
         objective: index === 0 ? p1Objective : p2Objective,
@@ -1527,6 +1573,9 @@ function Battle({
 }) {
   const objective = objectiveOf(self)
   const isCountdown = phase === 'countdown'
+  const chaosActive = Boolean(
+    state.chaosEvent && (!state.chaosEventEndsAt || Date.now() < state.chaosEventEndsAt),
+  )
 
   return (
     <section className="battle-wrap">
@@ -1547,7 +1596,7 @@ function Battle({
         <strong>{missionLabel(objective)}</strong>
         <small>{self ? `${progressOf(self)} / ${targetOf(objective)}` : `0 / ${targetOf(objective)}`}</small>
       </div>
-      {state.chaosEvent && (
+      {chaosActive && state.chaosEvent && (
         <div
           className="mission-strip"
           style={{
@@ -1564,14 +1613,14 @@ function Battle({
       <div
         className="arena"
         style={{
-          filter: state.chaosEvent?.id === 'blackout' ? 'brightness(0.72) saturate(0.8)' : 'none',
+          filter: chaosActive && state.chaosEvent?.id === 'blackout' ? 'brightness(0.72) saturate(0.8)' : 'none',
         }}
       >
         <div className="boundary" />
         {state.coins
           .filter((c) => {
             if (c.collectedBy) return false
-            if (state.chaosEvent?.id !== 'blackout' || !self) return true
+            if (!chaosActive || state.chaosEvent?.id !== 'blackout' || !self) return true
             return Math.hypot(self.x - c.x, self.y - c.y) <= 26 || c.type === 'diamond'
           })
           .map((c) => {
@@ -1729,7 +1778,7 @@ function Results({
         ))}
       </div>
       <div className="progression-callout">
-        <Sparkles /> <strong>{profile.title}</strong><span>LEVEL {profile.level} · {profile.xp} XP</span>
+        <Sparkles /> <strong>{profile.title}</strong><span>LEVEL {profile.level} · {profile.xp} XP · {profile.unlocks.at(-1)}</span>
       </div>
       {!isFinal && (
         <button className="primary wide" onClick={onNextRound} disabled={!isHost}>

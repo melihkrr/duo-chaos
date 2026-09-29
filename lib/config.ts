@@ -62,8 +62,18 @@ export const defaultObjectiveForPlayer = (id: string): Objective => {
   return OBJECTIVE_POOL[index % OBJECTIVE_POOL.length]
 }
 
-export const generateObjectivePair = (): [Objective, Objective] => {
-  const shuffled = [...OBJECTIVE_POOL].sort(() => Math.random() - 0.5)
+export const generateObjectivePair = (seed?: string): [Objective, Objective] => {
+  const hash = (value: string) => {
+    let result = 2166136261
+    for (let index = 0; index < value.length; index += 1) {
+      result ^= value.charCodeAt(index)
+      result = Math.imul(result, 16777619)
+    }
+    return result >>> 0
+  }
+  const shuffled = [...OBJECTIVE_POOL].sort((left, right) =>
+    hash(`${seed || Math.random()}:${left.id}`) - hash(`${seed || Math.random()}:${right.id}`),
+  )
   const first = shuffled[0] ?? OBJECTIVE_POOL[0]
   const second = shuffled.find((item) => item.id !== first.id) ?? first
   return [first, second]
@@ -73,6 +83,11 @@ export const nextChaosEvent = (at = Date.now()): ChaosEvent => {
   const slot = Math.floor(at / 15_000)
   const event = CHAOS_EVENTS[slot % CHAOS_EVENTS.length]
   return event ?? CHAOS_EVENTS[0]
+}
+
+export const chaosEventForRound = (seed: string): ChaosEvent => {
+  const value = [...seed].reduce((sum, character) => sum + character.charCodeAt(0), 0)
+  return CHAOS_EVENTS[value % CHAOS_EVENTS.length] ?? CHAOS_EVENTS[0]
 }
 
 export const getCoinValue = (type: CoinType, chaosEvent?: string, objective?: Objective | null) => {
@@ -93,5 +108,15 @@ export const spawnCoins = (): Coin[] =>
     y: 12 + ((i * 47) % 76),
     type: COIN_TYPES[i % COIN_TYPES.length],
   }))
+
+export const spawnResourceWave = (round: number, wave: number): Coin[] => {
+  const anchor = (round * 17 + wave * 23) % 76
+  return [0, 1].map((index) => ({
+    id: 1000 + round * 100 + wave * 10 + index,
+    x: 12 + ((anchor + index * 37) % 76),
+    y: 16 + ((anchor * 2 + index * 29) % 68),
+    type: COIN_TYPES[(round + wave + index) % COIN_TYPES.length],
+  }))
+}
 
 export const spawnFor = (id: string) => (id === 'p2' ? SPAWN.p2 : SPAWN.p1)

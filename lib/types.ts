@@ -54,6 +54,7 @@ export type State = {
   roundScores?: Record<string, number>
   matchScores?: Record<string, number>
   chaosEvent?: ChaosEvent
+  chaosEventEndsAt?: number
   /** Sadece sunucudan gelir. Client asla hesaplamaz. */
   winner?: string
 }
