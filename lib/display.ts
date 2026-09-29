@@ -74,7 +74,9 @@ export const progressOf = (
     return resourceProgress
   }
   if (objective?.coinType && objective.coinType !== 'mixed') {
-    return p.collectedTypes?.[objective.coinType] || 0
+    const typedProgress = p.collectedTypes?.[objective.coinType]
+    // Older/partial server snapshots may only include the aggregate coin count.
+    return typedProgress ?? p.coins ?? 0
   }
   return objective?.kind === 'steal' ? p.stolen || 0 : p.coins || 0
 }
