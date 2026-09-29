@@ -26,13 +26,16 @@ type State = {
   round: number
   winner?: string
 }
+type RemotePos = { x: number; y: number; at: number }
 
 const BATTLE_MS = 30_000
 const COUNTDOWN_MS = 3_000
 const MOVE_SPEED = 34
-const MOVE_SEND_MS = 32
+const MOVE_SEND_MS = 40
 const ACTION_MS = 140
-const RECONCILE_MS = 900
+const RECONCILE_MS = 1000
+/** How long a peer-broadcast position overrides the server snapshot */
+const REMOTE_POS_TTL = 5000
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
 const supabaseKey =
@@ -41,6 +44,7 @@ const supabase =
   supabaseUrl && supabaseKey
     ? createClient(supabaseUrl, supabaseKey, {
         auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+        realtime: { params: { eventsPerSecond: 30 } },
       })
     : null
 
@@ -60,17 +64,10 @@ const initialState: State = {
   round: 1,
 }
 
-/**
- * Parse a server timestamp into epoch-ms.
- * Returns 0 if unusable. NEVER invents a new "now + duration" — that caused
- * the infinite countdown-reset bug (timer stuck at 3).
- */
 function parseServerTime(raw: unknown, now: number): number {
   let t = Number(raw)
   if (!Number.isFinite(t) || t <= 0) return 0
-  // unix seconds → ms
   if (t > 1e9 && t < 1e12) t *= 1000
-  // relative remaining seconds (1..120)
   if (t > 0 && t <= 120) t = now + t * 1000
   return t
 }
@@ -84,27 +81,81 @@ function mapPlayerId(rawId: string, meId: string): string {
   return meId === 'p1' ? 'p2' : 'p1'
 }
 
-function normalizePlayers(
+function applyPositions(
   rawPlayers: Player[] | undefined,
   meId: string,
   phase: Phase,
   localPos: { x: number; y: number },
-  remotePos: { x: number; y: number; at: number } | null,
+  remoteMap: Map<string, RemotePos>,
 ): Player[] {
   const list = rawPlayers || []
-  return list.map((player) => {
+  const now = Date.now()
+  const mapped = list.map((player) => {
     const mappedId = mapPlayerId(String(player.id), meId)
     const isMe = mappedId === meId
     const base = { ...player, id: mappedId }
 
-    // Always keep optimistic local position during countdown + battle
     if (isMe && (phase === 'battle' || phase === 'countdown')) {
       return { ...base, x: localPos.x, y: localPos.y }
     }
-    if (!isMe && remotePos && (phase === 'battle' || phase === 'countdown') && Date.now() - remotePos.at < 2000) {
-      return { ...base, x: remotePos.x, y: remotePos.y }
+
+    if (!isMe && (phase === 'battle' || phase === 'countdown')) {
+      // Prefer any recent peer broadcast over stale RPC coordinates
+      const remote =
+        remoteMap.get(mappedId) ||
+        remoteMap.get('p1') ||
+        remoteMap.get('p2') ||
+        remoteMap.get('opponent')
+      if (remote && now - remote.at < REMOTE_POS_TTL) {
+        return { ...base, x: remote.x, y: remote.y }
+      }
     }
     return base
+  })
+
+  // Ensure both slots exist during battle so a late move packet can still render
+  if ((phase === 'battle' || phase === 'countdown') && mapped.length < 2) {
+    const hasP1 = mapped.some((p) => p.id === 'p1')
+    const hasP2 = mapped.some((p) => p.id === 'p2')
+    if (!hasP1) {
+      mapped.push({
+        id: 'p1',
+        name: 'PLAYER 1',
+        x: 18,
+        y: 50,
+        coins: 0,
+        stolen: 0,
+        score: 0,
+        objective: 'collect',
+        rematch: false,
+      })
+    }
+    if (!hasP2) {
+      mapped.push({
+        id: 'p2',
+        name: 'PLAYER 2',
+        x: 82,
+        y: 50,
+        coins: 0,
+        stolen: 0,
+        score: 0,
+        objective: 'steal',
+        rematch: false,
+      })
+    }
+  }
+
+  // Re-apply remote after ensuring slots (in case opponent was just injected)
+  return mapped.map((p) => {
+    if (p.id === meId) {
+      if (phase === 'battle' || phase === 'countdown') return { ...p, x: localPos.x, y: localPos.y }
+      return p
+    }
+    const remote = remoteMap.get(p.id)
+    if (remote && now - remote.at < REMOTE_POS_TTL && (phase === 'battle' || phase === 'countdown')) {
+      return { ...p, x: remote.x, y: remote.y }
+    }
+    return p
   })
 }
 
@@ -121,22 +172,25 @@ export default function Page() {
   const [, setClock] = useState(0)
 
   const channelRef = useRef<RealtimeChannel | null>(null)
+  const channelReady = useRef(false)
   const stateRef = useRef(state)
   const meRef = useRef(me)
   const phaseRef = useRef(phase)
   const keys = useRef(new Set<string>())
-  const touchVector = useRef({ x: 0, y: 0 })
+  /** Movement input vector in range [-1, 1] from keyboard + joystick */
+  const moveInput = useRef({ x: 0, y: 0 })
   const tokenRef = useRef('')
   const codeRef = useRef('')
   const refreshInFlight = useRef(false)
   const refreshFailures = useRef(0)
-  /** Locked client deadline for the current phase session — never extended by refresh. */
   const lockedDeadline = useRef(0)
   const lockedPhase = useRef<Phase | ''>('')
   const localPosition = useRef({ x: 18, y: 50 })
-  const remotePosition = useRef<{ x: number; y: number; at: number } | null>(null)
+  /** peerId → last known position from realtime broadcast */
+  const remoteMap = useRef(new Map<string, RemotePos>())
   const transitionInFlight = useRef(false)
   const advancedForDeadline = useRef(0)
+  const lastBroadcastPos = useRef({ x: 0, y: 0 })
 
   function getToken() {
     const storageKey = `duo-chaos-token:${codeRef.current}`
@@ -157,6 +211,76 @@ export default function Page() {
     lockedPhase.current = ''
     lockedDeadline.current = 0
     advancedForDeadline.current = 0
+  }
+
+  /** Apply a peer move packet into state immediately */
+  function ingestRemoteMove(rawId: string, x: number, y: number) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return
+    const mappedId = mapPlayerId(String(rawId), meRef.current)
+    if (mappedId === meRef.current) return
+
+    const clamped = {
+      x: Math.max(5, Math.min(95, x)),
+      y: Math.max(7, Math.min(93, y)),
+      at: Date.now(),
+    }
+    remoteMap.current.set(mappedId, clamped)
+    // also store under raw id so either key works
+    remoteMap.current.set(String(rawId), clamped)
+
+    setState((prev) => {
+      if (prev.phase !== 'battle' && prev.phase !== 'countdown') return prev
+      let found = false
+      const players = prev.players.map((item) => {
+        if (item.id !== mappedId) return item
+        found = true
+        if (item.x === clamped.x && item.y === clamped.y) return item
+        return { ...item, x: clamped.x, y: clamped.y }
+      })
+      if (!found) {
+        players.push({
+          id: mappedId,
+          name: mappedId === 'p1' ? 'PLAYER 1' : 'PLAYER 2',
+          x: clamped.x,
+          y: clamped.y,
+          coins: 0,
+          stolen: 0,
+          score: 0,
+          objective: mappedId === 'p1' ? 'collect' : 'steal',
+          rematch: false,
+        })
+        return { ...prev, players }
+      }
+      return { ...prev, players }
+    })
+  }
+
+  /** Send position to peers (broadcast) + server (RPC). Must be reliable. */
+  function publishMove(x: number, y: number) {
+    const payload = {
+      id: meRef.current,
+      x,
+      y,
+      t: Date.now(),
+      room: codeRef.current,
+    }
+
+    const ch = channelRef.current
+    if (ch && channelReady.current) {
+      // Fire-and-forget; Supabase broadcast is the primary path for peer visibility
+      void ch.send({ type: 'broadcast', event: 'move', payload })
+      // Secondary event name in case filters differ
+      void ch.send({ type: 'broadcast', event: 'pos', payload })
+    }
+
+    if (supabase) {
+      void supabase.rpc('duo_move', {
+        p_code: codeRef.current,
+        p_token: getToken(),
+        p_x: x,
+        p_y: y,
+      })
+    }
   }
 
   const refreshAuthoritative = useCallback(async (code = codeRef.current) => {
@@ -183,9 +307,6 @@ export default function Page() {
       const now = Date.now()
 
       let nextPhase = serverPhase
-
-      // If we already optimistically advanced past what the server still reports,
-      // keep our local phase until the server catches up (prevents countdown↔battle flicker).
       if (
         phaseRef.current === 'battle' &&
         serverPhase === 'countdown' &&
@@ -195,33 +316,27 @@ export default function Page() {
       }
       if (
         (phaseRef.current === 'results' || phaseRef.current === 'matchover') &&
-        (serverPhase === 'battle' || serverPhase === 'countdown')
+        (serverPhase === 'battle' || serverPhase === 'countdown') &&
+        (lockedPhase.current === 'results' || lockedPhase.current === 'matchover')
       ) {
-        // Server lagged — keep results only briefly; prefer server if it's still mid-match after a long time
-        if (lockedPhase.current === 'results' || lockedPhase.current === 'matchover') {
-          nextPhase = phaseRef.current
-        }
+        nextPhase = phaseRef.current
       }
 
       const serverCountdown = parseServerTime(raw.countdownEndsAt, now)
       const serverEnds = parseServerTime(raw.endsAt, now)
 
-      // Resolve deadlines WITHOUT re-extending every poll
       let countdownEndsAt = 0
       let endsAt = 0
 
       if (nextPhase === 'countdown') {
         if (lockedPhase.current === 'countdown' && lockedDeadline.current > 0) {
-          // Keep the locked client deadline; only adopt server if it's a sensible future value
           countdownEndsAt = lockedDeadline.current
           if (serverCountdown > now + 200 && serverCountdown <= now + COUNTDOWN_MS + 500) {
             countdownEndsAt = serverCountdown
             lockedDeadline.current = serverCountdown
           }
         } else {
-          // First time we see countdown from server — lock once
-          countdownEndsAt =
-            serverCountdown > now + 200 ? serverCountdown : now + COUNTDOWN_MS
+          countdownEndsAt = serverCountdown > now + 200 ? serverCountdown : now + COUNTDOWN_MS
           lockDeadline('countdown', Math.max(500, countdownEndsAt - now))
           lockedDeadline.current = countdownEndsAt
         }
@@ -238,12 +353,23 @@ export default function Page() {
           lockedDeadline.current = endsAt
         }
       } else {
-        // lobby / results / matchover — clear lock
         if (lockedPhase.current === 'countdown' || lockedPhase.current === 'battle') {
           clearDeadlineLock()
         }
         countdownEndsAt = serverCountdown
         endsAt = serverEnds
+      }
+
+      // Seed remote map from server positions when we have no recent broadcast
+      for (const pl of raw.players || []) {
+        const id = mapPlayerId(String(pl.id), meRef.current)
+        if (id === meRef.current) continue
+        const existing = remoteMap.current.get(id)
+        if (!existing || now - existing.at > REMOTE_POS_TTL) {
+          if (typeof pl.x === 'number' && typeof pl.y === 'number') {
+            remoteMap.current.set(id, { x: pl.x, y: pl.y, at: now - REMOTE_POS_TTL + 500 })
+          }
+        }
       }
 
       const next: State = {
@@ -252,12 +378,12 @@ export default function Page() {
         countdownEndsAt,
         endsAt,
         coins: Array.isArray(raw.coins) ? raw.coins : spawnCoins(),
-        players: normalizePlayers(
+        players: applyPositions(
           raw.players,
           meRef.current,
           nextPhase,
           localPosition.current,
-          remotePosition.current,
+          remoteMap.current,
         ),
       }
 
@@ -297,7 +423,10 @@ export default function Page() {
       }
     }
     const up = (e: KeyboardEvent) => keys.current.delete(e.key.toLowerCase())
-    const blur = () => keys.current.clear()
+    const blur = () => {
+      keys.current.clear()
+      moveInput.current = { x: 0, y: 0 }
+    }
     window.addEventListener('keydown', down)
     window.addEventListener('keyup', up)
     window.addEventListener('blur', blur)
@@ -310,8 +439,7 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Movement during countdown + battle (so stuck countdown still feels responsive;
-  // real gameplay is battle, but keys must never "die")
+  // Movement loop
   useEffect(() => {
     if (phase !== 'battle' && phase !== 'countdown') return
 
@@ -325,20 +453,19 @@ export default function Page() {
       rafId = requestAnimationFrame(tick)
       const p = phaseRef.current
       if (p !== 'battle' && p !== 'countdown') return
+      if (p !== 'battle') return
 
       const dt = Math.min(0.05, (now - lastFrameTime) / 1000)
       lastFrameTime = now
-
-      // Only actually move during battle (countdown is frozen ready-state)
-      if (p !== 'battle') return
 
       const pressedUp = keys.current.has('w') || keys.current.has('arrowup')
       const pressedDown = keys.current.has('s') || keys.current.has('arrowdown')
       const pressedLeft = keys.current.has('a') || keys.current.has('arrowleft')
       const pressedRight = keys.current.has('d') || keys.current.has('arrowright')
-      const touch = touchVector.current
-      const dx = (pressedRight ? 1 : 0) - (pressedLeft ? 1 : 0) + touch.x
-      const dy = (pressedDown ? 1 : 0) - (pressedUp ? 1 : 0) + touch.y
+      const joy = moveInput.current
+
+      const dx = (pressedRight ? 1 : 0) - (pressedLeft ? 1 : 0) + joy.x
+      const dy = (pressedDown ? 1 : 0) - (pressedUp ? 1 : 0) + joy.y
 
       if (dx !== 0 || dy !== 0) {
         const length = Math.hypot(dx, dy) || 1
@@ -352,25 +479,19 @@ export default function Page() {
           let changed = false
           const players = prev.players.map((item) => {
             if (item.id !== meRef.current) return item
-            if (item.x === x && item.y === y) return item
+            if (Math.abs(item.x - x) < 0.01 && Math.abs(item.y - y) < 0.01) return item
             changed = true
             return { ...item, x, y }
           })
           return changed ? { ...prev, players } : prev
         })
 
-        if (now - lastSentAt >= MOVE_SEND_MS) {
+        const movedEnough =
+          Math.hypot(x - lastBroadcastPos.current.x, y - lastBroadcastPos.current.y) > 0.15
+        if (now - lastSentAt >= MOVE_SEND_MS && movedEnough) {
           lastSentAt = now
-          const payload = { id: meRef.current, x, y, t: Date.now() }
-          channelRef.current?.send({ type: 'broadcast', event: 'move', payload })
-          if (supabase) {
-            void supabase.rpc('duo_move', {
-              p_code: codeRef.current,
-              p_token: getToken(),
-              p_x: x,
-              p_y: y,
-            })
-          }
+          lastBroadcastPos.current = { x, y }
+          publishMove(x, y)
         }
       }
 
@@ -410,7 +531,18 @@ export default function Page() {
     return () => cancelAnimationFrame(rafId)
   }, [phase, refreshAuthoritative])
 
-  // Single reconcile interval
+  // Heartbeat: keep publishing current pos even when standing still rarely,
+  // so late-joining peer state stays warm. Also re-send last pos every 400ms while moving intent exists.
+  useEffect(() => {
+    if (phase !== 'battle') return
+    const id = window.setInterval(() => {
+      if (phaseRef.current !== 'battle') return
+      const { x, y } = localPosition.current
+      publishMove(x, y)
+    }, 400)
+    return () => window.clearInterval(id)
+  }, [phase])
+
   useEffect(() => {
     if (!codeRef.current || phase === 'home') return
     const interval =
@@ -419,37 +551,28 @@ export default function Page() {
     return () => window.clearInterval(id)
   }, [phase, room, refreshAuthoritative])
 
-  // UI clock
   useEffect(() => {
     if (!['countdown', 'battle'].includes(phase)) return
     const id = window.setInterval(() => setClock(Date.now()), 150)
     return () => window.clearInterval(id)
   }, [phase])
 
-  /**
-   * Local phase machine: when locked deadline expires, advance optimistically.
-   * This is the fix for "timer stuck at 3" — we no longer wait forever for the server.
-   */
   useEffect(() => {
     if (phase !== 'countdown' && phase !== 'battle') return
-
     const id = window.setInterval(() => {
       const s = stateRef.current
       const currentPhase = phaseRef.current
       if (currentPhase !== 'countdown' && currentPhase !== 'battle') return
-
       const deadline =
         lockedPhase.current === currentPhase && lockedDeadline.current > 0
           ? lockedDeadline.current
           : currentPhase === 'countdown'
             ? s.countdownEndsAt
             : s.endsAt
-
       if (!deadline || deadline <= 0) return
       if (Date.now() < deadline) return
       if (advancedForDeadline.current === deadline) return
       advancedForDeadline.current = deadline
-
       void advancePhaseLocally(currentPhase)
     }, 80)
     return () => window.clearInterval(id)
@@ -460,7 +583,6 @@ export default function Page() {
     if (transitionInFlight.current) return
     transitionInFlight.current = true
     try {
-      // Optimistic client transition so the UI never freezes
       if (fromPhase === 'countdown') {
         const ends = Date.now() + BATTLE_MS
         lockDeadline('battle', BATTLE_MS)
@@ -481,14 +603,12 @@ export default function Page() {
         phaseRef.current = 'results'
       }
 
-      // Tell server + peers
       if (supabase && codeRef.current) {
         const { error } = await supabase.rpc('duo_advance_phase', {
           p_code: codeRef.current,
           p_token: getToken(),
         })
         if (error && !error.message.includes('not_ready')) {
-          // still ok — we already advanced locally
           console.warn('duo_advance_phase', error.message)
         }
         channelRef.current?.send({ type: 'broadcast', event: 'refresh', payload: {} })
@@ -501,44 +621,73 @@ export default function Page() {
 
   async function subscribeToRoom(normalizedCode: string) {
     if (!supabase) return false
+    channelReady.current = false
     channelRef.current?.unsubscribe()
+
     const channel = supabase.channel(`duo-chaos:${normalizedCode}`, {
-      config: { broadcast: { self: false } },
+      config: {
+        broadcast: { self: false, ack: false },
+        presence: { key: meRef.current },
+      },
     })
 
+    const onMove = (msg: { payload?: unknown }) => {
+      const payload = msg?.payload as { id?: string; x?: number; y?: number } | undefined
+      if (!payload) return
+      if (typeof payload.x !== 'number' || typeof payload.y !== 'number') return
+      const id = payload.id || 'opponent'
+      ingestRemoteMove(id, payload.x, payload.y)
+    }
+
+    channel.on('broadcast', { event: 'move' }, onMove)
+    channel.on('broadcast', { event: 'pos' }, onMove)
     channel.on('broadcast', { event: 'refresh' }, () => {
       void refreshAuthoritative(normalizedCode)
     })
 
-    channel.on('broadcast', { event: 'move' }, ({ payload }) => {
-      if (!payload || typeof payload !== 'object') return
-      const p = payload as { id?: string; x?: number; y?: number }
-      if (p.id === meRef.current) return
-      if (typeof p.x !== 'number' || typeof p.y !== 'number') return
+    // Presence as backup path for positions
+    channel.on('presence', { event: 'sync' }, () => {
+      const presence = channel.presenceState() as Record<
+        string,
+        Array<{ id?: string; x?: number; y?: number }>
+      >
+      for (const key of Object.keys(presence)) {
+        const rows = presence[key] || []
+        for (const row of rows) {
+          if (typeof row.x === 'number' && typeof row.y === 'number' && row.id) {
+            ingestRemoteMove(row.id, row.x, row.y)
+          }
+        }
+      }
+    })
 
-      remotePosition.current = { x: p.x, y: p.y, at: Date.now() }
-      setState((prev) => {
-        if (prev.phase !== 'battle' && prev.phase !== 'countdown') return prev
-        const oppId = meRef.current === 'p1' ? 'p2' : 'p1'
-        let changed = false
-        const players = prev.players.map((item) => {
-          if (item.id !== oppId && item.id !== p.id) return item
-          if (item.x === p.x && item.y === p.y) return item
-          changed = true
-          return { ...item, x: p.x!, y: p.y! }
-        })
-        return changed ? { ...prev, players } : prev
+    await new Promise<void>((resolve) => {
+      void channel.subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          channelReady.current = true
+          channelRef.current = channel
+          setNotice((v) => (v === 'Realtime is reconnecting. The room is still active.' ? '' : v))
+          try {
+            await channel.track({
+              id: meRef.current,
+              x: localPosition.current.x,
+              y: localPosition.current.y,
+            })
+          } catch {
+            /* presence optional */
+          }
+          // Immediately announce current position so the other client sees us
+          publishMove(localPosition.current.x, localPosition.current.y)
+          resolve()
+        }
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          channelReady.current = false
+          setNotice('Realtime is reconnecting. The room is still active.')
+          resolve()
+        }
       })
     })
 
-    await channel.subscribe((status) => {
-      if (status === 'SUBSCRIBED') {
-        setNotice((v) => (v === 'Realtime is reconnecting. The room is still active.' ? '' : v))
-      }
-      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-        setNotice('Realtime is reconnecting. The room is still active.')
-      }
-    })
     channelRef.current = channel
     return true
   }
@@ -550,7 +699,7 @@ export default function Page() {
     setMe(playerId)
     meRef.current = playerId
     localPosition.current = playerId === 'p1' ? { x: 18, y: 50 } : { x: 82, y: 50 }
-    remotePosition.current = null
+    remoteMap.current.clear()
     clearDeadlineLock()
     setPhase('lobby')
     getToken()
@@ -622,7 +771,7 @@ export default function Page() {
     setMe(playerId)
     meRef.current = playerId
     localPosition.current = playerId === 'p1' ? { x: 18, y: 50 } : { x: 82, y: 50 }
-    remotePosition.current = null
+    remoteMap.current.clear()
     clearDeadlineLock()
     await subscribeToRoom(normalizedCode)
     await refreshAuthoritative(normalizedCode)
@@ -664,7 +813,6 @@ export default function Page() {
       return
     }
 
-    // Optimistic countdown — lock deadline IMMEDIATELY so timer counts 3→2→1
     const ends = Date.now() + COUNTDOWN_MS
     lockDeadline('countdown', COUNTDOWN_MS)
     lockedDeadline.current = ends
@@ -690,7 +838,7 @@ export default function Page() {
     if (error) setNotice('Rematch is unavailable right now.')
     else {
       clearDeadlineLock()
-      remotePosition.current = null
+      remoteMap.current.clear()
       localPosition.current = meRef.current === 'p1' ? { x: 18, y: 50 } : { x: 82, y: 50 }
       await refreshAuthoritative()
     }
@@ -704,12 +852,13 @@ export default function Page() {
         await supabase.rpc('duo_leave', { p_code: room, p_token: getToken() })
       }
     } finally {
+      channelReady.current = false
       channelRef.current?.unsubscribe()
       channelRef.current = null
       sessionStorage.removeItem(`duo-chaos-token:${room}`)
       tokenRef.current = ''
       codeRef.current = ''
-      remotePosition.current = null
+      remoteMap.current.clear()
       clearDeadlineLock()
       history.pushState({}, '', '/')
       setRoom('')
@@ -738,7 +887,6 @@ export default function Page() {
     }
   }
 
-  // ---- Timer display (uses locked deadline first) ----
   const now = Date.now()
   let displayCountdown = 0
   let displayRemaining = 30
@@ -749,7 +897,6 @@ export default function Page() {
         ? lockedDeadline.current
         : state.countdownEndsAt
     displayCountdown = Math.max(1, Math.ceil((dl - now) / 1000))
-    // If somehow past deadline, show 1 until phase advances
     if (dl > 0 && now >= dl) displayCountdown = 1
   } else if (phase === 'battle') {
     const dl =
@@ -807,8 +954,8 @@ export default function Page() {
           remaining={displayRemaining}
           countdown={displayCountdown}
           phase={phase}
-          onTouchVector={(x, y) => {
-            touchVector.current = { x, y }
+          onMoveInput={(x, y) => {
+            moveInput.current = { x, y }
           }}
         />
       )}
@@ -981,6 +1128,84 @@ function Lobby({
   )
 }
 
+/** Professional virtual joystick — fixed bottom-left on touch devices */
+function VirtualJoystick({
+  disabled,
+  onChange,
+}: {
+  disabled?: boolean
+  onChange: (x: number, y: number) => void
+}) {
+  const baseRef = useRef<HTMLDivElement>(null)
+  const [knob, setKnob] = useState({ x: 0, y: 0 })
+  const active = useRef(false)
+  const radius = 36 // max knob travel in px
+
+  const updateFromEvent = (clientX: number, clientY: number) => {
+    const el = baseRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const cx = rect.left + rect.width / 2
+    const cy = rect.top + rect.height / 2
+    let dx = clientX - cx
+    let dy = clientY - cy
+    const dist = Math.hypot(dx, dy)
+    if (dist > radius) {
+      dx = (dx / dist) * radius
+      dy = (dy / dist) * radius
+    }
+    setKnob({ x: dx, y: dy })
+
+    // Deadzone
+    const nx = dx / radius
+    const ny = dy / radius
+    const mag = Math.hypot(nx, ny)
+    if (mag < 0.12) {
+      onChange(0, 0)
+    } else {
+      // Smooth response curve
+      const scaled = Math.min(1, (mag - 0.12) / 0.88)
+      onChange((nx / mag) * scaled, (ny / mag) * scaled)
+    }
+  }
+
+  const end = () => {
+    active.current = false
+    setKnob({ x: 0, y: 0 })
+    onChange(0, 0)
+  }
+
+  return (
+    <div
+      className="joystick-zone"
+      ref={baseRef}
+      style={{ opacity: disabled ? 0.35 : 1, pointerEvents: disabled ? 'none' : 'auto' }}
+      onPointerDown={(e) => {
+        if (disabled) return
+        e.preventDefault()
+        e.stopPropagation()
+        active.current = true
+        e.currentTarget.setPointerCapture(e.pointerId)
+        updateFromEvent(e.clientX, e.clientY)
+      }}
+      onPointerMove={(e) => {
+        if (!active.current) return
+        e.preventDefault()
+        updateFromEvent(e.clientX, e.clientY)
+      }}
+      onPointerUp={end}
+      onPointerCancel={end}
+    >
+      <span className="joystick-hint">JOYSTICK</span>
+      <div className="joystick-base" />
+      <div
+        className="joystick-knob"
+        style={{ transform: `translate(${knob.x}px, ${knob.y}px)` }}
+      />
+    </div>
+  )
+}
+
 function Battle({
   state,
   self,
@@ -988,7 +1213,7 @@ function Battle({
   remaining,
   countdown,
   phase,
-  onTouchVector,
+  onMoveInput,
 }: {
   state: State
   self?: Player
@@ -996,7 +1221,7 @@ function Battle({
   remaining: number
   countdown: number
   phase: Phase
-  onTouchVector: (x: number, y: number) => void
+  onMoveInput: (x: number, y: number) => void
 }) {
   const objective = self?.objective || (self?.id === 'p1' ? 'collect' : 'steal')
   const isCountdown = phase === 'countdown'
@@ -1022,29 +1247,7 @@ function Battle({
           {objective === 'collect' ? `${self?.coins || 0} / 7` : `${self?.stolen || 0} / 3`}
         </small>
       </div>
-      <div
-        className="arena"
-        onPointerDown={(e) => {
-          if (isCountdown) return
-          e.preventDefault()
-          e.currentTarget.setPointerCapture(e.pointerId)
-          const r = e.currentTarget.getBoundingClientRect()
-          onTouchVector(
-            Math.max(-1, Math.min(1, (e.clientX - (r.left + r.width / 2)) / (r.width / 2))),
-            Math.max(-1, Math.min(1, (e.clientY - (r.top + r.height / 2)) / (r.height / 2))),
-          )
-        }}
-        onPointerMove={(e) => {
-          if (isCountdown || e.buttons === 0) return
-          const r = e.currentTarget.getBoundingClientRect()
-          onTouchVector(
-            Math.max(-1, Math.min(1, (e.clientX - (r.left + r.width / 2)) / (r.width / 2))),
-            Math.max(-1, Math.min(1, (e.clientY - (r.top + r.height / 2)) / (r.height / 2))),
-          )
-        }}
-        onPointerUp={() => onTouchVector(0, 0)}
-        onPointerCancel={() => onTouchVector(0, 0)}
-      >
+      <div className="arena">
         <div className="boundary" />
         {state.coins
           .filter((c) => !c.collectedBy)
@@ -1091,6 +1294,7 @@ function Battle({
             </span>
           </div>
         )}
+        <VirtualJoystick disabled={isCountdown} onChange={onMoveInput} />
       </div>
       <div className="controls-hint">
         <span>MOVE</span>
@@ -1099,7 +1303,7 @@ function Battle({
         <kbd>S</kbd>
         <kbd>D</kbd>
         <span className="touch-hint">
-          {isCountdown ? 'get ready…' : 'or use touch controls'}
+          {isCountdown ? 'get ready…' : 'joystick (mobile) or WASD'}
         </span>
       </div>
     </section>

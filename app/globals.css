@@ -49,3 +49,54 @@ h1 em { color: var(--pink); font-style: normal; -webkit-text-stroke: 2px var(--i
   @layer base { * { border-color: #ded8d2; } }
 
 .leave-game { display: block; margin: 28px auto 0; text-align: center; }
+
+/* Virtual joystick */
+.joystick-zone {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  z-index: 12;
+  width: 120px;
+  height: 120px;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.joystick-base {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 3px solid var(--ink);
+  background: rgb(255 255 255 / 55%);
+  box-shadow: 4px 4px 0 var(--ink);
+  backdrop-filter: blur(4px);
+}
+.joystick-knob {
+  position: absolute;
+  width: 48px;
+  height: 48px;
+  margin: -24px 0 0 -24px;
+  border-radius: 50%;
+  border: 3px solid var(--ink);
+  background: var(--pink);
+  box-shadow: 3px 3px 0 var(--ink);
+  left: 50%;
+  top: 50%;
+  will-change: transform;
+  pointer-events: none;
+}
+.joystick-hint {
+  position: absolute;
+  left: 50%;
+  top: -22px;
+  transform: translateX(-50%);
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: .12em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+@media (min-width: 801px) {
+  .joystick-zone { display: none; }
+}
+.arena { touch-action: none; }
