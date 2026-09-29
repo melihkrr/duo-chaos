@@ -1237,8 +1237,10 @@ function VirtualJoystick({
 }) {
   const baseRef = useRef<HTMLDivElement>(null)
   const [knob, setKnob] = useState({ x: 0, y: 0 })
+  const [visible, setVisible] = useState(false)
+  const [origin, setOrigin] = useState({ x: 18, y: 18 })
   const active = useRef(false)
-  const radius = 36
+  const radius = 28
 
   const updateFromEvent = (clientX: number, clientY: number) => {
     const el = baseRef.current
@@ -1266,6 +1268,7 @@ function VirtualJoystick({
 
   const end = () => {
     active.current = false
+    setVisible(false)
     setKnob({ x: 0, y: 0 })
     onChange(0, 0)
   }
@@ -1274,12 +1277,21 @@ function VirtualJoystick({
     <div
       className="joystick-zone"
       ref={baseRef}
-      style={{ opacity: disabled ? 0.35 : 1, pointerEvents: disabled ? 'none' : 'auto' }}
+      style={{
+        opacity: disabled || !visible ? 0 : 1,
+        pointerEvents: disabled || !visible ? 'none' : 'auto',
+        left: `${origin.x}px`,
+        top: `${origin.y}px`,
+      }}
       onPointerDown={(e) => {
         if (disabled) return
         e.preventDefault()
         e.stopPropagation()
         active.current = true
+        setVisible(true)
+        const nextX = Math.min(window.innerWidth - 84, Math.max(12, e.clientX - 38))
+        const nextY = Math.min(window.innerHeight - 84, Math.max(12, e.clientY - 38))
+        setOrigin({ x: nextX, y: nextY })
         e.currentTarget.setPointerCapture(e.pointerId)
         updateFromEvent(e.clientX, e.clientY)
       }}
@@ -1291,7 +1303,7 @@ function VirtualJoystick({
       onPointerUp={end}
       onPointerCancel={end}
     >
-      <span className="joystick-hint">JOYSTICK</span>
+      <span className="joystick-hint">MOVE</span>
       <div className="joystick-base" />
       <div className="joystick-knob" style={{ transform: `translate(${knob.x}px, ${knob.y}px)` }} />
     </div>
@@ -1333,8 +1345,8 @@ function Battle({
         </div>
       </div>
       <div className="mission-strip">
-        <LockKeyhole /> <span>SECRET MISSION</span>
-        <strong>{missionLabel(objective)}</strong>
+        <span className="mission-label"><LockKeyhole /> SECRET MISSION</span>
+        <strong>{objective?.shortLabel || missionLabel(objective)}</strong>
         <small>{self ? `${progressOf(self)} / ${targetOf(objective)}` : `0 / ${targetOf(objective)}`}</small>
       </div>
       {state.chaosEvent && (

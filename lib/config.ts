@@ -20,7 +20,7 @@ export const POLL_MS = { lobby: 700, countdown: 500, battle: RECONCILE_MS, other
 export const MOVE_SPEED = 34
 export const COLLECT_RADIUS = 9
 export const STEAL_RADIUS = 10
-export const PLAYER_HIT_R = 3.2
+export const PLAYER_HIT_R = 5.6
 export const ARENA = { minX: 5, maxX: 95, minY: 7, maxY: 93 }
 export const SPAWN = { p1: { x: 18, y: 50 }, p2: { x: 82, y: 50 } }
 

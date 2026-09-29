@@ -23,7 +23,20 @@ export function hitsObstacle(x: number, y: number, radius = PLAYER_HIT_R): boole
 export function resolveMove(fromX: number, fromY: number, toX: number, toY: number) {
   const { x, y } = clampPos(toX, toY)
   if (!hitsObstacle(x, y)) return { x, y }
-  if (!hitsObstacle(x, fromY)) return { x, y: fromY }
-  if (!hitsObstacle(fromX, y)) return { x: fromX, y }
-  return { x: fromX, y: fromY }
+
+  const xOnly = { x, y: fromY }
+  const yOnly = { x: fromX, y }
+  const none = { x: fromX, y: fromY }
+
+  const a = hitsObstacle(xOnly.x, xOnly.y) ? 0 : 1
+  const b = hitsObstacle(yOnly.x, yOnly.y) ? 0 : 1
+  if (a && !b) return xOnly
+  if (b && !a) return yOnly
+  if (a && b) {
+    const xDist = Math.hypot(x - fromX, fromY - fromY)
+    const yDist = Math.hypot(fromX - fromX, y - fromY)
+    return xDist >= yDist ? xOnly : yOnly
+  }
+
+  return none
 }

@@ -50,14 +50,50 @@ h1 em { color: var(--pink); font-style: normal; -webkit-text-stroke: 2px var(--i
 
 .leave-game { display: block; margin: 28px auto 0; text-align: center; }
 
+.mission-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 2px solid #ded6d0;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 6px 0 rgba(23, 21, 29, 0.06);
+  font-size: 11px;
+}
+.mission-strip strong {
+  font-size: 14px;
+  letter-spacing: -.02em;
+}
+.mission-strip small {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  color: var(--muted);
+}
+.mission-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--purple);
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.mission-label svg {
+  width: 12px;
+  height: 12px;
+}
+
 /* Virtual joystick */
 .joystick-zone {
-  position: absolute;
-  left: 16px;
-  bottom: 16px;
+  position: fixed;
   z-index: 12;
-  width: 120px;
-  height: 120px;
+  width: 76px;
+  height: 76px;
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
@@ -66,20 +102,20 @@ h1 em { color: var(--pink); font-style: normal; -webkit-text-stroke: 2px var(--i
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  border: 3px solid var(--ink);
-  background: rgb(255 255 255 / 55%);
-  box-shadow: 4px 4px 0 var(--ink);
-  backdrop-filter: blur(4px);
+  border: 2px solid var(--ink);
+  background: rgb(255 255 255 / 60%);
+  box-shadow: 3px 3px 0 var(--ink);
+  backdrop-filter: blur(2px);
 }
 .joystick-knob {
   position: absolute;
-  width: 48px;
-  height: 48px;
-  margin: -24px 0 0 -24px;
+  width: 30px;
+  height: 30px;
+  margin: -15px 0 0 -15px;
   border-radius: 50%;
-  border: 3px solid var(--ink);
+  border: 2px solid var(--ink);
   background: var(--pink);
-  box-shadow: 3px 3px 0 var(--ink);
+  box-shadow: 2px 2px 0 var(--ink);
   left: 50%;
   top: 50%;
   will-change: transform;
@@ -88,9 +124,9 @@ h1 em { color: var(--pink); font-style: normal; -webkit-text-stroke: 2px var(--i
 .joystick-hint {
   position: absolute;
   left: 50%;
-  top: -22px;
+  top: -20px;
   transform: translateX(-50%);
-  font-size: 8px;
+  font-size: 7px;
   font-weight: 900;
   letter-spacing: .12em;
   color: var(--muted);
