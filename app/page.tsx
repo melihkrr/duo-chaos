@@ -410,7 +410,9 @@ export default function Page() {
             ...p,
             coins: Math.max(p.coins || 0, prev.coins || 0),
             stolen: Math.max(p.stolen || 0, prev.stolen || 0),
-            score: Math.max(p.score || 0, prev.score || 0),
+            // Score is authoritative on the server. Never preserve optimistic local score,
+            // otherwise one client can temporarily display a different value than the other.
+            score: p.score || 0,
         collectedTypes: Object.keys({ ...(prev.collectedTypes || {}), ...(p.collectedTypes || {}) }).reduce(
           (counts, type) => ({
             ...counts,
@@ -658,21 +660,25 @@ export default function Page() {
                     (counts, coin) => ({ ...counts, [coin.type]: (counts[coin.type] || 0) + 1 }),
                     { ...(p.collectedTypes || {}) },
                   ),
-                  score: p.score + coinScore,
+                  // Score is confirmed by duo_collect/duo_public_state. Keep this update
+                  // limited to visible mission progress until the server responds.
+                  score: p.score,
                 }
-                const missionBonus = !p.missionDone && objectiveSatisfied(updated) ? 75 : 0
-                return {
-                  ...updated,
-                  missionDone: missionBonus > 0 ? true : updated.missionDone,
-                  score: updated.score + missionBonus,
-                }
+                return updated
               })
               return { ...prev, coins, players }
             })
             channelRef.current?.send({
               type: 'broadcast',
               event: 'collect',
-              payload: { ids: nearbyCoins.map((c) => c.id), by: meId, score: coinScore },
+              payload: {
+                ids: nearbyCoins.map((c) => c.id),
+                by: meId,
+                types: nearbyCoins.reduce<Partial<Record<Coin['type'], number>>>((counts, coin) => ({
+                  ...counts,
+                  [coin.type]: (counts[coin.type] || 0) + 1,
+                }), {}),
+              },
             })
           }
 
@@ -694,8 +700,9 @@ export default function Page() {
                 p.id === meId
                   ? {
                       ...p,
+                      // The RPC owns score calculation; this client only shows the
+                      // immediately visible steal counter.
                       stolen: p.stolen + 1,
-                      score: p.score + 20,
                     }
                   : p,
               )
@@ -874,14 +881,18 @@ export default function Page() {
       void refreshAuthoritative(normalizedCode)
     })
     channel.on('broadcast', { event: 'collect' }, ({ payload }) => {
-      const data = payload as { ids?: number[]; by?: string; score?: number } | undefined
+      const data = payload as {
+        ids?: number[]
+        by?: string
+        types?: Partial<Record<Coin['type'], number>>
+      } | undefined
       if (!data?.ids?.length) return
       const ids = new Set(data.ids)
       const by = data.by || 'opponent'
       setState((prev) => {
         if (prev.phase !== 'battle') return prev
         const freshIds = new Set(prev.coins.filter((coin) => ids.has(coin.id) && !coin.collectedBy).map((coin) => coin.id))
-        const collectedTypes = prev.coins
+        const collectedTypes = data.types || prev.coins
           .filter((coin) => ids.has(coin.id))
           .reduce<Partial<Record<Coin['type'], number>>>(
             (counts, coin) => ({ ...counts, [coin.type]: (counts[coin.type] || 0) + 1 }),
@@ -897,8 +908,7 @@ export default function Page() {
                 p.id === by
                   ? {
                       ...p,
-                      coins: p.coins + data.ids!.length,
-                      score: p.score + (freshIds.size ? data.score || 0 : 0),
+                      coins: p.coins + (freshIds.size || data.ids!.length),
                       collectedTypes: Object.entries(collectedTypes).reduce(
                         (counts, [type, amount]) => ({
                           ...counts,
