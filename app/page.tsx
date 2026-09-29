@@ -410,9 +410,9 @@ export default function Page() {
             ...p,
             coins: Math.max(p.coins || 0, prev.coins || 0),
             stolen: Math.max(p.stolen || 0, prev.stolen || 0),
-            // Score is authoritative on the server. Do not preserve optimistic local score,
-            // otherwise clients can permanently display different values after a refresh.
-            score: p.score || 0,
+            // Keep the highest battle score while RPC/public-state responses settle.
+            // A delayed snapshot must not make the visible score jump back to zero.
+            score: Math.max(p.score || 0, prev.score || 0),
         collectedTypes: Object.keys({ ...(prev.collectedTypes || {}), ...(p.collectedTypes || {}) }).reduce(
           (counts, type) => ({
             ...counts,
