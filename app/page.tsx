@@ -53,13 +53,16 @@ const profileForXp = (xp: number): ProfileProgress => {
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
 const supabaseKey =
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-const supabase =
-  supabaseUrl && supabaseKey
-    ? createClient(supabaseUrl, supabaseKey, {
-        auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-        realtime: { params: { eventsPerSecond: 30 } },
-      })
-    : null
+const supabase = (() => {
+  if (!supabaseUrl || !supabaseKey) return null
+  const globalScope = globalThis as typeof globalThis & {
+    __duoChaosSupabase?: ReturnType<typeof createClient<any>>
+  }
+  return (globalScope.__duoChaosSupabase ??= createClient(supabaseUrl, supabaseKey, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    realtime: { params: { eventsPerSecond: 30 } },
+  }))
+})()
 
 const initialState: State = {
   phase: 'lobby',
@@ -704,16 +707,20 @@ export default function Page() {
             for (const coin of nearbyCoins) {
               if (coin.type === 'diamond' || coin.id >= 1000) continue
               rpcs.push(
-                supabase.rpc('duo_collect', {
-                  p_code: codeRef.current,
-                  p_token: getToken(),
-                  p_coin_id: coin.id,
-                }),
+                Promise.resolve(
+                  supabase.rpc('duo_collect', {
+                    p_code: codeRef.current,
+                    p_token: getToken(),
+                    p_coin_id: coin.id,
+                  }),
+                ).then(() => undefined),
               )
             }
             if (didSteal) {
               rpcs.push(
-                supabase.rpc('duo_steal', { p_code: codeRef.current, p_token: getToken() }),
+                Promise.resolve(
+                  supabase.rpc('duo_steal', { p_code: codeRef.current, p_token: getToken() }),
+                ).then(() => undefined),
               )
             }
           }
@@ -870,7 +877,7 @@ export default function Page() {
         const freshIds = new Set(prev.coins.filter((coin) => ids.has(coin.id) && !coin.collectedBy).map((coin) => coin.id))
         const collectedTypes = prev.coins
           .filter((coin) => ids.has(coin.id))
-          .reduce(
+          .reduce<Partial<Record<Coin['type'], number>>>(
             (counts, coin) => ({ ...counts, [coin.type]: (counts[coin.type] || 0) + 1 }),
             {},
           )

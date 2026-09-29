@@ -7,32 +7,33 @@ import type { CoinType, Objective, Player } from './types'
  */
 export const objectiveOf = (p?: Pick<Player, 'id' | 'objective'>): Objective | null => {
   const fallback = defaultObjectiveForPlayer(p?.id ?? 'p1')
-  const raw = p?.objective
+  const raw = p?.objective as unknown
   if (!raw) return fallback
+  const objective = raw as Objective
 
   if (typeof raw === 'string') {
     const text = raw.replace(/\*+/g, '').trim()
     return { ...fallback, label: text, shortLabel: text, target: Number(text.match(/\d+/)?.[0] || fallback.target) }
   }
 
-  const rawLabel = String(raw.label || '').replace(/\*+/g, '').trim()
-  const rawShortLabel = String(raw.shortLabel || '').replace(/\*+/g, '').trim()
+  const rawLabel = String(objective.label || '').replace(/\*+/g, '').trim()
+  const rawShortLabel = String(objective.shortLabel || '').replace(/\*+/g, '').trim()
   const text = [rawLabel, rawShortLabel].filter(Boolean).join(' ').trim()
   const isGeneric = /^(collect|steal)$/i.test(rawLabel) || /^(collect|steal)$/i.test(rawShortLabel)
   const canonical =
-    OBJECTIVE_POOL.find((item) => item.id === raw.id) ||
+    OBJECTIVE_POOL.find((item) => item.id === objective.id) ||
     OBJECTIVE_POOL.find((item) => item.label.toLowerCase() === text.toLowerCase() || item.shortLabel.toLowerCase() === text.toLowerCase()) ||
     (isGeneric ? fallback : undefined)
 
   return {
     ...(canonical || fallback),
-    ...raw,
+    ...objective,
     label: canonical?.label || (rawLabel || fallback.label),
     shortLabel: canonical?.shortLabel || (rawShortLabel || fallback.shortLabel),
-    target: raw.target > 0 ? raw.target : canonical?.target || fallback.target,
-    coinType: raw.coinType || canonical?.coinType,
-    requirements: raw.requirements || canonical?.requirements,
-    stealTarget: raw.stealTarget || canonical?.stealTarget,
+    target: objective.target > 0 ? objective.target : canonical?.target || fallback.target,
+    coinType: objective.coinType || canonical?.coinType,
+    requirements: objective.requirements || canonical?.requirements,
+    stealTarget: objective.stealTarget || canonical?.stealTarget,
   }
 }
 
@@ -95,4 +96,4 @@ export const missionDoneForDisplay = (p: Player) =>
   p.missionDone ?? objectiveSatisfied(p)
 
 export const missionLabel = (o?: Objective | null) =>
-  (o?.label || 'Collect 3 Gold').replace(/\*+/g, '').trim()
+  String(o?.label ?? 'Collect 3 Gold').replace(/\*+/g, '').trim()
