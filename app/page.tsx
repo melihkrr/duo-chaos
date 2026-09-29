@@ -410,9 +410,9 @@ export default function Page() {
             ...p,
             coins: Math.max(p.coins || 0, prev.coins || 0),
             stolen: Math.max(p.stolen || 0, prev.stolen || 0),
-            // Score is authoritative on the server. Never preserve optimistic local score,
-            // otherwise one client can temporarily display a different value than the other.
-            score: Math.max(p.score || 0, prev.score || 0),
+            // Score is authoritative on the server. Do not preserve optimistic local score,
+            // otherwise clients can permanently display different values after a refresh.
+            score: p.score || 0,
         collectedTypes: Object.keys({ ...(prev.collectedTypes || {}), ...(p.collectedTypes || {}) }).reduce(
           (counts, type) => ({
             ...counts,
