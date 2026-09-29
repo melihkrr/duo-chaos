@@ -5,15 +5,33 @@ import type { CoinType, Objective, Player } from './types'
  * SADECE GÖRÜNTÜ yardımcıları. Skor, kazanan ve görev tamamlama kararı
  * sunucuda verilir; buradaki fonksiyonlar bunları asla belirlemez.
  */
-export const objectiveOf = (p?: Pick<Player, 'id' | 'objective'>): Objective | null =>
-  typeof p?.objective === 'string'
-    ? {
-        ...defaultObjectiveForPlayer(p.id),
-        label: p.objective.replace(/\*+/g, '').trim(),
-        shortLabel: p.objective.replace(/\*+/g, '').trim(),
-        target: Number(p.objective.match(/\d+/)?.[0] || 0),
-      }
-    : p?.objective ?? defaultObjectiveForPlayer(p?.id ?? 'p1')
+export const objectiveOf = (p?: Pick<Player, 'id' | 'objective'>): Objective | null => {
+  const fallback = defaultObjectiveForPlayer(p?.id ?? 'p1')
+  const raw = p?.objective
+  if (!raw) return fallback
+
+  if (typeof raw === 'string') {
+    const text = raw.replace(/\*+/g, '').trim()
+    return { ...fallback, label: text, shortLabel: text, target: Number(text.match(/\d+/)?.[0] || fallback.target) }
+  }
+
+  const text = [raw.label, raw.shortLabel].filter(Boolean).join(' ').replace(/\*+/g, '').trim()
+  const canonical =
+    OBJECTIVE_POOL.find((item) => item.id === raw.id) ||
+    OBJECTIVE_POOL.find((item) => item.label.toLowerCase() === text.toLowerCase() || item.shortLabel.toLowerCase() === text.toLowerCase()) ||
+    (/^(collect|steal)$/i.test(text) ? fallback : undefined)
+
+  return {
+    ...(canonical || fallback),
+    ...raw,
+    label: canonical?.label || (text || fallback.label),
+    shortLabel: canonical?.shortLabel || (text || fallback.shortLabel),
+    target: raw.target > 0 ? raw.target : canonical?.target || fallback.target,
+    coinType: raw.coinType || canonical?.coinType,
+    requirements: raw.requirements || canonical?.requirements,
+    stealTarget: raw.stealTarget || canonical?.stealTarget,
+  }
+}
 
 export const targetOf = (o?: Objective | null) => {
   if (typeof o?.target === 'number' && Number.isFinite(o.target) && o.target > 0) return o.target
