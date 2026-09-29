@@ -1,4 +1,4 @@
-import { defaultObjectiveForPlayer } from './config'
+import { defaultObjectiveForPlayer, OBJECTIVE_POOL } from './config'
 import type { Objective, Player } from './types'
 
 /**
@@ -8,7 +8,11 @@ import type { Objective, Player } from './types'
 export const objectiveOf = (p?: Pick<Player, 'id' | 'objective'>): Objective | null =>
   p?.objective ?? defaultObjectiveForPlayer(p?.id ?? 'p1')
 
-export const targetOf = (o?: Objective | null) => o?.target ?? 0
+export const targetOf = (o?: Objective | null) => {
+  if (typeof o?.target === 'number' && Number.isFinite(o.target) && o.target > 0) return o.target
+  const canonical = OBJECTIVE_POOL.find((item) => item.id === o?.id || item.label === o?.label)
+  return canonical?.target ?? 0
+}
 
 export const progressOf = (p: Pick<Player, 'id' | 'objective' | 'coins' | 'stolen'>) =>
   objectiveOf(p)?.kind === 'steal' ? p.stolen || 0 : p.coins || 0
