@@ -1,6 +1,6 @@
 export type Phase = 'home' | 'lobby' | 'countdown' | 'battle' | 'results' | 'matchover'
 
-export type CoinType = 'gold' | 'blue' | 'red' | 'emerald'
+export type CoinType = 'gold' | 'blue' | 'red' | 'emerald' | 'diamond'
 export type ChaosEventType = 'gold-rush' | 'blackout' | 'magnet' | 'swap' | 'jackpot'
 
 export type ObjectiveKind = 'collect' | 'steal'
@@ -32,6 +32,10 @@ export type Player = {
   stolen: number
   collectedTypes?: Partial<Record<CoinType, number>>
   score: number
+  roundScore?: number
+  totalScore?: number
+  xp?: number
+  slowedUntil?: number
   objective: Objective | null
   rematch: boolean
   /** Sunucu doldurur. Gelmezse display.ts sadece görüntü için hedefe göre türetir. */
@@ -47,6 +51,8 @@ export type State = {
   endsAt: number
   countdownEndsAt: number
   round: number
+  roundScores?: Record<string, number>
+  matchScores?: Record<string, number>
   chaosEvent?: ChaosEvent
   /** Sadece sunucudan gelir. Client asla hesaplamaz. */
   winner?: string

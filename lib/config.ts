@@ -1,13 +1,18 @@
 import type { ChaosEvent, Coin, CoinType, Objective } from './types'
 
 // --- Süreler ---
-export const BATTLE_MS = 30_000
+export const BATTLE_MS = 90_000
 export const COUNTDOWN_MS = 3_000
+export const MATCH_ROUNDS = 3
 
 // --- Ağ / döngü aralıkları ---
 export const MOVE_SEND_MS = 40
 export const ACTION_MS = 90
 export const STEAL_COOLDOWN_MS = 700
+export const DASH_COOLDOWN_MS = 3_000
+export const DASH_DISTANCE = 18
+export const BUMP_SLOW_MS = 400
+export const BUMP_SPEED_MULTIPLIER = 0.55
 export const RECONCILE_MS = 1000
 export const HEARTBEAT_MS = 400
 export const PHASE_TICK_MS = 80
@@ -47,11 +52,11 @@ export const OBJECTIVE_POOL: Objective[] = [
 ]
 
 export const CHAOS_EVENTS: ChaosEvent[] = [
-  { id: 'gold-rush', name: 'Gold Rush', description: 'Gold spawns are boosted for 15s.', boost: 'Gold reward x2' },
+  { id: 'gold-rush', name: 'Gold Rush', description: 'Gold spawns are boosted for 15s.', boost: 'Gold reward x3' },
   { id: 'blackout', name: 'Blackout', description: 'The arena dims and nearby resources become more valuable.', boost: 'Risky visibility' },
   { id: 'magnet', name: 'Magnet Storm', description: 'Coins drift toward the center and pressure rises.', boost: 'Resource control' },
   { id: 'swap', name: 'Chaos Swap', description: 'One of your targets is swapped mid-round.', boost: 'Plans break' },
-  { id: 'jackpot', name: 'Jackpot', description: 'A rare coin appears and shifts the whole round.', boost: 'Huge score swing' },
+  { id: 'jackpot', name: 'Jackpot', description: 'A single Diamond appears. First player gets +50.', boost: 'Diamond +50' },
 ]
 
 export const defaultObjectiveForPlayer = (id: string): Objective => {
@@ -73,8 +78,8 @@ export const nextChaosEvent = (at = Date.now()): ChaosEvent => {
 }
 
 export const getCoinValue = (type: CoinType, chaosEvent?: string) => {
-  const base = { gold: 16, blue: 12, red: 14, emerald: 22 }[type] ?? 10
-  if (chaosEvent === 'gold-rush' && type === 'gold') return base * 2
+  const base = { gold: 16, blue: 12, red: 14, emerald: 22, diamond: 50 }[type] ?? 10
+  if (chaosEvent === 'gold-rush' && type === 'gold') return base * 3
   if (chaosEvent === 'jackpot' && type === 'emerald') return base + 18
   return base
 }

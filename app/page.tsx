@@ -6,10 +6,15 @@ import { ArrowLeft, Check, Copy, Link2, LockKeyhole, Sparkles, Trophy, Users, Za
 import {
   ACTION_MS,
   BATTLE_MS,
+  BUMP_SLOW_MS,
+  BUMP_SPEED_MULTIPLIER,
   CLOCK_TICK_MS,
   COLLECT_RADIUS,
   COUNTDOWN_MS,
+  DASH_COOLDOWN_MS,
+  DASH_DISTANCE,
   HEARTBEAT_MS,
+  MATCH_ROUNDS,
   MOVE_SEND_MS,
   MOVE_SPEED,
   getCoinValue,
@@ -48,6 +53,8 @@ const initialState: State = {
   endsAt: 0,
   countdownEndsAt: 0,
   round: 1,
+  roundScores: {},
+  matchScores: {},
   chaosEvent: nextChaosEvent(),
 }
 
@@ -77,6 +84,8 @@ const blankPlayer = (id: 'p1' | 'p2'): Player => ({
   stolen: 0,
   collectedTypes: {},
   score: 0,
+  roundScore: 0,
+  totalScore: 0,
   objective: defaultObjectiveForPlayer(id),
   rematch: false,
 })
@@ -159,6 +168,11 @@ export default function Page() {
   const advancedForDeadline = useRef(0)
   const lastBroadcastPos = useRef({ x: 0, y: 0 })
   const lastChaosSwapAt = useRef(0)
+  const dashAvailableAt = useRef(0)
+  const dashRequested = useRef(false)
+  const slowedUntil = useRef(0)
+  const lastBumpAt = useRef(0)
+  const lastMagnetAt = useRef(0)
 
   function applyChaosEffect(eventId: string | undefined, nextPlayers: Player[]) {
     if (eventId !== 'swap' || nextPlayers.length < 2) return nextPlayers
@@ -366,6 +380,9 @@ export default function Page() {
       const next: State = {
         ...raw,
         phase: nextPhase,
+        round: raw.round || stateRef.current.round,
+        roundScores: raw.roundScores ?? stateRef.current.roundScores,
+        matchScores: raw.matchScores ?? stateRef.current.matchScores,
         countdownEndsAt,
         endsAt,
         coins: mergedCoins,
@@ -403,9 +420,10 @@ export default function Page() {
 
     const down = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase()
-      if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key)) {
+      if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(key)) {
         e.preventDefault()
-        keys.current.add(key)
+        if (key === ' ') dashRequested.current = true
+        else keys.current.add(key)
       }
     }
     const up = (e: KeyboardEvent) => keys.current.delete(e.key.toLowerCase())
@@ -452,8 +470,26 @@ export default function Page() {
             nextEvent.id === 'swap'
               ? applyChaosEffect(nextEvent.id, prev.players.map((p) => ({ ...p })))
               : prev.players
-          return { ...prev, chaosEvent: nextEvent, players }
+          const hasDiamond = prev.coins.some((coin) => coin.type === 'diamond' && !coin.collectedBy)
+          const coins =
+            nextEvent.id === 'jackpot' && !hasDiamond
+              ? [...prev.coins, { id: 900 + prev.round, x: 50, y: 50, type: 'diamond' as const }]
+              : prev.coins
+          return { ...prev, chaosEvent: nextEvent, players, coins }
         })
+      }
+
+      if (stateRef.current.chaosEvent?.id === 'magnet' && now - lastMagnetAt.current >= 120) {
+        lastMagnetAt.current = now
+        setState((prev) => ({
+          ...prev,
+          coins: prev.coins.map((coin) => {
+            if (coin.collectedBy || coin.type === 'diamond') return coin
+            const dx = 50 - coin.x
+            const dy = 50 - coin.y
+            return { ...coin, x: coin.x + dx * 0.018, y: coin.y + dy * 0.018 }
+          }),
+        }))
       }
 
       const pressedUp = keys.current.has('w') || keys.current.has('arrowup')
@@ -467,14 +503,26 @@ export default function Page() {
 
       if (dx !== 0 || dy !== 0) {
         const length = Math.hypot(dx, dy) || 1
-        const step = MOVE_SPEED * dt
+        const step = MOVE_SPEED * dt * (now < slowedUntil.current ? BUMP_SPEED_MULTIPLIER : 1)
         const from = localPosition.current
-        const { x, y } = resolveMove(
+        let { x, y } = resolveMove(
           from.x,
           from.y,
           from.x + (dx / length) * step,
           from.y + (dy / length) * step,
         )
+        if (dashRequested.current && now >= dashAvailableAt.current) {
+          dashRequested.current = false
+          dashAvailableAt.current = now + DASH_COOLDOWN_MS
+          const dashed = resolveMove(
+            x,
+            y,
+            x + (dx / length) * DASH_DISTANCE,
+            y + (dy / length) * DASH_DISTANCE,
+          )
+          x = dashed.x
+          y = dashed.y
+        }
         localPosition.current = { x, y }
 
         setState((prev) => {
@@ -550,6 +598,14 @@ export default function Page() {
           if (nearOpponent && now - lastStealAt >= STEAL_COOLDOWN_MS) {
             lastStealAt = now
             didSteal = true
+            if (now - lastBumpAt.current >= STEAL_COOLDOWN_MS) {
+              lastBumpAt.current = now
+              channelRef.current?.send({
+                type: 'broadcast',
+                event: 'bump',
+                payload: { by: meId, until: Date.now() + BUMP_SLOW_MS },
+              })
+            }
             setState((prev) => {
               if (prev.phase !== 'battle') return prev
               const players = prev.players.map((p) =>
@@ -569,6 +625,7 @@ export default function Page() {
           const rpcs: Promise<unknown>[] = []
           if (supabase) {
             for (const coin of nearbyCoins) {
+              if (coin.type === 'diamond') continue
               rpcs.push(
                 supabase.rpc('duo_collect', {
                   p_code: codeRef.current,
@@ -669,9 +726,21 @@ export default function Page() {
       } else if (fromPhase === 'battle') {
         clearDeadlineLock()
         lockedPhase.current = 'results'
-        setState((prev) => ({ ...prev, phase: 'results' }))
-        setPhase('results')
-        phaseRef.current = 'results'
+        setState((prev) => {
+          const roundScores = { ...(prev.roundScores || {}) }
+          const matchScores = { ...(prev.matchScores || {}) }
+          const players = prev.players.map((player) => {
+            const roundScore = player.score || 0
+            roundScores[player.id] = roundScore
+            matchScores[player.id] = (matchScores[player.id] || 0) + roundScore
+            return { ...player, roundScore, totalScore: matchScores[player.id] }
+          })
+          const nextPhase = prev.round >= MATCH_ROUNDS ? 'matchover' : 'results'
+          return { ...prev, phase: nextPhase, roundScores, matchScores, players }
+        })
+        const nextPhase = stateRef.current.round >= MATCH_ROUNDS ? 'matchover' : 'results'
+        setPhase(nextPhase)
+        phaseRef.current = nextPhase
       }
 
       if (supabase && codeRef.current) {
@@ -762,6 +831,11 @@ export default function Page() {
         )
         return { ...prev, players }
       })
+    })
+    channel.on('broadcast', { event: 'bump' }, ({ payload }) => {
+      const data = payload as { by?: string; until?: number } | undefined
+      if (!data?.by || data.by === meRef.current) return
+      slowedUntil.current = Math.max(slowedUntil.current, data.until || Date.now() + BUMP_SLOW_MS)
     })
 
     // Pozisyonlar için yedek yol olarak presence
@@ -958,6 +1032,50 @@ export default function Page() {
     await refreshAuthoritative()
   }
 
+  async function startNextRound() {
+    if (!supabase || me !== 'p1' || state.round >= MATCH_ROUNDS) return
+    const { error } = await supabase.rpc('duo_start_round', {
+      p_code: room,
+      p_token: getToken(),
+    })
+    if (error) {
+      setNotice('The next round is not ready yet.')
+      return
+    }
+
+    const nextRound = state.round + 1
+    const [p1Objective, p2Objective] = generateObjectivePair()
+    const ends = Date.now() + COUNTDOWN_MS
+    lastChaosSwapAt.current = ends
+    lockDeadline('countdown', COUNTDOWN_MS)
+    lockedDeadline.current = ends
+    setState((prev) => ({
+      ...prev,
+      phase: 'countdown',
+      round: nextRound,
+      countdownEndsAt: ends,
+      endsAt: ends + BATTLE_MS,
+      coins: spawnCoins(),
+      chaosEvent: nextChaosEvent(),
+      players: prev.players.map((p, index) => ({
+        ...p,
+        objective: index === 0 ? p1Objective : p2Objective,
+        coins: 0,
+        stolen: 0,
+        collectedTypes: {},
+        score: 0,
+        roundScore: 0,
+        rematch: false,
+      })),
+    }))
+    localPosition.current = { ...spawnFor(meRef.current) }
+    remoteMap.current.clear()
+    setPhase('countdown')
+    phaseRef.current = 'countdown'
+    channelRef.current?.send({ type: 'broadcast', event: 'refresh', payload: {} })
+    await refreshAuthoritative()
+  }
+
   async function rematch() {
     if (!supabase) return
     const { error } = await supabase.rpc('duo_rematch', {
@@ -1087,6 +1205,10 @@ export default function Page() {
           remaining={displayRemaining}
           countdown={displayCountdown}
           phase={phase}
+          dashReady={dashAvailableAt.current <= now}
+          onDash={() => {
+            dashRequested.current = true
+          }}
           onMoveInput={(x, y) => {
             moveInput.current = { x, y }
           }}
@@ -1094,7 +1216,13 @@ export default function Page() {
       )}
 
       {(phase === 'results' || phase === 'matchover') && (
-        <Results state={state} me={me} onRematch={rematch} onLeave={() => setConfirmLeave(true)} />
+        <Results
+          state={state}
+          me={me}
+          onNextRound={() => void startNextRound()}
+          onRematch={rematch}
+          onLeave={() => setConfirmLeave(true)}
+        />
       )}
 
       {(phase === 'lobby' || phase === 'countdown' || phase === 'battle') && (
@@ -1351,6 +1479,8 @@ function Battle({
   remaining,
   countdown,
   phase,
+  dashReady,
+  onDash,
   onMoveInput,
 }: {
   state: State
@@ -1359,6 +1489,8 @@ function Battle({
   remaining: number
   countdown: number
   phase: Phase
+  dashReady: boolean
+  onDash: () => void
   onMoveInput: (x: number, y: number) => void
 }) {
   const objective = objectiveOf(self)
@@ -1405,13 +1537,18 @@ function Battle({
       >
         <div className="boundary" />
         {state.coins
-          .filter((c) => !c.collectedBy)
+          .filter((c) => {
+            if (c.collectedBy) return false
+            if (state.chaosEvent?.id !== 'blackout' || !self) return true
+            return Math.hypot(self.x - c.x, self.y - c.y) <= 26 || c.type === 'diamond'
+          })
           .map((c) => {
             const coinColors: Record<string, string> = {
               gold: '#ffd166',
               blue: '#67d4ff',
               red: '#ff7a7a',
               emerald: '#58d6a6',
+              diamond: '#d9c2ff',
             }
             return (
               <span
@@ -1424,7 +1561,15 @@ function Battle({
                   borderColor: '#17151d',
                 }}
               >
-                {c.type === 'gold' ? '$' : c.type === 'blue' ? 'B' : c.type === 'red' ? 'R' : 'E'}
+                {c.type === 'diamond'
+                  ? '◆'
+                  : c.type === 'gold'
+                    ? '$'
+                    : c.type === 'blue'
+                      ? 'B'
+                      : c.type === 'red'
+                        ? 'R'
+                        : 'E'}
               </span>
             )
           })}
@@ -1477,6 +1622,11 @@ function Battle({
         <span className="touch-hint">
           {isCountdown ? 'get ready…' : 'joystick (mobile) or WASD'}
         </span>
+        {!isCountdown && (
+          <button className="dash-button" onClick={onDash} disabled={!dashReady}>
+            DASH <kbd>SPACE</kbd>
+          </button>
+        )}
       </div>
     </section>
   )
@@ -1485,11 +1635,13 @@ function Battle({
 function Results({
   state,
   me,
+  onNextRound,
   onRematch,
   onLeave,
 }: {
   state: State
   me: string
+  onNextRound: () => void
   onRematch: () => void
   onLeave: () => void
 }) {
@@ -1499,7 +1651,8 @@ function Results({
   const bothDone = state.players.length >= 2 && done.every(Boolean)
   const bothFailed = state.players.length >= 2 && done.every((d) => !d)
 
-  let headline = 'Total chaos.'
+  const isFinal = state.phase === 'matchover'
+  let headline = isFinal ? 'Match complete.' : 'Round complete.'
   if (winner) headline = `${winner.name || (winner.id === me ? 'You' : 'Them')} takes it.`
   else if (bothDone) headline = 'Both missions complete!'
   else if (bothFailed) headline = 'Nobody finished the mission.'
@@ -1509,7 +1662,7 @@ function Results({
       <div className="trophy">
         <Trophy />
       </div>
-      <p className="eyebrow">ROUND {state.round} COMPLETE</p>
+      <p className="eyebrow">{isFinal ? 'MATCH COMPLETE' : `ROUND ${state.round} COMPLETE`}</p>
       <h2>{headline}</h2>
       <div className="reveal">
         {state.players.map((p) => {
@@ -1528,6 +1681,7 @@ function Results({
                   {objective?.kind === 'steal'
                     ? `${progress} / ${target} stolen`
                     : `${progress} / ${target} resources collected`}
+                  {' · '}+{p.roundScore ?? p.score ?? 0} ROUND SCORE
                 </small>
               </div>
               <b style={{ color: ok ? 'var(--mint)' : undefined }}>{ok ? 'COMPLETE' : 'FAILED'}</b>
@@ -1538,15 +1692,22 @@ function Results({
       <div className="score-summary">
         {state.players.map((p) => (
           <div key={p.id}>
-            <small>{p.id === me ? 'YOU' : 'THEM'}</small>
-            <strong>{p.score || 0}</strong>
+            <small>{p.id === me ? 'YOU' : 'THEM'} TOTAL</small>
+            <strong>{state.matchScores?.[p.id] ?? p.totalScore ?? p.score ?? 0}</strong>
           </div>
         ))}
       </div>
-      <button className="primary wide" onClick={onRematch}>
-        {state.players.find((p) => p.id === me)?.rematch ? 'WAITING FOR OPPONENT' : 'REMATCH'}{' '}
-        <Zap />
-      </button>
+      {!isFinal && (
+        <button className="primary wide" onClick={onNextRound}>
+          NEXT ROUND <Zap />
+        </button>
+      )}
+      {isFinal && (
+        <button className="primary wide" onClick={onRematch}>
+          {state.players.find((p) => p.id === me)?.rematch ? 'WAITING FOR OPPONENT' : 'REMATCH'}{' '}
+          <Zap />
+        </button>
+      )}
       <button className="text-button" onClick={onLeave}>
         LEAVE GAME
       </button>
