@@ -19,6 +19,7 @@ import {
   STEAL_COOLDOWN_MS,
   STEAL_RADIUS,
   STEAL_TARGET,
+  defaultObjectiveForPlayer,
   spawnCoins,
   spawnFor,
 } from '@/lib/config'
@@ -71,7 +72,7 @@ const blankPlayer = (id: 'p1' | 'p2'): Player => ({
   coins: 0,
   stolen: 0,
   score: 0,
-  objective: id === 'p1' ? 'collect' : 'steal',
+  objective: defaultObjectiveForPlayer(id),
   rematch: false,
 })
 
@@ -1291,11 +1292,28 @@ function Battle({
         <div className="boundary" />
         {state.coins
           .filter((c) => !c.collectedBy)
-          .map((c) => (
-            <span key={c.id} className="arena-coin" style={{ left: `${c.x}%`, top: `${c.y}%` }}>
-              $
-            </span>
-          ))}
+          .map((c) => {
+            const coinColors: Record<string, string> = {
+              gold: '#ffd166',
+              blue: '#67d4ff',
+              red: '#ff7a7a',
+              emerald: '#58d6a6',
+            }
+            return (
+              <span
+                key={c.id}
+                className="arena-coin"
+                style={{
+                  left: `${c.x}%`,
+                  top: `${c.y}%`,
+                  background: coinColors[c.type] || '#ffd166',
+                  borderColor: '#17151d',
+                }}
+              >
+                {c.type === 'gold' ? '$' : c.type === 'blue' ? 'B' : c.type === 'red' ? 'R' : 'E'}
+              </span>
+            )
+          })}
         {state.players.map((p) => (
           <div
             key={p.id}
@@ -1393,9 +1411,9 @@ function Results({
               <div>
                 <strong>{missionLabel(objective)}</strong>
                 <small>
-                  {objective === 'collect'
-                    ? `${progress} / ${target} coins collected`
-                    : `${progress} / ${target} coins stolen`}
+                  {objective?.kind === 'steal'
+                    ? `${progress} / ${target} stolen`
+                    : `${progress} / ${target} resources collected`}
                 </small>
               </div>
               <b style={{ color: ok ? 'var(--mint)' : undefined }}>{ok ? 'COMPLETE' : 'FAILED'}</b>

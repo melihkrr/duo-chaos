@@ -1,5 +1,17 @@
 export type Phase = 'home' | 'lobby' | 'countdown' | 'battle' | 'results' | 'matchover'
-export type Objective = 'collect' | 'steal'
+
+export type CoinType = 'gold' | 'blue' | 'red' | 'emerald'
+
+export type ObjectiveKind = 'collect' | 'steal'
+
+export type Objective = {
+  id: string
+  kind: ObjectiveKind
+  label: string
+  shortLabel: string
+  target: number
+  coinType?: CoinType | 'mixed'
+}
 
 export type Player = {
   id: string
@@ -15,7 +27,7 @@ export type Player = {
   missionDone?: boolean
 }
 
-export type Coin = { id: number; x: number; y: number; collectedBy?: string }
+export type Coin = { id: number; x: number; y: number; type: CoinType; collectedBy?: string }
 
 export type State = {
   phase: Phase

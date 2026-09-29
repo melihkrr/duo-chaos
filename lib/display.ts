@@ -1,21 +1,20 @@
-import { COLLECT_TARGET, STEAL_TARGET } from './config'
+import { defaultObjectiveForPlayer } from './config'
 import type { Objective, Player } from './types'
 
 /**
  * SADECE GÖRÜNTÜ yardımcıları. Skor, kazanan ve görev tamamlama kararı
  * sunucuda verilir; buradaki fonksiyonlar bunları asla belirlemez.
  */
-export const objectiveOf = (p?: Pick<Player, 'id' | 'objective'>): Objective =>
-  p?.objective ?? (p?.id === 'p1' ? 'collect' : 'steal')
+export const objectiveOf = (p?: Pick<Player, 'id' | 'objective'>): Objective | null =>
+  p?.objective ?? defaultObjectiveForPlayer(p?.id ?? 'p1')
 
-export const targetOf = (o: Objective) => (o === 'collect' ? COLLECT_TARGET : STEAL_TARGET)
+export const targetOf = (o?: Objective | null) => o?.target ?? 0
 
 export const progressOf = (p: Pick<Player, 'id' | 'objective' | 'coins' | 'stolen'>) =>
-  objectiveOf(p) === 'collect' ? p.coins || 0 : p.stolen || 0
+  objectiveOf(p)?.kind === 'steal' ? p.stolen || 0 : p.coins || 0
 
 /** Sunucunun missionDone alanı öncelikli; yoksa sadece etiket göstermek için türetilir. */
 export const missionDoneForDisplay = (p: Player) =>
-  p.missionDone ?? progressOf(p) >= targetOf(objectiveOf(p))
+  p.missionDone ?? progressOf(p) >= (targetOf(objectiveOf(p)) || 0)
 
-export const missionLabel = (o: Objective) =>
-  o === 'collect' ? `Collect ${COLLECT_TARGET} coins` : `Steal ${STEAL_TARGET} coins`
+export const missionLabel = (o?: Objective | null) => o?.label ?? 'Collect 3 Gold'

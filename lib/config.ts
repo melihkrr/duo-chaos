@@ -1,4 +1,4 @@
-import type { Coin } from './types'
+import type { Coin, CoinType, Objective } from './types'
 
 // --- Süreler ---
 export const BATTLE_MS = 30_000
@@ -30,9 +30,29 @@ export const OBSTACLES: Array<{ cx: number; cy: number; w: number; h: number; an
   { cx: 71, cy: 69, w: 16, h: 5.5, angleDeg: -32 },
 ]
 
-// --- Görev hedefleri (SADECE görüntü için; gerçek kural sunucuda) ---
+// --- Görev hedefleri (oyunun yeni MVP mantığına göre) ---
 export const COLLECT_TARGET = 7
 export const STEAL_TARGET = 3
+export const COIN_TYPES: CoinType[] = ['gold', 'blue', 'red', 'emerald']
+
+export const OBJECTIVE_POOL: Objective[] = [
+  { id: 'gold-rush', kind: 'collect', label: 'Collect 3 Gold', shortLabel: '3 Gold', target: 3, coinType: 'gold' },
+  { id: 'blue-raid', kind: 'collect', label: 'Collect 2 Blue + 2 Red', shortLabel: '2 Blue + 2 Red', target: 4, coinType: 'mixed' },
+  { id: 'emerald-hunt', kind: 'collect', label: 'Collect 3 Emerald', shortLabel: '3 Emerald', target: 3, coinType: 'emerald' },
+  { id: 'resource-control', kind: 'steal', label: 'Steal 3 from your rival', shortLabel: '3 stolen', target: 3, coinType: 'mixed' },
+  { id: 'jackpot-run', kind: 'collect', label: 'Collect 1 Gold + 2 Blue', shortLabel: '1 Gold + 2 Blue', target: 3, coinType: 'mixed' },
+]
+
+export const defaultObjectiveForPlayer = (id: string): Objective => {
+  const index = id === 'p2' ? 1 : 0
+  return OBJECTIVE_POOL[index % OBJECTIVE_POOL.length]
+}
+
+export const generateObjectivePair = (): [Objective, Objective] => {
+  const pool = [...OBJECTIVE_POOL]
+  pool.sort(() => Math.random() - 0.5)
+  return [pool[0], pool[1] ?? pool[0]]
+}
 
 // --- Coin ---
 export const COIN_COUNT = 14
@@ -42,6 +62,7 @@ export const spawnCoins = (): Coin[] =>
     id: i,
     x: 8 + ((i * 31) % 84),
     y: 12 + ((i * 47) % 76),
+    type: COIN_TYPES[i % COIN_TYPES.length],
   }))
 
 export const spawnFor = (id: string) => (id === 'p2' ? SPAWN.p2 : SPAWN.p1)
