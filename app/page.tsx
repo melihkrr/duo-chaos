@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { createClient, type RealtimeChannel } from '@supabase/supabase-js'
 import { ArrowLeft, Check, Copy, Link2, LockKeyhole, Sparkles, Trophy, Users, Zap } from 'lucide-react'
 
@@ -27,6 +27,13 @@ type State = {
   winner?: string
 }
 
+const BATTLE_MS = 30_000
+const COUNTDOWN_MS = 3_000
+const MOVE_SPEED = 32 // % of arena per second
+const MOVE_SEND_MS = 33 // ~30 Hz position broadcast
+const ACTION_MS = 140
+const RECONCILE_MS = 800
+
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
 const supabaseKey =
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
@@ -37,24 +44,12 @@ const supabase =
       })
     : null
 
-const spawnCoins = () =>
+const spawnCoins = (): Coin[] =>
   Array.from({ length: 14 }, (_, i) => ({
     id: i,
     x: 8 + ((i * 31) % 84),
     y: 12 + ((i * 47) % 76),
   }))
-
-const newPlayer = (id: string, name: string, objective: 'collect' | 'steal'): Player => ({
-  id,
-  name,
-  x: id === 'p1' ? 18 : 82,
-  y: 50,
-  coins: 0,
-  stolen: 0,
-  score: 0,
-  objective,
-  rematch: false,
-})
 
 const initialState: State = {
   phase: 'lobby',
@@ -65,27 +60,54 @@ const initialState: State = {
   round: 1,
 }
 
-/** Map server player ids to local p1/p2 and keep optimistic local position for the current player. */
+/** Convert server timestamps that may be seconds, ms, or already expired. */
+function normalizeDeadline(raw: unknown, now: number, durationMs: number, phaseActive: boolean): number {
+  let t = Number(raw)
+  if (!Number.isFinite(t) || t <= 0) {
+    return phaseActive ? now + durationMs : 0
+  }
+  // Seconds since epoch (10 digits) → ms
+  if (t > 1e9 && t < 1e12) t = t * 1000
+  // Relative remaining seconds (e.g. 30)
+  if (t > 0 && t <= 120) t = now + t * 1000
+  // Already expired while we just entered the phase → give a full duration
+  if (phaseActive && t <= now + 500) {
+    return now + durationMs
+  }
+  return t
+}
+
+function mapPlayerId(rawId: string, meId: string): string {
+  if (rawId === 'me' || rawId === meId) return meId
+  if (rawId === 'opponent' || rawId === 'other' || rawId === 'them') {
+    return meId === 'p1' ? 'p2' : 'p1'
+  }
+  if (rawId === 'p1' || rawId === 'p2') return rawId
+  // Unknown id: treat as opponent if it is not me
+  return meId === 'p1' ? 'p2' : 'p1'
+}
+
 function normalizePlayers(
   rawPlayers: Player[] | undefined,
   meId: string,
   phase: Phase,
   localPos: { x: number; y: number },
+  remotePos: { x: number; y: number; at: number } | null,
 ): Player[] {
   const list = rawPlayers || []
   return list.map((player) => {
-    let mappedId = player.id
-    if (player.id === 'me') mappedId = meId
-    else if (player.id === 'opponent' || player.id === 'other' || player.id === 'them') {
-      mappedId = meId === 'p1' ? 'p2' : 'p1'
+    const mappedId = mapPlayerId(String(player.id), meId)
+    const isMe = mappedId === meId
+    const base = { ...player, id: mappedId }
+
+    if (isMe && phase === 'battle') {
+      return { ...base, x: localPos.x, y: localPos.y }
     }
-    // If server already sent p1/p2, keep as-is
-    const isMe = mappedId === meId || player.id === 'me'
-    return {
-      ...player,
-      id: mappedId,
-      ...(isMe && phase === 'battle' ? { x: localPos.x, y: localPos.y } : {}),
+    // Prefer recent realtime broadcast for opponent over stale RPC snapshot
+    if (!isMe && remotePos && phase === 'battle' && Date.now() - remotePos.at < 1500) {
+      return { ...base, x: remotePos.x, y: remotePos.y }
     }
+    return base
   })
 }
 
@@ -95,7 +117,7 @@ export default function Page() {
   const [copied, setCopied] = useState(false)
   const [soundOn, setSoundOn] = useState(true)
   const [state, setState] = useState<State>(initialState)
-  const [me, setMe] = useState('p1')
+  const [me, setMe] = useState<'p1' | 'p2'>('p1')
   const [notice, setNotice] = useState('')
   const [leaving, setLeaving] = useState(false)
   const [confirmLeave, setConfirmLeave] = useState(false)
@@ -104,6 +126,7 @@ export default function Page() {
   const channelRef = useRef<RealtimeChannel | null>(null)
   const stateRef = useRef(state)
   const meRef = useRef(me)
+  const phaseRef = useRef(phase)
   const keys = useRef(new Set<string>())
   const touchVector = useRef({ x: 0, y: 0 })
   const tokenRef = useRef('')
@@ -112,8 +135,10 @@ export default function Page() {
   const refreshFailures = useRef(0)
   const fallbackDeadline = useRef(0)
   const localPosition = useRef({ x: 18, y: 50 })
-  const phaseRef = useRef(phase)
+  const remotePosition = useRef<{ x: number; y: number; at: number } | null>(null)
   const transitionInFlight = useRef(false)
+  const finishedForDeadline = useRef(0)
+  const battleEnteredAt = useRef(0)
 
   function getToken() {
     const storageKey = `duo-chaos-token:${codeRef.current}`
@@ -124,7 +149,7 @@ export default function Page() {
     return tokenRef.current
   }
 
-  async function refreshAuthoritative(code = codeRef.current) {
+  const refreshAuthoritative = useCallback(async (code = codeRef.current) => {
     if (!supabase || !code || refreshInFlight.current) return
     refreshInFlight.current = true
     try {
@@ -134,9 +159,10 @@ export default function Page() {
       })
       if (error) {
         refreshFailures.current += 1
-        if (error.message.includes('room_not_found')) {
+        const msg = error.message || ''
+        if (msg.includes('room_not_found')) {
           setNotice('That room has expired or does not exist.')
-        } else if (error.message.includes('not_a_player')) {
+        } else if (msg.includes('not_a_player')) {
           setNotice('This browser is not registered in that room. Reopen the invite link.')
         } else if (refreshFailures.current >= 3) {
           setNotice('Connection interrupted. Retrying automatically…')
@@ -145,32 +171,63 @@ export default function Page() {
       }
       refreshFailures.current = 0
       const raw = data as State & { players?: Player[] }
-      const normalizedPhase = raw.phase
+      const normalizedPhase = (raw.phase || 'lobby') as Phase
       const now = Date.now()
-      const serverEndsAt = Number(raw.endsAt) || 0
-      const serverCountdownEndsAt = Number(raw.countdownEndsAt) || 0
 
-      // Never extend an expired server deadline on the client.
-      if (normalizedPhase === 'battle' && serverEndsAt <= 0) {
-        raw.endsAt = now + 30000
-      }
-      if (normalizedPhase === 'countdown' && serverCountdownEndsAt <= 0) {
-        raw.countdownEndsAt = now + 3000
-      }
+      const endsAt = normalizeDeadline(
+        raw.endsAt,
+        now,
+        BATTLE_MS,
+        normalizedPhase === 'battle',
+      )
+      const countdownEndsAt = normalizeDeadline(
+        raw.countdownEndsAt,
+        now,
+        COUNTDOWN_MS,
+        normalizedPhase === 'countdown',
+      )
 
       const next: State = {
         ...raw,
-        players: normalizePlayers(raw.players, meRef.current, normalizedPhase, localPosition.current),
+        phase: normalizedPhase,
+        endsAt,
+        countdownEndsAt,
+        coins: Array.isArray(raw.coins) ? raw.coins : spawnCoins(),
+        players: normalizePlayers(
+          raw.players,
+          meRef.current,
+          normalizedPhase,
+          localPosition.current,
+          remotePosition.current,
+        ),
       }
 
-      if (next.phase !== phaseRef.current) fallbackDeadline.current = 0
+      // Reset client fallback when phase actually changes
+      if (next.phase !== phaseRef.current) {
+        fallbackDeadline.current = 0
+        finishedForDeadline.current = 0
+        if (next.phase === 'battle') {
+          battleEnteredAt.current = now
+          // Ensure we have a usable deadline even if server sent garbage
+          if (!next.endsAt || next.endsAt <= now) {
+            next.endsAt = now + BATTLE_MS
+          }
+          fallbackDeadline.current = next.endsAt
+        } else if (next.phase === 'countdown') {
+          if (!next.countdownEndsAt || next.countdownEndsAt <= now) {
+            next.countdownEndsAt = now + COUNTDOWN_MS
+          }
+          fallbackDeadline.current = next.countdownEndsAt
+        }
+      }
+
       setState(next)
       setPhase(next.phase)
-      if (notice === 'Connection interrupted. Retrying automatically…') setNotice('')
+      setNotice((n) => (n === 'Connection interrupted. Retrying automatically…' ? '' : n))
     } finally {
       refreshInFlight.current = false
     }
-  }
+  }, [])
 
   useEffect(() => {
     stateRef.current = state
@@ -182,39 +239,40 @@ export default function Page() {
     phaseRef.current = phase
   }, [phase])
 
-  // Keyboard listeners + deep-link restore
+  // Keyboard + deep link
   useEffect(() => {
-    const code = location.pathname.split('/play/')[1]?.split('?')[0]
-    if (code) {
-      const normalizedCode = code.toUpperCase()
+    const pathCode = location.pathname.split('/play/')[1]?.split('?')[0]
+    if (pathCode) {
+      const normalizedCode = pathCode.toUpperCase()
       const savedToken = sessionStorage.getItem(`duo-chaos-token:${normalizedCode}`)
-      if (savedToken) {
-        void restoreRoom(normalizedCode, savedToken)
-      } else {
-        void joinRoom(normalizedCode)
-      }
+      if (savedToken) void restoreRoom(normalizedCode, savedToken)
+      else void joinRoom(normalizedCode)
     }
 
     const down = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase()
       if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key)) {
         e.preventDefault()
+        keys.current.add(key)
       }
-      keys.current.add(key)
     }
     const up = (e: KeyboardEvent) => {
       keys.current.delete(e.key.toLowerCase())
     }
+    const blur = () => keys.current.clear()
     window.addEventListener('keydown', down)
     window.addEventListener('keyup', up)
+    window.addEventListener('blur', blur)
     return () => {
       window.removeEventListener('keydown', down)
       window.removeEventListener('keyup', up)
+      window.removeEventListener('blur', blur)
       channelRef.current?.unsubscribe()
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Movement loop — always keeps scheduling frames while phase is battle
+  // Movement + collect/steal loop
   useEffect(() => {
     if (phase !== 'battle') return
 
@@ -224,45 +282,48 @@ export default function Page() {
     let lastFrameTime = performance.now()
     let actionInFlight = false
 
-    // ~units per second (percentage of arena). Tuned for responsive feel.
-    const SPEED = 28
-
     const tick = (now: number) => {
-      // Keep the loop alive for the lifetime of this effect; only act while still in battle.
       rafId = requestAnimationFrame(tick)
 
-      if (phaseRef.current !== 'battle' || stateRef.current.phase !== 'battle') return
+      if (phaseRef.current !== 'battle') return
 
-      const dt = Math.min(0.05, (now - lastFrameTime) / 1000) // cap at 50ms
+      const dt = Math.min(0.05, (now - lastFrameTime) / 1000)
       lastFrameTime = now
 
-      const up = keys.current.has('w') || keys.current.has('arrowup')
-      const down = keys.current.has('s') || keys.current.has('arrowdown')
-      const left = keys.current.has('a') || keys.current.has('arrowleft')
-      const right = keys.current.has('d') || keys.current.has('arrowright')
+      const pressedUp = keys.current.has('w') || keys.current.has('arrowup')
+      const pressedDown = keys.current.has('s') || keys.current.has('arrowdown')
+      const pressedLeft = keys.current.has('a') || keys.current.has('arrowleft')
+      const pressedRight = keys.current.has('d') || keys.current.has('arrowright')
       const touch = touchVector.current
 
-      const dx = (right ? 1 : 0) - (left ? 1 : 0) + touch.x
-      const dy = (down ? 1 : 0) - (up ? 1 : 0) + touch.y
+      const dx = (pressedRight ? 1 : 0) - (pressedLeft ? 1 : 0) + touch.x
+      const dy = (pressedDown ? 1 : 0) - (pressedUp ? 1 : 0) + touch.y
 
-      if (dx || dy) {
+      if (dx !== 0 || dy !== 0) {
         const length = Math.hypot(dx, dy) || 1
-        const step = SPEED * dt
+        const step = MOVE_SPEED * dt
         const x = Math.max(5, Math.min(95, localPosition.current.x + (dx / length) * step))
         const y = Math.max(7, Math.min(93, localPosition.current.y + (dy / length) * step))
         localPosition.current = { x, y }
 
-        // Optimistic local update every frame for smooth movement
-        setState((previous) => ({
-          ...previous,
-          players: previous.players.map((item) =>
-            item.id === meRef.current ? { ...item, x, y } : item,
-          ),
-        }))
+        // Smooth local render every frame
+        setState((prev) => {
+          if (prev.phase !== 'battle') return prev
+          let changed = false
+          const players = prev.players.map((item) => {
+            if (item.id !== meRef.current) return item
+            if (item.x === x && item.y === y) return item
+            changed = true
+            return { ...item, x, y }
+          })
+          return changed ? { ...prev, players } : prev
+        })
 
-        // Throttle network writes
-        if (now - lastSentAt >= 40) {
+        // Network: broadcast (fast peer visibility) + RPC (authoritative)
+        if (now - lastSentAt >= MOVE_SEND_MS) {
           lastSentAt = now
+          const payload = { id: meRef.current, x, y, t: Date.now() }
+          channelRef.current?.send({ type: 'broadcast', event: 'move', payload })
           if (supabase) {
             void supabase.rpc('duo_move', {
               p_code: codeRef.current,
@@ -274,8 +335,8 @@ export default function Page() {
         }
       }
 
-      // Collect / steal actions
-      if (supabase && now - lastActionAt >= 140 && !actionInFlight) {
+      // Collect / steal
+      if (supabase && now - lastActionAt >= ACTION_MS && !actionInFlight) {
         lastActionAt = now
         const { x, y } = localPosition.current
         const nearbyCoins = stateRef.current.coins.filter(
@@ -309,68 +370,123 @@ export default function Page() {
 
     rafId = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(rafId)
-  }, [phase])
+  }, [phase, refreshAuthoritative])
 
-  // Periodic authoritative sync during battle
-  useEffect(() => {
-    if (phase !== 'battle') return
-    const reconcile = window.setInterval(() => {
-      void refreshAuthoritative()
-    }, 500)
-    return () => window.clearInterval(reconcile)
-  }, [phase])
-
-  // General phase sync
+  // Single reconcile interval (no double polling)
   useEffect(() => {
     if (!codeRef.current || phase === 'home') return
     const interval =
-      phase === 'lobby' ? 500 : phase === 'countdown' ? 450 : phase === 'battle' ? 1400 : 1200
-    const sync = window.setInterval(() => {
-      void refreshAuthoritative()
-    }, interval)
-    return () => window.clearInterval(sync)
-  }, [phase, room])
+      phase === 'lobby'
+        ? 600
+        : phase === 'countdown'
+          ? 400
+          : phase === 'battle'
+            ? RECONCILE_MS
+            : 1200
+    const id = window.setInterval(() => void refreshAuthoritative(), interval)
+    return () => window.clearInterval(id)
+  }, [phase, room, refreshAuthoritative])
 
-  // Clock for timer UI
+  // UI clock tick
   useEffect(() => {
     if (!['countdown', 'battle'].includes(phase)) return
-    const repaint = window.setInterval(() => setClock(Date.now()), 250)
-    return () => window.clearInterval(repaint)
+    const id = window.setInterval(() => setClock(Date.now()), 200)
+    return () => window.clearInterval(id)
   }, [phase])
 
-  // Client-side fallback for round end when server deadline is missing
+  // Phase deadline → advance (guarded so it only fires once per deadline)
   useEffect(() => {
     if (!['countdown', 'battle'].includes(phase)) {
       fallbackDeadline.current = 0
+      finishedForDeadline.current = 0
       return
     }
+
     if (!fallbackDeadline.current) {
-      fallbackDeadline.current = Date.now() + (phase === 'countdown' ? 3000 : 30000)
+      const base = phase === 'countdown' ? COUNTDOWN_MS : BATTLE_MS
+      fallbackDeadline.current = Date.now() + base
     }
-    const timer = window.setInterval(() => {
+
+    const id = window.setInterval(() => {
       const s = stateRef.current
+      if (s.phase !== 'countdown' && s.phase !== 'battle') return
+
       const deadline =
         s.phase === 'countdown'
           ? s.countdownEndsAt || fallbackDeadline.current
           : s.endsAt || fallbackDeadline.current
-      if (deadline > 0 && Date.now() >= deadline) {
+
+      if (deadline <= 0) return
+      // Don't end battle in the first 1.5s after entering (protects against bad server times)
+      if (s.phase === 'battle' && Date.now() - battleEnteredAt.current < 1500) return
+
+      if (Date.now() >= deadline && finishedForDeadline.current !== deadline) {
+        finishedForDeadline.current = deadline
         void finishRound()
       }
     }, 100)
-    return () => clearInterval(timer)
+    return () => window.clearInterval(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase])
+
+  async function subscribeToRoom(normalizedCode: string) {
+    if (!supabase) return false
+    channelRef.current?.unsubscribe()
+    const channel = supabase.channel(`duo-chaos:${normalizedCode}`, {
+      config: { broadcast: { self: false } },
+    })
+
+    channel.on('broadcast', { event: 'refresh' }, () => {
+      void refreshAuthoritative(normalizedCode)
+    })
+
+    channel.on('broadcast', { event: 'move' }, ({ payload }) => {
+      if (!payload || typeof payload !== 'object') return
+      const p = payload as { id?: string; x?: number; y?: number; t?: number }
+      if (p.id === meRef.current) return
+      if (typeof p.x !== 'number' || typeof p.y !== 'number') return
+
+      remotePosition.current = { x: p.x, y: p.y, at: Date.now() }
+
+      setState((prev) => {
+        if (prev.phase !== 'battle') return prev
+        const oppId = meRef.current === 'p1' ? 'p2' : 'p1'
+        let changed = false
+        const players = prev.players.map((item) => {
+          if (item.id !== oppId && item.id !== p.id) return item
+          if (item.x === p.x && item.y === p.y) return item
+          changed = true
+          return { ...item, x: p.x!, y: p.y! }
+        })
+        return changed ? { ...prev, players } : prev
+      })
+    })
+
+    await channel.subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        setNotice((v) => (v === 'Realtime is reconnecting. The room is still active.' ? '' : v))
+      }
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        setNotice('Realtime is reconnecting. The room is still active.')
+      }
+    })
+    channelRef.current = channel
+    return true
+  }
 
   async function connect(code: string, playerId: 'p1' | 'p2') {
     const normalizedCode = code.trim().toUpperCase()
     setRoom(normalizedCode)
     codeRef.current = normalizedCode
     setMe(playerId)
+    meRef.current = playerId
     localPosition.current = playerId === 'p1' ? { x: 18, y: 50 } : { x: 82, y: 50 }
+    remotePosition.current = null
     setPhase('lobby')
     getToken()
 
     if (!supabase) {
-      setNotice('Supabase is not configured.')
+      setNotice('Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and ANON_KEY.')
       return false
     }
 
@@ -400,25 +516,6 @@ export default function Page() {
     return true
   }
 
-  async function subscribeToRoom(normalizedCode: string) {
-    if (!supabase) return false
-    channelRef.current?.unsubscribe()
-    const channel = supabase.channel(`duo-chaos:${normalizedCode}`)
-    channel.on('broadcast', { event: 'refresh' }, () => void refreshAuthoritative(normalizedCode))
-    await channel.subscribe((status) => {
-      if (status === 'SUBSCRIBED') {
-        setNotice((value) =>
-          value === 'Realtime is reconnecting. The room is still active.' ? '' : value,
-        )
-      }
-      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-        setNotice('Realtime is reconnecting. The room is still active.')
-      }
-    })
-    channelRef.current = channel
-    return true
-  }
-
   async function restoreRoom(normalizedCode: string, savedToken: string) {
     if (!supabase) {
       setNotice('Supabase is not configured.')
@@ -428,7 +525,7 @@ export default function Page() {
     codeRef.current = normalizedCode
     setRoom(normalizedCode)
 
-    const { data, error } = await supabase.rpc('duo_public_state', {
+    const { error } = await supabase.rpc('duo_public_state', {
       p_code: normalizedCode,
       p_token: savedToken,
     })
@@ -451,15 +548,18 @@ export default function Page() {
     }
 
     const slot = Number((membership as { slot?: number })?.slot) || 1
-    setMe(slot === 1 ? 'p1' : 'p2')
-    localPosition.current = slot === 1 ? { x: 18, y: 50 } : { x: 82, y: 50 }
+    const playerId = slot === 1 ? 'p1' : 'p2'
+    setMe(playerId)
+    meRef.current = playerId
+    localPosition.current = playerId === 'p1' ? { x: 18, y: 50 } : { x: 82, y: 50 }
+    remotePosition.current = null
     await subscribeToRoom(normalizedCode)
     await refreshAuthoritative(normalizedCode)
   }
 
   async function createRoom() {
     if (!supabase) {
-      setNotice('Supabase is not configured.')
+      setNotice('Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and ANON_KEY.')
       return
     }
     setNotice('')
@@ -492,6 +592,18 @@ export default function Page() {
       setNotice('Only the host can start when both players are connected.')
       return
     }
+    // Seed local deadlines immediately so timer never shows 0:00
+    const now = Date.now()
+    battleEnteredAt.current = 0
+    finishedForDeadline.current = 0
+    fallbackDeadline.current = now + COUNTDOWN_MS
+    setState((prev) => ({
+      ...prev,
+      phase: 'countdown',
+      countdownEndsAt: now + COUNTDOWN_MS,
+      endsAt: now + COUNTDOWN_MS + BATTLE_MS,
+    }))
+    setPhase('countdown')
     await refreshAuthoritative()
   }
 
@@ -519,7 +631,13 @@ export default function Page() {
       p_token: getToken(),
     })
     if (error) setNotice('Rematch is unavailable right now.')
-    else await refreshAuthoritative()
+    else {
+      finishedForDeadline.current = 0
+      fallbackDeadline.current = 0
+      remotePosition.current = null
+      localPosition.current = meRef.current === 'p1' ? { x: 18, y: 50 } : { x: 82, y: 50 }
+      await refreshAuthoritative()
+    }
   }
 
   async function leaveGame() {
@@ -535,6 +653,7 @@ export default function Page() {
       sessionStorage.removeItem(`duo-chaos-token:${room}`)
       tokenRef.current = ''
       codeRef.current = ''
+      remotePosition.current = null
       history.pushState({}, '', '/')
       setRoom('')
       setState(initialState)
@@ -562,15 +681,28 @@ export default function Page() {
     }
   }
 
+  // ---- Derived timer values (never stuck at 0 on phase entry) ----
+  const now = Date.now()
+  let battleDeadline = state.endsAt || 0
+  let countdownDeadline = state.countdownEndsAt || 0
+  if (phase === 'battle') {
+    if (!battleDeadline || battleDeadline <= now) {
+      battleDeadline = fallbackDeadline.current || battleEnteredAt.current + BATTLE_MS || now + BATTLE_MS
+    }
+  }
+  if (phase === 'countdown') {
+    if (!countdownDeadline || countdownDeadline <= now) {
+      countdownDeadline = fallbackDeadline.current || now + COUNTDOWN_MS
+    }
+  }
+
+  const remaining =
+    phase === 'battle' ? Math.max(0, Math.ceil((battleDeadline - now) / 1000)) : 30
+  const countdown =
+    phase === 'countdown' ? Math.max(1, Math.ceil((countdownDeadline - now) / 1000)) : 0
+
   const self = state.players.find((p) => p.id === me)
   const opponent = state.players.find((p) => p.id !== me)
-  const battleDeadline = state.endsAt || (state.phase === 'battle' ? fallbackDeadline.current : 0)
-  const countdownDeadline =
-    state.countdownEndsAt || (state.phase === 'countdown' ? fallbackDeadline.current : 0)
-  const remaining =
-    phase === 'battle' ? Math.max(0, Math.ceil((battleDeadline - Date.now()) / 1000)) : 30
-  const countdown =
-    phase === 'countdown' ? Math.max(1, Math.ceil((countdownDeadline - Date.now()) / 1000)) : 0
 
   if (phase === 'home') return <Home onCreate={createRoom} onJoin={joinRoom} />
 
@@ -583,7 +715,7 @@ export default function Page() {
         <div className="topbar-actions">
           <button
             className="sound-toggle"
-            onClick={() => setSoundOn((value) => !value)}
+            onClick={() => setSoundOn((v) => !v)}
             aria-label={soundOn ? 'Mute game sounds' : 'Enable game sounds'}
           >
             {soundOn ? 'SOUND ON' : 'SOUND OFF'}
@@ -646,9 +778,7 @@ export default function Page() {
           >
             <p className="eyebrow">EXIT DUO CHAOS?</p>
             <h2 id="leave-title">Are you sure you want to leave the game?</h2>
-            <p>
-              Your room will stay open for the other player, but this match will end for you.
-            </p>
+            <p>Your room will stay open for the other player, but this match will end for you.</p>
             <div className="confirm-actions">
               <button className="secondary" onClick={() => setConfirmLeave(false)}>
                 CANCEL
@@ -705,12 +835,11 @@ function Home({
               placeholder="ENTER ROOM CODE"
               value={code}
               onChange={(e) => setCode(e.target.value.toUpperCase())}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && code.length === 6) onJoin(code)
+              }}
             />
-            <button
-              className="secondary"
-              disabled={code.length !== 6}
-              onClick={() => onJoin(code)}
-            >
+            <button className="secondary" disabled={code.length !== 6} onClick={() => onJoin(code)}>
               JOIN <Link2 />
             </button>
           </div>
@@ -786,8 +915,7 @@ function Lobby({
         </button>
       </div>
       <button className="primary wide" disabled={!full || !isHost} onClick={onStart}>
-        {!isHost ? 'WAITING FOR HOST' : full ? 'START GAME' : 'WAITING FOR PLAYER 2'}{' '}
-        <Sparkles />
+        {!isHost ? 'WAITING FOR HOST' : full ? 'START GAME' : 'WAITING FOR PLAYER 2'} <Sparkles />
       </button>
       <p className="lobby-note">Each player gets a different secret mission. Keep yours hidden.</p>
     </section>
@@ -809,8 +937,7 @@ function Battle({
   countdown: number
   onTouchVector: (x: number, y: number) => void
 }) {
-  const objective =
-    self?.objective || (self?.id === 'p1' ? 'collect' : 'steal')
+  const objective = self?.objective || (self?.id === 'p1' ? 'collect' : 'steal')
 
   return (
     <section className="battle-wrap">
@@ -819,7 +946,7 @@ function Battle({
           <span className="dot pink-bg" />
           YOU <b>{self?.score || 0}</b>
         </div>
-        <div className={`timer ${remaining < 10 ? 'urgent' : ''}`}>
+        <div className={`timer ${!countdown && remaining < 10 ? 'urgent' : ''}`}>
           {countdown ? countdown : `0:${String(remaining).padStart(2, '0')}`}
         </div>
         <div className="score right">
@@ -830,14 +957,13 @@ function Battle({
         <LockKeyhole /> <span>SECRET MISSION</span>
         <strong>{objective === 'collect' ? 'Collect 7 coins' : 'Steal 3 coins'}</strong>
         <small>
-          {objective === 'collect'
-            ? `${self?.coins || 0} / 7`
-            : `${self?.stolen || 0} / 3`}
+          {objective === 'collect' ? `${self?.coins || 0} / 7` : `${self?.stolen || 0} / 3`}
         </small>
       </div>
       <div
         className="arena"
         onPointerDown={(e) => {
+          e.preventDefault()
           e.currentTarget.setPointerCapture(e.pointerId)
           const r = e.currentTarget.getBoundingClientRect()
           onTouchVector(
@@ -860,11 +986,7 @@ function Battle({
         {state.coins
           .filter((c) => !c.collectedBy)
           .map((c) => (
-            <span
-              key={c.id}
-              className="arena-coin"
-              style={{ left: `${c.x}%`, top: `${c.y}%` }}
-            >
+            <span key={c.id} className="arena-coin" style={{ left: `${c.x}%`, top: `${c.y}%` }}>
               $
             </span>
           ))}
@@ -920,9 +1042,7 @@ function Results({
               {p.id === me ? 'YOU' : 'THEM'}
             </div>
             <div>
-              <strong>
-                {p.objective === 'collect' ? 'Collect 7 coins' : 'Steal 3 coins'}
-              </strong>
+              <strong>{p.objective === 'collect' ? 'Collect 7 coins' : 'Steal 3 coins'}</strong>
               <small>
                 {p.objective === 'collect'
                   ? `${p.coins} / 7 coins collected`
@@ -930,9 +1050,7 @@ function Results({
               </small>
             </div>
             <b>
-              {(p.objective === 'collect' ? p.coins >= 7 : p.stolen >= 3)
-                ? 'COMPLETE'
-                : 'FAILED'}
+              {(p.objective === 'collect' ? p.coins >= 7 : p.stolen >= 3) ? 'COMPLETE' : 'FAILED'}
             </b>
           </div>
         ))}
@@ -946,9 +1064,7 @@ function Results({
         ))}
       </div>
       <button className="primary wide" onClick={onRematch}>
-        {state.players.find((p) => p.id === me)?.rematch
-          ? 'WAITING FOR OPPONENT'
-          : 'REMATCH'}{' '}
+        {state.players.find((p) => p.id === me)?.rematch ? 'WAITING FOR OPPONENT' : 'REMATCH'}{' '}
         <Zap />
       </button>
       <button className="text-button" onClick={onLeave}>
