@@ -3,8 +3,8 @@ import type { Metadata, Viewport } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'DUO CHAOS — Secret missions. Maximum chaos.',
-  description: 'A fast, two-player party game where secret missions turn every coin into chaos.',
+  title: 'DUO CHAOS — See it. Steal it. Win it.',
+  description: 'A fast, replayable two-player Roblox party game with secret objectives, shared resources, and chaos events.',
   generator: 'v0.app',
   icons: {
     icon: [
@@ -39,7 +39,7 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en">
+    <html lang="tr">
       <body className="antialiased">
         {children}
         {process.env.NODE_ENV === 'production' && <Analytics />}
