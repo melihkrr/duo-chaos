@@ -15,17 +15,20 @@ export const objectiveOf = (p?: Pick<Player, 'id' | 'objective'>): Objective | n
     return { ...fallback, label: text, shortLabel: text, target: Number(text.match(/\d+/)?.[0] || fallback.target) }
   }
 
-  const text = [raw.label, raw.shortLabel].filter(Boolean).join(' ').replace(/\*+/g, '').trim()
+  const rawLabel = String(raw.label || '').replace(/\*+/g, '').trim()
+  const rawShortLabel = String(raw.shortLabel || '').replace(/\*+/g, '').trim()
+  const text = [rawLabel, rawShortLabel].filter(Boolean).join(' ').trim()
+  const isGeneric = /^(collect|steal)$/i.test(rawLabel) || /^(collect|steal)$/i.test(rawShortLabel)
   const canonical =
     OBJECTIVE_POOL.find((item) => item.id === raw.id) ||
     OBJECTIVE_POOL.find((item) => item.label.toLowerCase() === text.toLowerCase() || item.shortLabel.toLowerCase() === text.toLowerCase()) ||
-    (/^(collect|steal)$/i.test(text) ? fallback : undefined)
+    (isGeneric ? fallback : undefined)
 
   return {
     ...(canonical || fallback),
     ...raw,
-    label: canonical?.label || (text || fallback.label),
-    shortLabel: canonical?.shortLabel || (text || fallback.shortLabel),
+    label: canonical?.label || (rawLabel || fallback.label),
+    shortLabel: canonical?.shortLabel || (rawShortLabel || fallback.shortLabel),
     target: raw.target > 0 ? raw.target : canonical?.target || fallback.target,
     coinType: raw.coinType || canonical?.coinType,
     requirements: raw.requirements || canonical?.requirements,
