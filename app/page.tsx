@@ -173,6 +173,7 @@ export default function Page() {
   const codeRef = useRef('')
   const refreshInFlight = useRef(false)
   const refreshFailures = useRef(0)
+  const leavingRef = useRef(false)
   const lockedDeadline = useRef(0)
   const lockedPhase = useRef<Phase | ''>('')
   const localPosition = useRef({ ...spawnFor('p1') })
@@ -265,13 +266,14 @@ export default function Page() {
   }
 
   const refreshAuthoritative = useCallback(async (code = codeRef.current) => {
-    if (!supabase || !code || refreshInFlight.current) return
+    if (leavingRef.current || !supabase || !code || refreshInFlight.current) return
     refreshInFlight.current = true
     try {
       const { data, error } = await supabase.rpc('duo_public_state', {
         p_code: code,
         p_token: getToken(),
       })
+      if (leavingRef.current) return
       if (error) {
         refreshFailures.current += 1
         const msg = error.message || ''
@@ -918,6 +920,7 @@ export default function Page() {
   }
 
   async function connect(code: string, playerId: 'p1' | 'p2') {
+    leavingRef.current = false
     const normalizedCode = code.trim().toUpperCase()
     setRoom(normalizedCode)
     codeRef.current = normalizedCode
@@ -1127,6 +1130,7 @@ export default function Page() {
 
   async function leaveGame() {
     if (leaving) return
+    leavingRef.current = true
     setLeaving(true)
     try {
       if (supabase && room) {
