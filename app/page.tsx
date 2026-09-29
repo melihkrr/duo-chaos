@@ -1044,8 +1044,9 @@ export default function Page() {
       return
     }
 
-    const slot = Number((membership as { slot?: number })?.slot) || 1
-    const playerId = (slot === 1 ? 'p1' : 'p2') as 'p1' | 'p2'
+    const membershipRow = Array.isArray(membership) ? membership[0] : membership
+    const slot = Number((membershipRow as { slot?: number } | null)?.slot)
+    const playerId = (slot === 2 ? 'p2' : 'p1') as 'p1' | 'p2'
     setMe(playerId)
     meRef.current = playerId
     localPosition.current = { ...spawnFor(playerId) }
