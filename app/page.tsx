@@ -968,12 +968,13 @@ export default function Page() {
     }
   }
 
-  async function copyInvite() {
+  async function copyInvite(textOverride?: string) {
+    const value = textOverride ?? location.href
     try {
-      if (navigator.clipboard) await navigator.clipboard.writeText(location.href)
+      if (navigator.clipboard) await navigator.clipboard.writeText(value)
       else {
         const input = document.createElement('textarea')
-        input.value = location.href
+        input.value = value
         document.body.appendChild(input)
         input.select()
         document.execCommand('copy')
@@ -982,7 +983,9 @@ export default function Page() {
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1500)
     } catch {
-      setNotice('Copy failed. Please copy the invite URL manually.')
+      setNotice(
+        textOverride ? 'Copy failed. Please copy the room code manually.' : 'Copy failed. Please copy the invite URL manually.',
+      )
     }
   }
 
@@ -1025,8 +1028,9 @@ export default function Page() {
             {soundOn ? 'SOUND ON' : 'SOUND OFF'}
           </button>
           <div className="room-pill">
-            <span>ROOM</span> {room}
-            <button onClick={copyInvite} aria-label="Copy invite link">
+            <span>ROOM</span>
+            <span className="room-code">{room}</span>
+            <button onClick={() => copyInvite(room)} aria-label="Copy room code">
               {copied ? <Check /> : <Copy />}
             </button>
           </div>
@@ -1183,7 +1187,7 @@ function Lobby({
   state: State
   isHost: boolean
   onStart: () => void
-  onCopy: () => void
+  onCopy: (value?: string) => void
   copied: boolean
 }) {
   const full = state.players.length === 2
@@ -1215,14 +1219,14 @@ function Lobby({
           <small>INVITE YOUR FRIEND</small>
           <strong>{typeof window !== 'undefined' ? location.href : ''}</strong>
         </div>
-        <button onClick={onCopy}>
+        <button onClick={() => onCopy(location.href)}>
           {copied ? <Check /> : <Copy />} {copied ? 'COPIED' : 'COPY INVITE LINK'}
         </button>
       </div>
       <button className="primary wide" disabled={!full || !isHost} onClick={onStart}>
         {!isHost ? 'WAITING FOR HOST' : full ? 'START GAME' : 'WAITING FOR PLAYER 2'} <Sparkles />
       </button>
-      <p className="lobby-note">Each player gets a different secret mission. Keep yours hidden.</p>
+      <p className="lobby-note">Each player gets a different secret mission.</p>
     </section>
   )
 }
