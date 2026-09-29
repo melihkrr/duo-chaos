@@ -411,8 +411,14 @@ export default function Page() {
             coins: Math.max(p.coins || 0, prev.coins || 0),
             stolen: Math.max(p.stolen || 0, prev.stolen || 0),
             score: Math.max(p.score || 0, prev.score || 0),
-            collectedTypes: p.collectedTypes ?? prev.collectedTypes,
-            objective: p.objective ?? prev.objective,
+        collectedTypes: Object.keys({ ...(prev.collectedTypes || {}), ...(p.collectedTypes || {}) }).reduce(
+          (counts, type) => ({
+            ...counts,
+            [type]: Math.max(prev.collectedTypes?.[type as keyof typeof prev.collectedTypes] || 0, p.collectedTypes?.[type as keyof typeof p.collectedTypes] || 0),
+          }),
+          {},
+        ),
+        objective: p.objective ?? prev.objective,
           }
         })
       }
