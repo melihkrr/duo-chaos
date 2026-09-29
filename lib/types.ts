@@ -1,6 +1,7 @@
 export type Phase = 'home' | 'lobby' | 'countdown' | 'battle' | 'results' | 'matchover'
 
 export type CoinType = 'gold' | 'blue' | 'red' | 'emerald'
+export type ChaosEventType = 'gold-rush' | 'blackout' | 'magnet' | 'swap' | 'jackpot'
 
 export type ObjectiveKind = 'collect' | 'steal'
 
@@ -11,6 +12,13 @@ export type Objective = {
   shortLabel: string
   target: number
   coinType?: CoinType | 'mixed'
+}
+
+export type ChaosEvent = {
+  id: ChaosEventType
+  name: string
+  description: string
+  boost: string
 }
 
 export type Player = {
@@ -36,6 +44,7 @@ export type State = {
   endsAt: number
   countdownEndsAt: number
   round: number
+  chaosEvent?: ChaosEvent
   /** Sadece sunucudan gelir. Client asla hesaplamaz. */
   winner?: string
 }

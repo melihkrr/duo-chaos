@@ -12,6 +12,7 @@ import {
   HEARTBEAT_MS,
   MOVE_SEND_MS,
   MOVE_SPEED,
+  nextChaosEvent,
   PHASE_TICK_MS,
   POLL_MS,
   RECONCILE_MS,
@@ -45,6 +46,7 @@ const initialState: State = {
   endsAt: 0,
   countdownEndsAt: 0,
   round: 1,
+  chaosEvent: nextChaosEvent(),
 }
 
 function parseServerTime(raw: unknown, now: number): number {
@@ -153,6 +155,7 @@ export default function Page() {
   const transitionInFlight = useRef(false)
   const advancedForDeadline = useRef(0)
   const lastBroadcastPos = useRef({ x: 0, y: 0 })
+  const lastChaosSwapAt = useRef(0)
 
   function getToken() {
     const storageKey = `duo-chaos-token:${codeRef.current}`
@@ -426,6 +429,11 @@ export default function Page() {
 
       const dt = Math.min(0.05, (now - lastFrameTime) / 1000)
       lastFrameTime = now
+
+      if (now - lastChaosSwapAt.current >= 15_000) {
+        lastChaosSwapAt.current = now
+        setState((prev) => ({ ...prev, chaosEvent: nextChaosEvent() }))
+      }
 
       const pressedUp = keys.current.has('w') || keys.current.has('arrowup')
       const pressedDown = keys.current.has('s') || keys.current.has('arrowdown')
@@ -864,6 +872,7 @@ export default function Page() {
     }
 
     const ends = Date.now() + COUNTDOWN_MS
+    lastChaosSwapAt.current = ends
     lockDeadline('countdown', COUNTDOWN_MS)
     lockedDeadline.current = ends
     setState((prev) => ({
@@ -871,6 +880,7 @@ export default function Page() {
       phase: 'countdown',
       countdownEndsAt: ends,
       endsAt: ends + BATTLE_MS,
+      chaosEvent: nextChaosEvent(),
     }))
     setPhase('countdown')
     phaseRef.current = 'countdown'
@@ -1288,6 +1298,13 @@ function Battle({
         <strong>{missionLabel(objective)}</strong>
         <small>{self ? `${progressOf(self)} / ${targetOf(objective)}` : `0 / ${targetOf(objective)}`}</small>
       </div>
+      {state.chaosEvent && (
+        <div className="mission-strip" style={{ marginTop: 8, background: '#fff4cc', borderColor: '#f0b63c' }}>
+          <Zap /> <span>CHAOS EVENT</span>
+          <strong>{state.chaosEvent.name}</strong>
+          <small>{state.chaosEvent.boost}</small>
+        </div>
+      )}
       <div className="arena">
         <div className="boundary" />
         {state.coins

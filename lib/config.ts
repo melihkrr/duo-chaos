@@ -1,4 +1,4 @@
-import type { Coin, CoinType, Objective } from './types'
+import type { ChaosEvent, Coin, CoinType, Objective } from './types'
 
 // --- Süreler ---
 export const BATTLE_MS = 30_000
@@ -43,6 +43,14 @@ export const OBJECTIVE_POOL: Objective[] = [
   { id: 'jackpot-run', kind: 'collect', label: 'Collect 1 Gold + 2 Blue', shortLabel: '1 Gold + 2 Blue', target: 3, coinType: 'mixed' },
 ]
 
+export const CHAOS_EVENTS: ChaosEvent[] = [
+  { id: 'gold-rush', name: 'Gold Rush', description: 'Gold spawns are boosted for 15s.', boost: 'Gold reward x2' },
+  { id: 'blackout', name: 'Blackout', description: 'The arena dims and nearby resources become more valuable.', boost: 'Risky visibility' },
+  { id: 'magnet', name: 'Magnet Storm', description: 'Coins drift toward the center and pressure rises.', boost: 'Resource control' },
+  { id: 'swap', name: 'Chaos Swap', description: 'One of your targets is swapped mid-round.', boost: 'Plans break' },
+  { id: 'jackpot', name: 'Jackpot', description: 'A rare coin appears and shifts the whole round.', boost: 'Huge score swing' },
+]
+
 export const defaultObjectiveForPlayer = (id: string): Objective => {
   const index = id === 'p2' ? 1 : 0
   return OBJECTIVE_POOL[index % OBJECTIVE_POOL.length]
@@ -52,6 +60,11 @@ export const generateObjectivePair = (): [Objective, Objective] => {
   const pool = [...OBJECTIVE_POOL]
   pool.sort(() => Math.random() - 0.5)
   return [pool[0], pool[1] ?? pool[0]]
+}
+
+export const nextChaosEvent = (): ChaosEvent => {
+  const event = CHAOS_EVENTS[Math.floor(Math.random() * CHAOS_EVENTS.length)]
+  return event ?? CHAOS_EVENTS[0]
 }
 
 // --- Coin ---
