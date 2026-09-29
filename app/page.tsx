@@ -618,7 +618,7 @@ export default function Page() {
             channelRef.current?.send({
               type: 'broadcast',
               event: 'collect',
-              payload: { ids: nearbyCoins.map((c) => c.id), by: meId },
+              payload: { ids: nearbyCoins.map((c) => c.id), by: meId, score: coinScore },
             })
           }
 
@@ -647,7 +647,11 @@ export default function Page() {
               )
               return { ...prev, players }
             })
-            channelRef.current?.send({ type: 'broadcast', event: 'steal', payload: { by: meId } })
+            channelRef.current?.send({
+              type: 'broadcast',
+              event: 'steal',
+              payload: { by: meId, score: 20 },
+            })
           }
 
           const rpcs: Promise<unknown>[] = []
@@ -812,12 +816,13 @@ export default function Page() {
       void refreshAuthoritative(normalizedCode)
     })
     channel.on('broadcast', { event: 'collect' }, ({ payload }) => {
-      const data = payload as { ids?: number[]; by?: string } | undefined
+      const data = payload as { ids?: number[]; by?: string; score?: number } | undefined
       if (!data?.ids?.length) return
       const ids = new Set(data.ids)
       const by = data.by || 'opponent'
       setState((prev) => {
         if (prev.phase !== 'battle') return prev
+        const freshIds = new Set(prev.coins.filter((coin) => ids.has(coin.id) && !coin.collectedBy).map((coin) => coin.id))
         const collectedTypes = prev.coins
           .filter((coin) => ids.has(coin.id))
           .reduce(
@@ -835,6 +840,7 @@ export default function Page() {
                   ? {
                       ...p,
                       coins: p.coins + data.ids!.length,
+                      score: p.score + (freshIds.size ? data.score || 0 : 0),
                       collectedTypes: Object.entries(collectedTypes).reduce(
                         (counts, [type, amount]) => ({
                           ...counts,
@@ -849,13 +855,13 @@ export default function Page() {
       })
     })
     channel.on('broadcast', { event: 'steal' }, ({ payload }) => {
-      const data = payload as { by?: string } | undefined
+      const data = payload as { by?: string; score?: number } | undefined
       const by = data?.by
       if (!by || by === meRef.current) return
       setState((prev) => {
         if (prev.phase !== 'battle') return prev
         const players = prev.players.map((p) =>
-          p.id === by ? { ...p, stolen: p.stolen + 1 } : p,
+          p.id === by ? { ...p, stolen: p.stolen + 1, score: p.score + (data.score || 20) } : p,
         )
         return { ...prev, players }
       })
