@@ -29,10 +29,10 @@ type State = {
 
 const BATTLE_MS = 30_000
 const COUNTDOWN_MS = 3_000
-const MOVE_SPEED = 32 // % of arena per second
-const MOVE_SEND_MS = 33 // ~30 Hz position broadcast
+const MOVE_SPEED = 34
+const MOVE_SEND_MS = 32
 const ACTION_MS = 140
-const RECONCILE_MS = 800
+const RECONCILE_MS = 900
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
 const supabaseKey =
@@ -60,20 +60,18 @@ const initialState: State = {
   round: 1,
 }
 
-/** Convert server timestamps that may be seconds, ms, or already expired. */
-function normalizeDeadline(raw: unknown, now: number, durationMs: number, phaseActive: boolean): number {
+/**
+ * Parse a server timestamp into epoch-ms.
+ * Returns 0 if unusable. NEVER invents a new "now + duration" — that caused
+ * the infinite countdown-reset bug (timer stuck at 3).
+ */
+function parseServerTime(raw: unknown, now: number): number {
   let t = Number(raw)
-  if (!Number.isFinite(t) || t <= 0) {
-    return phaseActive ? now + durationMs : 0
-  }
-  // Seconds since epoch (10 digits) → ms
-  if (t > 1e9 && t < 1e12) t = t * 1000
-  // Relative remaining seconds (e.g. 30)
+  if (!Number.isFinite(t) || t <= 0) return 0
+  // unix seconds → ms
+  if (t > 1e9 && t < 1e12) t *= 1000
+  // relative remaining seconds (1..120)
   if (t > 0 && t <= 120) t = now + t * 1000
-  // Already expired while we just entered the phase → give a full duration
-  if (phaseActive && t <= now + 500) {
-    return now + durationMs
-  }
   return t
 }
 
@@ -83,7 +81,6 @@ function mapPlayerId(rawId: string, meId: string): string {
     return meId === 'p1' ? 'p2' : 'p1'
   }
   if (rawId === 'p1' || rawId === 'p2') return rawId
-  // Unknown id: treat as opponent if it is not me
   return meId === 'p1' ? 'p2' : 'p1'
 }
 
@@ -100,11 +97,11 @@ function normalizePlayers(
     const isMe = mappedId === meId
     const base = { ...player, id: mappedId }
 
-    if (isMe && phase === 'battle') {
+    // Always keep optimistic local position during countdown + battle
+    if (isMe && (phase === 'battle' || phase === 'countdown')) {
       return { ...base, x: localPos.x, y: localPos.y }
     }
-    // Prefer recent realtime broadcast for opponent over stale RPC snapshot
-    if (!isMe && remotePos && phase === 'battle' && Date.now() - remotePos.at < 1500) {
+    if (!isMe && remotePos && (phase === 'battle' || phase === 'countdown') && Date.now() - remotePos.at < 2000) {
       return { ...base, x: remotePos.x, y: remotePos.y }
     }
     return base
@@ -133,12 +130,13 @@ export default function Page() {
   const codeRef = useRef('')
   const refreshInFlight = useRef(false)
   const refreshFailures = useRef(0)
-  const fallbackDeadline = useRef(0)
+  /** Locked client deadline for the current phase session — never extended by refresh. */
+  const lockedDeadline = useRef(0)
+  const lockedPhase = useRef<Phase | ''>('')
   const localPosition = useRef({ x: 18, y: 50 })
   const remotePosition = useRef<{ x: number; y: number; at: number } | null>(null)
   const transitionInFlight = useRef(false)
-  const finishedForDeadline = useRef(0)
-  const battleEnteredAt = useRef(0)
+  const advancedForDeadline = useRef(0)
 
   function getToken() {
     const storageKey = `duo-chaos-token:${codeRef.current}`
@@ -147,6 +145,18 @@ export default function Page() {
     }
     sessionStorage.setItem(storageKey, tokenRef.current)
     return tokenRef.current
+  }
+
+  function lockDeadline(forPhase: Phase, msFromNow: number) {
+    lockedPhase.current = forPhase
+    lockedDeadline.current = Date.now() + msFromNow
+    advancedForDeadline.current = 0
+  }
+
+  function clearDeadlineLock() {
+    lockedPhase.current = ''
+    lockedDeadline.current = 0
+    advancedForDeadline.current = 0
   }
 
   const refreshAuthoritative = useCallback(async (code = codeRef.current) => {
@@ -160,69 +170,99 @@ export default function Page() {
       if (error) {
         refreshFailures.current += 1
         const msg = error.message || ''
-        if (msg.includes('room_not_found')) {
-          setNotice('That room has expired or does not exist.')
-        } else if (msg.includes('not_a_player')) {
+        if (msg.includes('room_not_found')) setNotice('That room has expired or does not exist.')
+        else if (msg.includes('not_a_player'))
           setNotice('This browser is not registered in that room. Reopen the invite link.')
-        } else if (refreshFailures.current >= 3) {
+        else if (refreshFailures.current >= 3)
           setNotice('Connection interrupted. Retrying automatically…')
-        }
         return
       }
       refreshFailures.current = 0
       const raw = data as State & { players?: Player[] }
-      const normalizedPhase = (raw.phase || 'lobby') as Phase
+      const serverPhase = (raw.phase || 'lobby') as Phase
       const now = Date.now()
 
-      const endsAt = normalizeDeadline(
-        raw.endsAt,
-        now,
-        BATTLE_MS,
-        normalizedPhase === 'battle',
-      )
-      const countdownEndsAt = normalizeDeadline(
-        raw.countdownEndsAt,
-        now,
-        COUNTDOWN_MS,
-        normalizedPhase === 'countdown',
-      )
+      let nextPhase = serverPhase
+
+      // If we already optimistically advanced past what the server still reports,
+      // keep our local phase until the server catches up (prevents countdown↔battle flicker).
+      if (
+        phaseRef.current === 'battle' &&
+        serverPhase === 'countdown' &&
+        lockedPhase.current === 'battle'
+      ) {
+        nextPhase = 'battle'
+      }
+      if (
+        (phaseRef.current === 'results' || phaseRef.current === 'matchover') &&
+        (serverPhase === 'battle' || serverPhase === 'countdown')
+      ) {
+        // Server lagged — keep results only briefly; prefer server if it's still mid-match after a long time
+        if (lockedPhase.current === 'results' || lockedPhase.current === 'matchover') {
+          nextPhase = phaseRef.current
+        }
+      }
+
+      const serverCountdown = parseServerTime(raw.countdownEndsAt, now)
+      const serverEnds = parseServerTime(raw.endsAt, now)
+
+      // Resolve deadlines WITHOUT re-extending every poll
+      let countdownEndsAt = 0
+      let endsAt = 0
+
+      if (nextPhase === 'countdown') {
+        if (lockedPhase.current === 'countdown' && lockedDeadline.current > 0) {
+          // Keep the locked client deadline; only adopt server if it's a sensible future value
+          countdownEndsAt = lockedDeadline.current
+          if (serverCountdown > now + 200 && serverCountdown <= now + COUNTDOWN_MS + 500) {
+            countdownEndsAt = serverCountdown
+            lockedDeadline.current = serverCountdown
+          }
+        } else {
+          // First time we see countdown from server — lock once
+          countdownEndsAt =
+            serverCountdown > now + 200 ? serverCountdown : now + COUNTDOWN_MS
+          lockDeadline('countdown', Math.max(500, countdownEndsAt - now))
+          lockedDeadline.current = countdownEndsAt
+        }
+      } else if (nextPhase === 'battle') {
+        if (lockedPhase.current === 'battle' && lockedDeadline.current > 0) {
+          endsAt = lockedDeadline.current
+          if (serverEnds > now + 1000 && serverEnds <= now + BATTLE_MS + 1000) {
+            endsAt = serverEnds
+            lockedDeadline.current = serverEnds
+          }
+        } else {
+          endsAt = serverEnds > now + 1000 ? serverEnds : now + BATTLE_MS
+          lockDeadline('battle', Math.max(1000, endsAt - now))
+          lockedDeadline.current = endsAt
+        }
+      } else {
+        // lobby / results / matchover — clear lock
+        if (lockedPhase.current === 'countdown' || lockedPhase.current === 'battle') {
+          clearDeadlineLock()
+        }
+        countdownEndsAt = serverCountdown
+        endsAt = serverEnds
+      }
 
       const next: State = {
         ...raw,
-        phase: normalizedPhase,
-        endsAt,
+        phase: nextPhase,
         countdownEndsAt,
+        endsAt,
         coins: Array.isArray(raw.coins) ? raw.coins : spawnCoins(),
         players: normalizePlayers(
           raw.players,
           meRef.current,
-          normalizedPhase,
+          nextPhase,
           localPosition.current,
           remotePosition.current,
         ),
       }
 
-      // Reset client fallback when phase actually changes
-      if (next.phase !== phaseRef.current) {
-        fallbackDeadline.current = 0
-        finishedForDeadline.current = 0
-        if (next.phase === 'battle') {
-          battleEnteredAt.current = now
-          // Ensure we have a usable deadline even if server sent garbage
-          if (!next.endsAt || next.endsAt <= now) {
-            next.endsAt = now + BATTLE_MS
-          }
-          fallbackDeadline.current = next.endsAt
-        } else if (next.phase === 'countdown') {
-          if (!next.countdownEndsAt || next.countdownEndsAt <= now) {
-            next.countdownEndsAt = now + COUNTDOWN_MS
-          }
-          fallbackDeadline.current = next.countdownEndsAt
-        }
-      }
-
       setState(next)
-      setPhase(next.phase)
+      setPhase(nextPhase)
       setNotice((n) => (n === 'Connection interrupted. Retrying automatically…' ? '' : n))
     } finally {
       refreshInFlight.current = false
@@ -256,9 +296,7 @@ export default function Page() {
         keys.current.add(key)
       }
     }
-    const up = (e: KeyboardEvent) => {
-      keys.current.delete(e.key.toLowerCase())
-    }
+    const up = (e: KeyboardEvent) => keys.current.delete(e.key.toLowerCase())
     const blur = () => keys.current.clear()
     window.addEventListener('keydown', down)
     window.addEventListener('keyup', up)
@@ -272,9 +310,10 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Movement + collect/steal loop
+  // Movement during countdown + battle (so stuck countdown still feels responsive;
+  // real gameplay is battle, but keys must never "die")
   useEffect(() => {
-    if (phase !== 'battle') return
+    if (phase !== 'battle' && phase !== 'countdown') return
 
     let rafId = 0
     let lastSentAt = 0
@@ -284,18 +323,20 @@ export default function Page() {
 
     const tick = (now: number) => {
       rafId = requestAnimationFrame(tick)
-
-      if (phaseRef.current !== 'battle') return
+      const p = phaseRef.current
+      if (p !== 'battle' && p !== 'countdown') return
 
       const dt = Math.min(0.05, (now - lastFrameTime) / 1000)
       lastFrameTime = now
+
+      // Only actually move during battle (countdown is frozen ready-state)
+      if (p !== 'battle') return
 
       const pressedUp = keys.current.has('w') || keys.current.has('arrowup')
       const pressedDown = keys.current.has('s') || keys.current.has('arrowdown')
       const pressedLeft = keys.current.has('a') || keys.current.has('arrowleft')
       const pressedRight = keys.current.has('d') || keys.current.has('arrowright')
       const touch = touchVector.current
-
       const dx = (pressedRight ? 1 : 0) - (pressedLeft ? 1 : 0) + touch.x
       const dy = (pressedDown ? 1 : 0) - (pressedUp ? 1 : 0) + touch.y
 
@@ -306,7 +347,6 @@ export default function Page() {
         const y = Math.max(7, Math.min(93, localPosition.current.y + (dy / length) * step))
         localPosition.current = { x, y }
 
-        // Smooth local render every frame
         setState((prev) => {
           if (prev.phase !== 'battle') return prev
           let changed = false
@@ -319,7 +359,6 @@ export default function Page() {
           return changed ? { ...prev, players } : prev
         })
 
-        // Network: broadcast (fast peer visibility) + RPC (authoritative)
         if (now - lastSentAt >= MOVE_SEND_MS) {
           lastSentAt = now
           const payload = { id: meRef.current, x, y, t: Date.now() }
@@ -335,7 +374,6 @@ export default function Page() {
         }
       }
 
-      // Collect / steal
       if (supabase && now - lastActionAt >= ACTION_MS && !actionInFlight) {
         lastActionAt = now
         const { x, y } = localPosition.current
@@ -343,7 +381,7 @@ export default function Page() {
           (c) => !c.collectedBy && Math.hypot(x - c.x, y - c.y) < 10,
         )
         const nearOpponent = stateRef.current.players.some(
-          (p) => p.id !== meRef.current && Math.hypot(x - p.x, y - p.y) < 9,
+          (pl) => pl.id !== meRef.current && Math.hypot(x - pl.x, y - pl.y) < 9,
         )
         if (nearbyCoins.length || nearOpponent) {
           actionInFlight = true
@@ -372,62 +410,94 @@ export default function Page() {
     return () => cancelAnimationFrame(rafId)
   }, [phase, refreshAuthoritative])
 
-  // Single reconcile interval (no double polling)
+  // Single reconcile interval
   useEffect(() => {
     if (!codeRef.current || phase === 'home') return
     const interval =
-      phase === 'lobby'
-        ? 600
-        : phase === 'countdown'
-          ? 400
-          : phase === 'battle'
-            ? RECONCILE_MS
-            : 1200
+      phase === 'lobby' ? 700 : phase === 'countdown' ? 500 : phase === 'battle' ? RECONCILE_MS : 1500
     const id = window.setInterval(() => void refreshAuthoritative(), interval)
     return () => window.clearInterval(id)
   }, [phase, room, refreshAuthoritative])
 
-  // UI clock tick
+  // UI clock
   useEffect(() => {
     if (!['countdown', 'battle'].includes(phase)) return
-    const id = window.setInterval(() => setClock(Date.now()), 200)
+    const id = window.setInterval(() => setClock(Date.now()), 150)
     return () => window.clearInterval(id)
   }, [phase])
 
-  // Phase deadline → advance (guarded so it only fires once per deadline)
+  /**
+   * Local phase machine: when locked deadline expires, advance optimistically.
+   * This is the fix for "timer stuck at 3" — we no longer wait forever for the server.
+   */
   useEffect(() => {
-    if (!['countdown', 'battle'].includes(phase)) {
-      fallbackDeadline.current = 0
-      finishedForDeadline.current = 0
-      return
-    }
-
-    if (!fallbackDeadline.current) {
-      const base = phase === 'countdown' ? COUNTDOWN_MS : BATTLE_MS
-      fallbackDeadline.current = Date.now() + base
-    }
+    if (phase !== 'countdown' && phase !== 'battle') return
 
     const id = window.setInterval(() => {
       const s = stateRef.current
-      if (s.phase !== 'countdown' && s.phase !== 'battle') return
+      const currentPhase = phaseRef.current
+      if (currentPhase !== 'countdown' && currentPhase !== 'battle') return
 
       const deadline =
-        s.phase === 'countdown'
-          ? s.countdownEndsAt || fallbackDeadline.current
-          : s.endsAt || fallbackDeadline.current
+        lockedPhase.current === currentPhase && lockedDeadline.current > 0
+          ? lockedDeadline.current
+          : currentPhase === 'countdown'
+            ? s.countdownEndsAt
+            : s.endsAt
 
-      if (deadline <= 0) return
-      // Don't end battle in the first 1.5s after entering (protects against bad server times)
-      if (s.phase === 'battle' && Date.now() - battleEnteredAt.current < 1500) return
+      if (!deadline || deadline <= 0) return
+      if (Date.now() < deadline) return
+      if (advancedForDeadline.current === deadline) return
+      advancedForDeadline.current = deadline
 
-      if (Date.now() >= deadline && finishedForDeadline.current !== deadline) {
-        finishedForDeadline.current = deadline
-        void finishRound()
-      }
-    }, 100)
+      void advancePhaseLocally(currentPhase)
+    }, 80)
     return () => window.clearInterval(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase])
+
+  async function advancePhaseLocally(fromPhase: Phase) {
+    if (transitionInFlight.current) return
+    transitionInFlight.current = true
+    try {
+      // Optimistic client transition so the UI never freezes
+      if (fromPhase === 'countdown') {
+        const ends = Date.now() + BATTLE_MS
+        lockDeadline('battle', BATTLE_MS)
+        lockedDeadline.current = ends
+        setState((prev) => ({
+          ...prev,
+          phase: 'battle',
+          endsAt: ends,
+          countdownEndsAt: 0,
+        }))
+        setPhase('battle')
+        phaseRef.current = 'battle'
+      } else if (fromPhase === 'battle') {
+        clearDeadlineLock()
+        lockedPhase.current = 'results'
+        setState((prev) => ({ ...prev, phase: 'results' }))
+        setPhase('results')
+        phaseRef.current = 'results'
+      }
+
+      // Tell server + peers
+      if (supabase && codeRef.current) {
+        const { error } = await supabase.rpc('duo_advance_phase', {
+          p_code: codeRef.current,
+          p_token: getToken(),
+        })
+        if (error && !error.message.includes('not_ready')) {
+          // still ok — we already advanced locally
+          console.warn('duo_advance_phase', error.message)
+        }
+        channelRef.current?.send({ type: 'broadcast', event: 'refresh', payload: {} })
+        await refreshAuthoritative()
+      }
+    } finally {
+      transitionInFlight.current = false
+    }
+  }
 
   async function subscribeToRoom(normalizedCode: string) {
     if (!supabase) return false
@@ -442,14 +512,13 @@ export default function Page() {
 
     channel.on('broadcast', { event: 'move' }, ({ payload }) => {
       if (!payload || typeof payload !== 'object') return
-      const p = payload as { id?: string; x?: number; y?: number; t?: number }
+      const p = payload as { id?: string; x?: number; y?: number }
       if (p.id === meRef.current) return
       if (typeof p.x !== 'number' || typeof p.y !== 'number') return
 
       remotePosition.current = { x: p.x, y: p.y, at: Date.now() }
-
       setState((prev) => {
-        if (prev.phase !== 'battle') return prev
+        if (prev.phase !== 'battle' && prev.phase !== 'countdown') return prev
         const oppId = meRef.current === 'p1' ? 'p2' : 'p1'
         let changed = false
         const players = prev.players.map((item) => {
@@ -482,6 +551,7 @@ export default function Page() {
     meRef.current = playerId
     localPosition.current = playerId === 'p1' ? { x: 18, y: 50 } : { x: 82, y: 50 }
     remotePosition.current = null
+    clearDeadlineLock()
     setPhase('lobby')
     getToken()
 
@@ -548,11 +618,12 @@ export default function Page() {
     }
 
     const slot = Number((membership as { slot?: number })?.slot) || 1
-    const playerId = slot === 1 ? 'p1' : 'p2'
+    const playerId = (slot === 1 ? 'p1' : 'p2') as 'p1' | 'p2'
     setMe(playerId)
     meRef.current = playerId
     localPosition.current = playerId === 'p1' ? { x: 18, y: 50 } : { x: 82, y: 50 }
     remotePosition.current = null
+    clearDeadlineLock()
     await subscribeToRoom(normalizedCode)
     await refreshAuthoritative(normalizedCode)
   }
@@ -592,36 +663,22 @@ export default function Page() {
       setNotice('Only the host can start when both players are connected.')
       return
     }
-    // Seed local deadlines immediately so timer never shows 0:00
-    const now = Date.now()
-    battleEnteredAt.current = 0
-    finishedForDeadline.current = 0
-    fallbackDeadline.current = now + COUNTDOWN_MS
+
+    // Optimistic countdown — lock deadline IMMEDIATELY so timer counts 3→2→1
+    const ends = Date.now() + COUNTDOWN_MS
+    lockDeadline('countdown', COUNTDOWN_MS)
+    lockedDeadline.current = ends
     setState((prev) => ({
       ...prev,
       phase: 'countdown',
-      countdownEndsAt: now + COUNTDOWN_MS,
-      endsAt: now + COUNTDOWN_MS + BATTLE_MS,
+      countdownEndsAt: ends,
+      endsAt: ends + BATTLE_MS,
     }))
     setPhase('countdown')
-    await refreshAuthoritative()
-  }
+    phaseRef.current = 'countdown'
 
-  async function finishRound() {
-    if (!supabase || !room || transitionInFlight.current) return
-    transitionInFlight.current = true
-    try {
-      const { error } = await supabase.rpc('duo_advance_phase', {
-        p_code: room,
-        p_token: getToken(),
-      })
-      if (error && !error.message.includes('not_ready')) {
-        setNotice('The round could not advance. Reconnecting…')
-      }
-      await refreshAuthoritative()
-    } finally {
-      transitionInFlight.current = false
-    }
+    channelRef.current?.send({ type: 'broadcast', event: 'refresh', payload: {} })
+    await refreshAuthoritative()
   }
 
   async function rematch() {
@@ -632,8 +689,7 @@ export default function Page() {
     })
     if (error) setNotice('Rematch is unavailable right now.')
     else {
-      finishedForDeadline.current = 0
-      fallbackDeadline.current = 0
+      clearDeadlineLock()
       remotePosition.current = null
       localPosition.current = meRef.current === 'p1' ? { x: 18, y: 50 } : { x: 82, y: 50 }
       await refreshAuthoritative()
@@ -654,6 +710,7 @@ export default function Page() {
       tokenRef.current = ''
       codeRef.current = ''
       remotePosition.current = null
+      clearDeadlineLock()
       history.pushState({}, '', '/')
       setRoom('')
       setState(initialState)
@@ -681,25 +738,26 @@ export default function Page() {
     }
   }
 
-  // ---- Derived timer values (never stuck at 0 on phase entry) ----
+  // ---- Timer display (uses locked deadline first) ----
   const now = Date.now()
-  let battleDeadline = state.endsAt || 0
-  let countdownDeadline = state.countdownEndsAt || 0
-  if (phase === 'battle') {
-    if (!battleDeadline || battleDeadline <= now) {
-      battleDeadline = fallbackDeadline.current || battleEnteredAt.current + BATTLE_MS || now + BATTLE_MS
-    }
-  }
-  if (phase === 'countdown') {
-    if (!countdownDeadline || countdownDeadline <= now) {
-      countdownDeadline = fallbackDeadline.current || now + COUNTDOWN_MS
-    }
-  }
+  let displayCountdown = 0
+  let displayRemaining = 30
 
-  const remaining =
-    phase === 'battle' ? Math.max(0, Math.ceil((battleDeadline - now) / 1000)) : 30
-  const countdown =
-    phase === 'countdown' ? Math.max(1, Math.ceil((countdownDeadline - now) / 1000)) : 0
+  if (phase === 'countdown') {
+    const dl =
+      lockedPhase.current === 'countdown' && lockedDeadline.current > 0
+        ? lockedDeadline.current
+        : state.countdownEndsAt
+    displayCountdown = Math.max(1, Math.ceil((dl - now) / 1000))
+    // If somehow past deadline, show 1 until phase advances
+    if (dl > 0 && now >= dl) displayCountdown = 1
+  } else if (phase === 'battle') {
+    const dl =
+      lockedPhase.current === 'battle' && lockedDeadline.current > 0
+        ? lockedDeadline.current
+        : state.endsAt
+    displayRemaining = Math.max(0, Math.ceil((dl - now) / 1000))
+  }
 
   const self = state.players.find((p) => p.id === me)
   const opponent = state.players.find((p) => p.id !== me)
@@ -746,8 +804,9 @@ export default function Page() {
           state={state}
           self={self}
           opponent={opponent}
-          remaining={remaining}
-          countdown={countdown}
+          remaining={displayRemaining}
+          countdown={displayCountdown}
+          phase={phase}
           onTouchVector={(x, y) => {
             touchVector.current = { x, y }
           }}
@@ -928,6 +987,7 @@ function Battle({
   opponent,
   remaining,
   countdown,
+  phase,
   onTouchVector,
 }: {
   state: State
@@ -935,9 +995,11 @@ function Battle({
   opponent?: Player
   remaining: number
   countdown: number
+  phase: Phase
   onTouchVector: (x: number, y: number) => void
 }) {
   const objective = self?.objective || (self?.id === 'p1' ? 'collect' : 'steal')
+  const isCountdown = phase === 'countdown'
 
   return (
     <section className="battle-wrap">
@@ -946,8 +1008,8 @@ function Battle({
           <span className="dot pink-bg" />
           YOU <b>{self?.score || 0}</b>
         </div>
-        <div className={`timer ${!countdown && remaining < 10 ? 'urgent' : ''}`}>
-          {countdown ? countdown : `0:${String(remaining).padStart(2, '0')}`}
+        <div className={`timer ${!isCountdown && remaining < 10 ? 'urgent' : ''}`}>
+          {isCountdown ? countdown : `0:${String(remaining).padStart(2, '0')}`}
         </div>
         <div className="score right">
           <b>{opponent?.score || 0}</b> THEM <span className="dot green-bg" />
@@ -963,6 +1025,7 @@ function Battle({
       <div
         className="arena"
         onPointerDown={(e) => {
+          if (isCountdown) return
           e.preventDefault()
           e.currentTarget.setPointerCapture(e.pointerId)
           const r = e.currentTarget.getBoundingClientRect()
@@ -972,7 +1035,7 @@ function Battle({
           )
         }}
         onPointerMove={(e) => {
-          if (e.buttons === 0) return
+          if (isCountdown || e.buttons === 0) return
           const r = e.currentTarget.getBoundingClientRect()
           onTouchVector(
             Math.max(-1, Math.min(1, (e.clientX - (r.left + r.width / 2)) / (r.width / 2))),
@@ -1003,6 +1066,31 @@ function Battle({
         ))}
         <div className="obstacle one" />
         <div className="obstacle two" />
+        {isCountdown && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              display: 'grid',
+              placeItems: 'center',
+              background: 'rgb(25 20 35 / 35%)',
+              zIndex: 10,
+              pointerEvents: 'none',
+            }}
+          >
+            <span
+              style={{
+                fontSize: 'clamp(64px, 18vw, 120px)',
+                fontWeight: 950,
+                letterSpacing: '-0.08em',
+                color: 'var(--ink)',
+                textShadow: '6px 6px 0 var(--yellow)',
+              }}
+            >
+              {countdown}
+            </span>
+          </div>
+        )}
       </div>
       <div className="controls-hint">
         <span>MOVE</span>
@@ -1010,7 +1098,9 @@ function Battle({
         <kbd>A</kbd>
         <kbd>S</kbd>
         <kbd>D</kbd>
-        <span className="touch-hint">or use touch controls</span>
+        <span className="touch-hint">
+          {isCountdown ? 'get ready…' : 'or use touch controls'}
+        </span>
       </div>
     </section>
   )
