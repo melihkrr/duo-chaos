@@ -411,8 +411,14 @@ export default function Page() {
             coins: Math.max(p.coins || 0, prev.coins || 0),
             stolen: Math.max(p.stolen || 0, prev.stolen || 0),
             score: Math.max(p.score || 0, prev.score || 0),
-            collectedTypes: p.collectedTypes ?? prev.collectedTypes,
-            objective: p.objective ?? prev.objective,
+        collectedTypes: Object.keys({ ...(prev.collectedTypes || {}), ...(p.collectedTypes || {}) }).reduce(
+          (counts, type) => ({
+            ...counts,
+            [type]: Math.max(prev.collectedTypes?.[type as keyof typeof prev.collectedTypes] || 0, p.collectedTypes?.[type as keyof typeof p.collectedTypes] || 0),
+          }),
+          {},
+        ),
+        objective: p.objective ?? prev.objective,
           }
         })
       }
@@ -1044,8 +1050,9 @@ export default function Page() {
       return
     }
 
-    const slot = Number((membership as { slot?: number })?.slot) || 1
-    const playerId = (slot === 1 ? 'p1' : 'p2') as 'p1' | 'p2'
+    const membershipRow = Array.isArray(membership) ? membership[0] : membership
+    const slot = Number((membershipRow as { slot?: number } | null)?.slot)
+    const playerId = (slot === 2 ? 'p2' : 'p1') as 'p1' | 'p2'
     setMe(playerId)
     meRef.current = playerId
     localPosition.current = { ...spawnFor(playerId) }
