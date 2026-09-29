@@ -232,6 +232,67 @@ export default function Page() {
   const transitionInFlight = useRef(false)
   const advancedForDeadline = useRef(0)
   const lastBroadcastPos = useRef({ x: 0, y: 0 })
+  /** Snapshot of mission progress at battle end — survives server overwrites on results */
+  const finalStatsRef = useRef<
+    Map<string, { coins: number; stolen: number; score: number; objective: Player['objective']; name: string }>
+  >(new Map())
+
+  function snapshotFinalStats(players: Player[]) {
+    const map = new Map<
+      string,
+      { coins: number; stolen: number; score: number; objective: Player['objective']; name: string }
+    >()
+    for (const p of players) {
+      const prev = finalStatsRef.current.get(p.id)
+      map.set(p.id, {
+        coins: Math.max(p.coins || 0, prev?.coins || 0),
+        stolen: Math.max(p.stolen || 0, prev?.stolen || 0),
+        score: Math.max(p.score || 0, prev?.score || 0),
+        objective: p.objective ?? prev?.objective ?? (p.id === 'p1' ? 'collect' : 'steal'),
+        name: p.name || prev?.name || (p.id === 'p1' ? 'PLAYER 1' : 'PLAYER 2'),
+      })
+    }
+    finalStatsRef.current = map
+  }
+
+  function applyFinalStats(players: Player[]): Player[] {
+    if (finalStatsRef.current.size === 0) return players
+    return players.map((p) => {
+      const snap = finalStatsRef.current.get(p.id)
+      if (!snap) return p
+      return {
+        ...p,
+        coins: Math.max(p.coins || 0, snap.coins),
+        stolen: Math.max(p.stolen || 0, snap.stolen),
+        score: Math.max(p.score || 0, snap.score),
+        objective: p.objective ?? snap.objective,
+        name: p.name || snap.name,
+      }
+    })
+  }
+
+  function missionComplete(p: Player): boolean {
+    const objective = p.objective || (p.id === 'p1' ? 'collect' : 'steal')
+    return objective === 'collect' ? (p.coins || 0) >= 7 : (p.stolen || 0) >= 3
+  }
+
+  function resolveWinner(players: Player[], serverWinner?: string): string | undefined {
+    if (serverWinner) return serverWinner
+    const completed = players.filter(missionComplete)
+    if (completed.length === 1) return completed[0].id
+    if (completed.length === 2) {
+      // Both completed — higher score wins, else tie (no winner)
+      if ((completed[0].score || 0) > (completed[1].score || 0)) return completed[0].id
+      if ((completed[1].score || 0) > (completed[0].score || 0)) return completed[1].id
+      return undefined
+    }
+    // Nobody completed mission — higher score still
+    if (players.length >= 2) {
+      if ((players[0].score || 0) > (players[1].score || 0)) return players[0].id
+      if ((players[1].score || 0) > (players[0].score || 0)) return players[1].id
+    }
+    return undefined
+  }
 
   function getToken() {
     const storageKey = `duo-chaos-token:${codeRef.current}`
@@ -432,8 +493,8 @@ export default function Page() {
         localPosition.current,
         remoteMap.current,
       )
-      // Keep optimistic mission counters if server lags
-      if (nextPhase === 'battle') {
+      // Keep optimistic mission counters if server lags (battle + results)
+      if (nextPhase === 'battle' || nextPhase === 'results' || nextPhase === 'matchover') {
         const prevPlayers = stateRef.current.players
         players = players.map((p) => {
           const prev = prevPlayers.find((x) => x.id === p.id)
@@ -442,9 +503,20 @@ export default function Page() {
             ...p,
             coins: Math.max(p.coins || 0, prev.coins || 0),
             stolen: Math.max(p.stolen || 0, prev.stolen || 0),
+            score: Math.max(p.score || 0, prev.score || 0),
+            objective: p.objective ?? prev.objective,
           }
         })
+        players = applyFinalStats(players)
+        if (nextPhase === 'results' || nextPhase === 'matchover') {
+          snapshotFinalStats(players)
+        }
       }
+
+      const winner =
+        nextPhase === 'results' || nextPhase === 'matchover'
+          ? resolveWinner(players, raw.winner)
+          : raw.winner
 
       const next: State = {
         ...raw,
@@ -453,6 +525,7 @@ export default function Page() {
         endsAt,
         coins: mergedCoins,
         players,
+        winner,
       }
 
       setState(next)
@@ -729,7 +802,23 @@ export default function Page() {
       } else if (fromPhase === 'battle') {
         clearDeadlineLock()
         lockedPhase.current = 'results'
-        setState((prev) => ({ ...prev, phase: 'results' }))
+        // Lock mission progress BEFORE any server refresh can zero it out
+        snapshotFinalStats(stateRef.current.players)
+        const lockedPlayers = applyFinalStats(stateRef.current.players)
+        const winner = resolveWinner(lockedPlayers, stateRef.current.winner)
+        // Award 1 score point per completed mission if server score is still 0
+        const scored = lockedPlayers.map((p) => {
+          const done = missionComplete(p)
+          const score = Math.max(p.score || 0, done ? 1 : 0)
+          return { ...p, score }
+        })
+        snapshotFinalStats(scored)
+        setState((prev) => ({
+          ...prev,
+          phase: 'results',
+          players: scored,
+          winner: resolveWinner(scored, winner),
+        }))
         setPhase('results')
         phaseRef.current = 'results'
       }
@@ -1002,6 +1091,7 @@ export default function Page() {
     else {
       clearDeadlineLock()
       remoteMap.current.clear()
+      finalStatsRef.current.clear()
       localPosition.current = meRef.current === 'p1' ? { x: 18, y: 50 } : { x: 82, y: 50 }
       await refreshAuthoritative()
     }
@@ -1022,6 +1112,7 @@ export default function Page() {
       tokenRef.current = ''
       codeRef.current = ''
       remoteMap.current.clear()
+      finalStatsRef.current.clear()
       clearDeadlineLock()
       history.pushState({}, '', '/')
       setRoom('')
@@ -1485,38 +1576,62 @@ function Results({
   onLeave: () => void
 }) {
   const winner = state.players.find((p) => p.id === state.winner)
+  const bothFailed = state.players.every((p) => {
+    const objective = p.objective || (p.id === 'p1' ? 'collect' : 'steal')
+    return objective === 'collect' ? (p.coins || 0) < 7 : (p.stolen || 0) < 3
+  })
+  const bothDone =
+    state.players.length >= 2 &&
+    state.players.every((p) => {
+      const objective = p.objective || (p.id === 'p1' ? 'collect' : 'steal')
+      return objective === 'collect' ? (p.coins || 0) >= 7 : (p.stolen || 0) >= 3
+    })
+
+  let headline = 'Total chaos.'
+  if (winner) headline = `${winner.name || (winner.id === me ? 'You' : 'Them')} takes it.`
+  else if (bothDone) headline = 'Both missions complete!'
+  else if (bothFailed) headline = 'Nobody finished the mission.'
+
   return (
     <section className="panel results">
       <div className="trophy">
         <Trophy />
       </div>
       <p className="eyebrow">ROUND {state.round} COMPLETE</p>
-      <h2>{winner ? `${winner.name} takes it.` : 'Total chaos.'}</h2>
+      <h2>{headline}</h2>
       <div className="reveal">
-        {state.players.map((p) => (
-          <div className="result-row" key={p.id}>
-            <div className={`avatar ${p.id === 'p1' ? 'pink' : 'green'}`}>
-              {p.id === me ? 'YOU' : 'THEM'}
+        {state.players.map((p) => {
+          const objective = p.objective || (p.id === 'p1' ? 'collect' : 'steal')
+          const progress = objective === 'collect' ? p.coins || 0 : p.stolen || 0
+          const target = objective === 'collect' ? 7 : 3
+          const done = progress >= target
+          return (
+            <div className="result-row" key={p.id}>
+              <div className={`avatar ${p.id === 'p1' ? 'pink' : 'green'}`}>
+                {p.id === me ? 'YOU' : 'THEM'}
+              </div>
+              <div>
+                <strong>
+                  {objective === 'collect' ? 'Collect 7 coins' : 'Steal 3 coins'}
+                </strong>
+                <small>
+                  {objective === 'collect'
+                    ? `${progress} / 7 coins collected`
+                    : `${progress} / 3 coins stolen`}
+                </small>
+              </div>
+              <b style={{ color: done ? 'var(--mint)' : undefined }}>
+                {done ? 'COMPLETE' : 'FAILED'}
+              </b>
             </div>
-            <div>
-              <strong>{p.objective === 'collect' ? 'Collect 7 coins' : 'Steal 3 coins'}</strong>
-              <small>
-                {p.objective === 'collect'
-                  ? `${p.coins} / 7 coins collected`
-                  : `${p.stolen} / 3 coins stolen`}
-              </small>
-            </div>
-            <b>
-              {(p.objective === 'collect' ? p.coins >= 7 : p.stolen >= 3) ? 'COMPLETE' : 'FAILED'}
-            </b>
-          </div>
-        ))}
+          )
+        })}
       </div>
       <div className="score-summary">
         {state.players.map((p) => (
           <div key={p.id}>
-            <small>{p.name}</small>
-            <strong>{p.score}</strong>
+            <small>{p.id === me ? 'YOU' : 'THEM'}</small>
+            <strong>{p.score || 0}</strong>
           </div>
         ))}
       </div>
