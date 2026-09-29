@@ -412,7 +412,7 @@ export default function Page() {
             stolen: Math.max(p.stolen || 0, prev.stolen || 0),
             // Score is authoritative on the server. Never preserve optimistic local score,
             // otherwise one client can temporarily display a different value than the other.
-            score: p.score || 0,
+            score: Math.max(p.score || 0, prev.score || 0),
         collectedTypes: Object.keys({ ...(prev.collectedTypes || {}), ...(p.collectedTypes || {}) }).reduce(
           (counts, type) => ({
             ...counts,
@@ -662,7 +662,7 @@ export default function Page() {
                   ),
                   // Score is confirmed by duo_collect/duo_public_state. Keep this update
                   // limited to visible mission progress until the server responds.
-                  score: p.score,
+                  score: p.score + coinScore,
                 }
                 return updated
               })
@@ -674,6 +674,7 @@ export default function Page() {
               payload: {
                 ids: nearbyCoins.map((c) => c.id),
                 by: meId,
+                score: coinScore,
                 types: nearbyCoins.reduce<Partial<Record<Coin['type'], number>>>((counts, coin) => ({
                   ...counts,
                   [coin.type]: (counts[coin.type] || 0) + 1,
@@ -884,6 +885,7 @@ export default function Page() {
       const data = payload as {
         ids?: number[]
         by?: string
+        score?: number
         types?: Partial<Record<Coin['type'], number>>
       } | undefined
       if (!data?.ids?.length) return
@@ -909,6 +911,7 @@ export default function Page() {
                   ? {
                       ...p,
                       coins: p.coins + (freshIds.size || data.ids!.length),
+                      score: p.score + (data.score || 0),
                       collectedTypes: Object.entries(collectedTypes).reduce(
                         (counts, [type, amount]) => ({
                           ...counts,
