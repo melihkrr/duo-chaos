@@ -3,80 +3,28 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createClient, type RealtimeChannel } from '@supabase/supabase-js'
 import { ArrowLeft, Check, Copy, Link2, LockKeyhole, Sparkles, Trophy, Users, Zap } from 'lucide-react'
-
-type Phase = 'home' | 'lobby' | 'countdown' | 'battle' | 'results' | 'matchover'
-type Player = {
-  id: string
-  name: string
-  x: number
-  y: number
-  coins: number
-  stolen: number
-  score: number
-  objective: 'collect' | 'steal' | null
-  rematch: boolean
-}
-type Coin = { id: number; x: number; y: number; collectedBy?: string }
-type State = {
-  phase: Phase
-  players: Player[]
-  coins: Coin[]
-  endsAt: number
-  countdownEndsAt: number
-  round: number
-  winner?: string
-}
-type RemotePos = { x: number; y: number; at: number }
-
-const BATTLE_MS = 30_000
-const COUNTDOWN_MS = 3_000
-const MOVE_SPEED = 34
-const MOVE_SEND_MS = 40
-const ACTION_MS = 90
-const RECONCILE_MS = 1000
-/** How long a peer-broadcast position overrides the server snapshot */
-const REMOTE_POS_TTL = 5000
-const COLLECT_RADIUS = 9
-const STEAL_RADIUS = 10
-const PLAYER_HIT_R = 3.2
-
-/**
- * Obstacle hitboxes in arena % coords (matches .obstacle.one / .obstacle.two CSS).
- * Rotated rectangles — collision is done in each obstacle's local space.
- */
-const OBSTACLES: Array<{ cx: number; cy: number; w: number; h: number; angleDeg: number }> = [
-  { cx: 29, cy: 31, w: 16, h: 5.5, angleDeg: 28 },
-  { cx: 71, cy: 69, w: 16, h: 5.5, angleDeg: -32 },
-]
-
-function hitsObstacle(x: number, y: number, radius = PLAYER_HIT_R): boolean {
-  for (const o of OBSTACLES) {
-    const rad = (-o.angleDeg * Math.PI) / 180
-    const dx = x - o.cx
-    const dy = y - o.cy
-    const lx = dx * Math.cos(rad) - dy * Math.sin(rad)
-    const ly = dx * Math.sin(rad) + dy * Math.cos(rad)
-    if (Math.abs(lx) <= o.w / 2 + radius && Math.abs(ly) <= o.h / 2 + radius) return true
-  }
-  return false
-}
-
-/** Try full move, then slide on X, then slide on Y (wall-slide). */
-function resolveMove(
-  fromX: number,
-  fromY: number,
-  toX: number,
-  toY: number,
-): { x: number; y: number } {
-  const x = Math.max(5, Math.min(95, toX))
-  const y = Math.max(7, Math.min(93, toY))
-  if (!hitsObstacle(x, y)) return { x, y }
-  const onlyX = { x, y: fromY }
-  if (!hitsObstacle(onlyX.x, onlyX.y)) return onlyX
-  const onlyY = { x: fromX, y }
-  if (!hitsObstacle(onlyY.x, onlyY.y)) return onlyY
-  return { x: fromX, y: fromY }
-}
+import {
+  ACTION_MS,
+  BATTLE_MS,
+  CLOCK_TICK_MS,
+  COLLECT_RADIUS,
+  COUNTDOWN_MS,
+  HEARTBEAT_MS,
+  MOVE_SEND_MS,
+  MOVE_SPEED,
+  PHASE_TICK_MS,
+  POLL_MS,
+  RECONCILE_MS,
+  REMOTE_POS_TTL,
+  STEAL_COOLDOWN_MS,
+  STEAL_RADIUS,
+  STEAL_TARGET,
+  spawnCoins,
+  spawnFor,
+} from '@/lib/config'
+import { clampPos, resolveMove } from '@/lib/movement'
+import { missionDoneForDisplay, missionLabel, objectiveOf, progressOf, targetOf } from '@/lib/display'
+import type { Coin, Phase, Player, RemotePos, State } from '@/lib/types'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
 const supabaseKey =
@@ -88,13 +36,6 @@ const supabase =
         realtime: { params: { eventsPerSecond: 30 } },
       })
     : null
-
-const spawnCoins = (): Coin[] =>
-  Array.from({ length: 14 }, (_, i) => ({
-    id: i,
-    x: 8 + ((i * 31) % 84),
-    y: 12 + ((i * 47) % 76),
-  }))
 
 const initialState: State = {
   phase: 'lobby',
@@ -122,6 +63,18 @@ function mapPlayerId(rawId: string, meId: string): string {
   return meId === 'p1' ? 'p2' : 'p1'
 }
 
+const blankPlayer = (id: 'p1' | 'p2'): Player => ({
+  id,
+  name: id === 'p1' ? 'PLAYER 1' : 'PLAYER 2',
+  x: spawnFor(id).x,
+  y: spawnFor(id).y,
+  coins: 0,
+  stolen: 0,
+  score: 0,
+  objective: id === 'p1' ? 'collect' : 'steal',
+  rematch: false,
+})
+
 function applyPositions(
   rawPlayers: Player[] | undefined,
   meId: string,
@@ -131,17 +84,15 @@ function applyPositions(
 ): Player[] {
   const list = rawPlayers || []
   const now = Date.now()
+  const live = phase === 'battle' || phase === 'countdown'
   const mapped = list.map((player) => {
     const mappedId = mapPlayerId(String(player.id), meId)
     const isMe = mappedId === meId
     const base = { ...player, id: mappedId }
 
-    if (isMe && (phase === 'battle' || phase === 'countdown')) {
-      return { ...base, x: localPos.x, y: localPos.y }
-    }
+    if (isMe && live) return { ...base, x: localPos.x, y: localPos.y }
 
-    if (!isMe && (phase === 'battle' || phase === 'countdown')) {
-      // Prefer any recent peer broadcast over stale RPC coordinates
+    if (!isMe && live) {
       const remote =
         remoteMap.get(mappedId) ||
         remoteMap.get('p1') ||
@@ -154,46 +105,15 @@ function applyPositions(
     return base
   })
 
-  // Ensure both slots exist during battle so a late move packet can still render
-  if ((phase === 'battle' || phase === 'countdown') && mapped.length < 2) {
-    const hasP1 = mapped.some((p) => p.id === 'p1')
-    const hasP2 = mapped.some((p) => p.id === 'p2')
-    if (!hasP1) {
-      mapped.push({
-        id: 'p1',
-        name: 'PLAYER 1',
-        x: 18,
-        y: 50,
-        coins: 0,
-        stolen: 0,
-        score: 0,
-        objective: 'collect',
-        rematch: false,
-      })
-    }
-    if (!hasP2) {
-      mapped.push({
-        id: 'p2',
-        name: 'PLAYER 2',
-        x: 82,
-        y: 50,
-        coins: 0,
-        stolen: 0,
-        score: 0,
-        objective: 'steal',
-        rematch: false,
-      })
-    }
+  if (live && mapped.length < 2) {
+    if (!mapped.some((p) => p.id === 'p1')) mapped.push(blankPlayer('p1'))
+    if (!mapped.some((p) => p.id === 'p2')) mapped.push(blankPlayer('p2'))
   }
 
-  // Re-apply remote after ensuring slots (in case opponent was just injected)
   return mapped.map((p) => {
-    if (p.id === meId) {
-      if (phase === 'battle' || phase === 'countdown') return { ...p, x: localPos.x, y: localPos.y }
-      return p
-    }
+    if (p.id === meId) return live ? { ...p, x: localPos.x, y: localPos.y } : p
     const remote = remoteMap.get(p.id)
-    if (remote && now - remote.at < REMOTE_POS_TTL && (phase === 'battle' || phase === 'countdown')) {
+    if (remote && now - remote.at < REMOTE_POS_TTL && live) {
       return { ...p, x: remote.x, y: remote.y }
     }
     return p
@@ -218,7 +138,7 @@ export default function Page() {
   const meRef = useRef(me)
   const phaseRef = useRef(phase)
   const keys = useRef(new Set<string>())
-  /** Movement input vector in range [-1, 1] from keyboard + joystick */
+  /** Klavye + joystick hareket vektörü, aralık [-1, 1] */
   const moveInput = useRef({ x: 0, y: 0 })
   const tokenRef = useRef('')
   const codeRef = useRef('')
@@ -226,73 +146,12 @@ export default function Page() {
   const refreshFailures = useRef(0)
   const lockedDeadline = useRef(0)
   const lockedPhase = useRef<Phase | ''>('')
-  const localPosition = useRef({ x: 18, y: 50 })
-  /** peerId → last known position from realtime broadcast */
+  const localPosition = useRef({ ...spawnFor('p1') })
+  /** peerId → broadcast ile gelen son bilinen pozisyon */
   const remoteMap = useRef(new Map<string, RemotePos>())
   const transitionInFlight = useRef(false)
   const advancedForDeadline = useRef(0)
   const lastBroadcastPos = useRef({ x: 0, y: 0 })
-  /** Snapshot of mission progress at battle end — survives server overwrites on results */
-  const finalStatsRef = useRef<
-    Map<string, { coins: number; stolen: number; score: number; objective: Player['objective']; name: string }>
-  >(new Map())
-
-  function snapshotFinalStats(players: Player[]) {
-    const map = new Map<
-      string,
-      { coins: number; stolen: number; score: number; objective: Player['objective']; name: string }
-    >()
-    for (const p of players) {
-      const prev = finalStatsRef.current.get(p.id)
-      map.set(p.id, {
-        coins: Math.max(p.coins || 0, prev?.coins || 0),
-        stolen: Math.max(p.stolen || 0, prev?.stolen || 0),
-        score: Math.max(p.score || 0, prev?.score || 0),
-        objective: p.objective ?? prev?.objective ?? (p.id === 'p1' ? 'collect' : 'steal'),
-        name: p.name || prev?.name || (p.id === 'p1' ? 'PLAYER 1' : 'PLAYER 2'),
-      })
-    }
-    finalStatsRef.current = map
-  }
-
-  function applyFinalStats(players: Player[]): Player[] {
-    if (finalStatsRef.current.size === 0) return players
-    return players.map((p) => {
-      const snap = finalStatsRef.current.get(p.id)
-      if (!snap) return p
-      return {
-        ...p,
-        coins: Math.max(p.coins || 0, snap.coins),
-        stolen: Math.max(p.stolen || 0, snap.stolen),
-        score: Math.max(p.score || 0, snap.score),
-        objective: p.objective ?? snap.objective,
-        name: p.name || snap.name,
-      }
-    })
-  }
-
-  function missionComplete(p: Player): boolean {
-    const objective = p.objective || (p.id === 'p1' ? 'collect' : 'steal')
-    return objective === 'collect' ? (p.coins || 0) >= 7 : (p.stolen || 0) >= 3
-  }
-
-  function resolveWinner(players: Player[], serverWinner?: string): string | undefined {
-    if (serverWinner) return serverWinner
-    const completed = players.filter(missionComplete)
-    if (completed.length === 1) return completed[0].id
-    if (completed.length === 2) {
-      // Both completed — higher score wins, else tie (no winner)
-      if ((completed[0].score || 0) > (completed[1].score || 0)) return completed[0].id
-      if ((completed[1].score || 0) > (completed[0].score || 0)) return completed[1].id
-      return undefined
-    }
-    // Nobody completed mission — higher score still
-    if (players.length >= 2) {
-      if ((players[0].score || 0) > (players[1].score || 0)) return players[0].id
-      if ((players[1].score || 0) > (players[0].score || 0)) return players[1].id
-    }
-    return undefined
-  }
 
   function getToken() {
     const storageKey = `duo-chaos-token:${codeRef.current}`
@@ -315,19 +174,14 @@ export default function Page() {
     advancedForDeadline.current = 0
   }
 
-  /** Apply a peer move packet into state immediately */
+  /** Rakip hareket paketini state'e hemen uygula */
   function ingestRemoteMove(rawId: string, x: number, y: number) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) return
     const mappedId = mapPlayerId(String(rawId), meRef.current)
     if (mappedId === meRef.current) return
 
-    const clamped = {
-      x: Math.max(5, Math.min(95, x)),
-      y: Math.max(7, Math.min(93, y)),
-      at: Date.now(),
-    }
+    const clamped = { ...clampPos(x, y), at: Date.now() }
     remoteMap.current.set(mappedId, clamped)
-    // also store under raw id so either key works
     remoteMap.current.set(String(rawId), clamped)
 
     setState((prev) => {
@@ -340,38 +194,19 @@ export default function Page() {
         return { ...item, x: clamped.x, y: clamped.y }
       })
       if (!found) {
-        players.push({
-          id: mappedId,
-          name: mappedId === 'p1' ? 'PLAYER 1' : 'PLAYER 2',
-          x: clamped.x,
-          y: clamped.y,
-          coins: 0,
-          stolen: 0,
-          score: 0,
-          objective: mappedId === 'p1' ? 'collect' : 'steal',
-          rematch: false,
-        })
-        return { ...prev, players }
+        players.push({ ...blankPlayer(mappedId === 'p1' ? 'p1' : 'p2'), x: clamped.x, y: clamped.y })
       }
       return { ...prev, players }
     })
   }
 
-  /** Send position to peers (broadcast) + server (RPC). Must be reliable. */
+  /** Pozisyonu peer'lara (broadcast) + sunucuya (RPC) gönder */
   function publishMove(x: number, y: number) {
-    const payload = {
-      id: meRef.current,
-      x,
-      y,
-      t: Date.now(),
-      room: codeRef.current,
-    }
+    const payload = { id: meRef.current, x, y, t: Date.now(), room: codeRef.current }
 
     const ch = channelRef.current
     if (ch && channelReady.current) {
-      // Fire-and-forget; Supabase broadcast is the primary path for peer visibility
       void ch.send({ type: 'broadcast', event: 'move', payload })
-      // Secondary event name in case filters differ
       void ch.send({ type: 'broadcast', event: 'pos', payload })
     }
 
@@ -462,7 +297,7 @@ export default function Page() {
         endsAt = serverEnds
       }
 
-      // Seed remote map from server positions when we have no recent broadcast
+      // Yakın zamanda broadcast yoksa remote map'i sunucu pozisyonlarıyla besle
       for (const pl of raw.players || []) {
         const id = mapPlayerId(String(pl.id), meRef.current)
         if (id === meRef.current) continue
@@ -474,12 +309,12 @@ export default function Page() {
         }
       }
 
-      // Merge coins: never revive a coin we (or peer) already marked collected locally
+      // Coin: yerelde/peer'da toplanmış coin'i geri canlandırma (sadece görsel)
       const prevCoins = stateRef.current.coins || []
       const localCollected = new Map(
         prevCoins.filter((c) => c.collectedBy).map((c) => [c.id, c.collectedBy as string]),
       )
-      const serverCoins = Array.isArray(raw.coins) ? raw.coins : spawnCoins()
+      const serverCoins: Coin[] = Array.isArray(raw.coins) ? raw.coins : spawnCoins()
       const mergedCoins = serverCoins.map((c) => {
         if (c.collectedBy) return c
         const by = localCollected.get(c.id)
@@ -493,8 +328,10 @@ export default function Page() {
         localPosition.current,
         remoteMap.current,
       )
-      // Keep optimistic mission counters if server lags (battle + results)
-      if (nextPhase === 'battle' || nextPhase === 'results' || nextPhase === 'matchover') {
+
+      // SADECE battle sırasında, sunucu gecikirse sayaçları akıcı göstermek için
+      // iyimser coin/steal değerini koru. Skor ve results/matchover HER ZAMAN sunucudan.
+      if (nextPhase === 'battle') {
         const prevPlayers = stateRef.current.players
         players = players.map((p) => {
           const prev = prevPlayers.find((x) => x.id === p.id)
@@ -503,20 +340,10 @@ export default function Page() {
             ...p,
             coins: Math.max(p.coins || 0, prev.coins || 0),
             stolen: Math.max(p.stolen || 0, prev.stolen || 0),
-            score: Math.max(p.score || 0, prev.score || 0),
             objective: p.objective ?? prev.objective,
           }
         })
-        players = applyFinalStats(players)
-        if (nextPhase === 'results' || nextPhase === 'matchover') {
-          snapshotFinalStats(players)
-        }
       }
-
-      const winner =
-        nextPhase === 'results' || nextPhase === 'matchover'
-          ? resolveWinner(players, raw.winner)
-          : raw.winner
 
       const next: State = {
         ...raw,
@@ -525,7 +352,7 @@ export default function Page() {
         endsAt,
         coins: mergedCoins,
         players,
-        winner,
+        winner: raw.winner, // sunucu kararı, client hesaplamaz
       }
 
       setState(next)
@@ -546,7 +373,7 @@ export default function Page() {
     phaseRef.current = phase
   }, [phase])
 
-  // Keyboard + deep link
+  // Klavye + deep link
   useEffect(() => {
     const pathCode = location.pathname.split('/play/')[1]?.split('?')[0]
     if (pathCode) {
@@ -580,7 +407,7 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Movement loop
+  // Hareket döngüsü
   useEffect(() => {
     if (phase !== 'battle' && phase !== 'countdown') return
 
@@ -594,7 +421,6 @@ export default function Page() {
     const tick = (now: number) => {
       rafId = requestAnimationFrame(tick)
       const p = phaseRef.current
-      if (p !== 'battle' && p !== 'countdown') return
       if (p !== 'battle') return
 
       const dt = Math.min(0.05, (now - lastFrameTime) / 1000)
@@ -613,9 +439,12 @@ export default function Page() {
         const length = Math.hypot(dx, dy) || 1
         const step = MOVE_SPEED * dt
         const from = localPosition.current
-        const desiredX = from.x + (dx / length) * step
-        const desiredY = from.y + (dy / length) * step
-        const { x, y } = resolveMove(from.x, from.y, desiredX, desiredY)
+        const { x, y } = resolveMove(
+          from.x,
+          from.y,
+          from.x + (dx / length) * step,
+          from.y + (dy / length) * step,
+        )
         localPosition.current = { x, y }
 
         setState((prev) => {
@@ -639,7 +468,7 @@ export default function Page() {
         }
       }
 
-      // ---- Coin collect + steal (optimistic client + server RPC) ----
+      // ---- Coin toplama + çalma: iyimser görsel güncelleme + sunucu RPC ----
       if (now - lastActionAt >= ACTION_MS && !actionInFlight) {
         lastActionAt = now
         const { x, y } = localPosition.current
@@ -654,7 +483,6 @@ export default function Page() {
         if (nearbyCoins.length || nearOpponent) {
           actionInFlight = true
 
-          // Optimistic local updates so coins disappear / counters tick immediately
           if (nearbyCoins.length) {
             const collectedIds = new Set(nearbyCoins.map((c) => c.id))
             setState((prev) => {
@@ -662,18 +490,11 @@ export default function Page() {
               const coins = prev.coins.map((c) =>
                 collectedIds.has(c.id) ? { ...c, collectedBy: meId } : c,
               )
-              const players = prev.players.map((p) => {
-                if (p.id !== meId) return p
-                const gained = nearbyCoins.length
-                return {
-                  ...p,
-                  coins: p.coins + gained,
-                  // score bump is server-authoritative; keep local progress for mission UI
-                }
-              })
+              const players = prev.players.map((p) =>
+                p.id === meId ? { ...p, coins: p.coins + nearbyCoins.length } : p,
+              )
               return { ...prev, coins, players }
             })
-            // Tell peers immediately so coins vanish on their screen too
             channelRef.current?.send({
               type: 'broadcast',
               event: 'collect',
@@ -681,24 +502,18 @@ export default function Page() {
             })
           }
 
-          // Steal has its own longer cooldown so standing on opponent doesn't farm +1 every 90ms
           let didSteal = false
-          if (nearOpponent && now - lastStealAt >= 700) {
+          if (nearOpponent && now - lastStealAt >= STEAL_COOLDOWN_MS) {
             lastStealAt = now
             didSteal = true
             setState((prev) => {
               if (prev.phase !== 'battle') return prev
-              const players = prev.players.map((p) => {
-                if (p.id !== meId) return p
-                return { ...p, stolen: Math.min(3, p.stolen + 1) }
-              })
+              const players = prev.players.map((p) =>
+                p.id === meId ? { ...p, stolen: Math.min(STEAL_TARGET, p.stolen + 1) } : p,
+              )
               return { ...prev, players }
             })
-            channelRef.current?.send({
-              type: 'broadcast',
-              event: 'steal',
-              payload: { by: meId },
-            })
+            channelRef.current?.send({ type: 'broadcast', event: 'steal', payload: { by: meId } })
           }
 
           const rpcs: Promise<unknown>[] = []
@@ -714,10 +529,7 @@ export default function Page() {
             }
             if (didSteal) {
               rpcs.push(
-                supabase.rpc('duo_steal', {
-                  p_code: codeRef.current,
-                  p_token: getToken(),
-                }),
+                supabase.rpc('duo_steal', { p_code: codeRef.current, p_token: getToken() }),
               )
             }
           }
@@ -735,29 +547,34 @@ export default function Page() {
     return () => cancelAnimationFrame(rafId)
   }, [phase, refreshAuthoritative])
 
-  // Heartbeat: keep publishing current pos even when standing still rarely,
-  // so late-joining peer state stays warm. Also re-send last pos every 400ms while moving intent exists.
+  // Heartbeat: dursak bile pozisyonu düzenli yayınla
   useEffect(() => {
     if (phase !== 'battle') return
     const id = window.setInterval(() => {
       if (phaseRef.current !== 'battle') return
       const { x, y } = localPosition.current
       publishMove(x, y)
-    }, 400)
+    }, HEARTBEAT_MS)
     return () => window.clearInterval(id)
   }, [phase])
 
   useEffect(() => {
     if (!codeRef.current || phase === 'home') return
     const interval =
-      phase === 'lobby' ? 700 : phase === 'countdown' ? 500 : phase === 'battle' ? RECONCILE_MS : 1500
+      phase === 'lobby'
+        ? POLL_MS.lobby
+        : phase === 'countdown'
+          ? POLL_MS.countdown
+          : phase === 'battle'
+            ? POLL_MS.battle
+            : POLL_MS.other
     const id = window.setInterval(() => void refreshAuthoritative(), interval)
     return () => window.clearInterval(id)
   }, [phase, room, refreshAuthoritative])
 
   useEffect(() => {
     if (!['countdown', 'battle'].includes(phase)) return
-    const id = window.setInterval(() => setClock(Date.now()), 150)
+    const id = window.setInterval(() => setClock(Date.now()), CLOCK_TICK_MS)
     return () => window.clearInterval(id)
   }, [phase])
 
@@ -778,11 +595,16 @@ export default function Page() {
       if (advancedForDeadline.current === deadline) return
       advancedForDeadline.current = deadline
       void advancePhaseLocally(currentPhase)
-    }, 80)
+    }, PHASE_TICK_MS)
     return () => window.clearInterval(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase])
 
+  /**
+   * Faz geçişini istemcide anında göster (akıcılık için), asıl geçişi sunucu yapar.
+   * Skor/kazanan burada HESAPLANMAZ; results ekranı sunucu state'i gelene kadar
+   * mevcut değerleri gösterir, refresh ile sunucu değerleri üstüne yazılır.
+   */
   async function advancePhaseLocally(fromPhase: Phase) {
     if (transitionInFlight.current) return
     transitionInFlight.current = true
@@ -791,34 +613,13 @@ export default function Page() {
         const ends = Date.now() + BATTLE_MS
         lockDeadline('battle', BATTLE_MS)
         lockedDeadline.current = ends
-        setState((prev) => ({
-          ...prev,
-          phase: 'battle',
-          endsAt: ends,
-          countdownEndsAt: 0,
-        }))
+        setState((prev) => ({ ...prev, phase: 'battle', endsAt: ends, countdownEndsAt: 0 }))
         setPhase('battle')
         phaseRef.current = 'battle'
       } else if (fromPhase === 'battle') {
         clearDeadlineLock()
         lockedPhase.current = 'results'
-        // Lock mission progress BEFORE any server refresh can zero it out
-        snapshotFinalStats(stateRef.current.players)
-        const lockedPlayers = applyFinalStats(stateRef.current.players)
-        const winner = resolveWinner(lockedPlayers, stateRef.current.winner)
-        // Award 1 score point per completed mission if server score is still 0
-        const scored = lockedPlayers.map((p) => {
-          const done = missionComplete(p)
-          const score = Math.max(p.score || 0, done ? 1 : 0)
-          return { ...p, score }
-        })
-        snapshotFinalStats(scored)
-        setState((prev) => ({
-          ...prev,
-          phase: 'results',
-          players: scored,
-          winner: resolveWinner(scored, winner),
-        }))
+        setState((prev) => ({ ...prev, phase: 'results' }))
         setPhase('results')
         phaseRef.current = 'results'
       }
@@ -855,8 +656,7 @@ export default function Page() {
       const payload = msg?.payload as { id?: string; x?: number; y?: number } | undefined
       if (!payload) return
       if (typeof payload.x !== 'number' || typeof payload.y !== 'number') return
-      const id = payload.id || 'opponent'
-      ingestRemoteMove(id, payload.x, payload.y)
+      ingestRemoteMove(payload.id || 'opponent', payload.x, payload.y)
     }
 
     channel.on('broadcast', { event: 'move' }, onMove)
@@ -874,7 +674,6 @@ export default function Page() {
         const coins = prev.coins.map((c) =>
           ids.has(c.id) && !c.collectedBy ? { ...c, collectedBy: by } : c,
         )
-        // Don't double-count if we are the collector (already optimistic)
         const players =
           by === meRef.current
             ? prev.players
@@ -891,21 +690,20 @@ export default function Page() {
       setState((prev) => {
         if (prev.phase !== 'battle') return prev
         const players = prev.players.map((p) =>
-          p.id === by ? { ...p, stolen: Math.min(3, p.stolen + 1) } : p,
+          p.id === by ? { ...p, stolen: Math.min(STEAL_TARGET, p.stolen + 1) } : p,
         )
         return { ...prev, players }
       })
     })
 
-    // Presence as backup path for positions
+    // Pozisyonlar için yedek yol olarak presence
     channel.on('presence', { event: 'sync' }, () => {
       const presence = channel.presenceState() as Record<
         string,
         Array<{ id?: string; x?: number; y?: number }>
       >
       for (const key of Object.keys(presence)) {
-        const rows = presence[key] || []
-        for (const row of rows) {
+        for (const row of presence[key] || []) {
           if (typeof row.x === 'number' && typeof row.y === 'number' && row.id) {
             ingestRemoteMove(row.id, row.x, row.y)
           }
@@ -926,9 +724,8 @@ export default function Page() {
               y: localPosition.current.y,
             })
           } catch {
-            /* presence optional */
+            /* presence opsiyonel */
           }
-          // Immediately announce current position so the other client sees us
           publishMove(localPosition.current.x, localPosition.current.y)
           resolve()
         }
@@ -950,7 +747,7 @@ export default function Page() {
     codeRef.current = normalizedCode
     setMe(playerId)
     meRef.current = playerId
-    localPosition.current = playerId === 'p1' ? { x: 18, y: 50 } : { x: 82, y: 50 }
+    localPosition.current = { ...spawnFor(playerId) }
     remoteMap.current.clear()
     clearDeadlineLock()
     setPhase('lobby')
@@ -1022,7 +819,7 @@ export default function Page() {
     const playerId = (slot === 1 ? 'p1' : 'p2') as 'p1' | 'p2'
     setMe(playerId)
     meRef.current = playerId
-    localPosition.current = playerId === 'p1' ? { x: 18, y: 50 } : { x: 82, y: 50 }
+    localPosition.current = { ...spawnFor(playerId) }
     remoteMap.current.clear()
     clearDeadlineLock()
     await subscribeToRoom(normalizedCode)
@@ -1091,8 +888,7 @@ export default function Page() {
     else {
       clearDeadlineLock()
       remoteMap.current.clear()
-      finalStatsRef.current.clear()
-      localPosition.current = meRef.current === 'p1' ? { x: 18, y: 50 } : { x: 82, y: 50 }
+      localPosition.current = { ...spawnFor(meRef.current) }
       await refreshAuthoritative()
     }
   }
@@ -1112,7 +908,6 @@ export default function Page() {
       tokenRef.current = ''
       codeRef.current = ''
       remoteMap.current.clear()
-      finalStatsRef.current.clear()
       clearDeadlineLock()
       history.pushState({}, '', '/')
       setRoom('')
@@ -1143,7 +938,7 @@ export default function Page() {
 
   const now = Date.now()
   let displayCountdown = 0
-  let displayRemaining = 30
+  let displayRemaining = Math.ceil(BATTLE_MS / 1000)
 
   if (phase === 'countdown') {
     const dl =
@@ -1382,7 +1177,7 @@ function Lobby({
   )
 }
 
-/** Professional virtual joystick — fixed bottom-left on touch devices */
+/** Dokunmatik cihazlar için sanal joystick */
 function VirtualJoystick({
   disabled,
   onChange,
@@ -1393,16 +1188,14 @@ function VirtualJoystick({
   const baseRef = useRef<HTMLDivElement>(null)
   const [knob, setKnob] = useState({ x: 0, y: 0 })
   const active = useRef(false)
-  const radius = 36 // max knob travel in px
+  const radius = 36
 
   const updateFromEvent = (clientX: number, clientY: number) => {
     const el = baseRef.current
     if (!el) return
     const rect = el.getBoundingClientRect()
-    const cx = rect.left + rect.width / 2
-    const cy = rect.top + rect.height / 2
-    let dx = clientX - cx
-    let dy = clientY - cy
+    let dx = clientX - (rect.left + rect.width / 2)
+    let dy = clientY - (rect.top + rect.height / 2)
     const dist = Math.hypot(dx, dy)
     if (dist > radius) {
       dx = (dx / dist) * radius
@@ -1410,14 +1203,12 @@ function VirtualJoystick({
     }
     setKnob({ x: dx, y: dy })
 
-    // Deadzone
     const nx = dx / radius
     const ny = dy / radius
     const mag = Math.hypot(nx, ny)
     if (mag < 0.12) {
       onChange(0, 0)
     } else {
-      // Smooth response curve
       const scaled = Math.min(1, (mag - 0.12) / 0.88)
       onChange((nx / mag) * scaled, (ny / mag) * scaled)
     }
@@ -1452,10 +1243,7 @@ function VirtualJoystick({
     >
       <span className="joystick-hint">JOYSTICK</span>
       <div className="joystick-base" />
-      <div
-        className="joystick-knob"
-        style={{ transform: `translate(${knob.x}px, ${knob.y}px)` }}
-      />
+      <div className="joystick-knob" style={{ transform: `translate(${knob.x}px, ${knob.y}px)` }} />
     </div>
   )
 }
@@ -1477,7 +1265,7 @@ function Battle({
   phase: Phase
   onMoveInput: (x: number, y: number) => void
 }) {
-  const objective = self?.objective || (self?.id === 'p1' ? 'collect' : 'steal')
+  const objective = objectiveOf(self)
   const isCountdown = phase === 'countdown'
 
   return (
@@ -1496,10 +1284,8 @@ function Battle({
       </div>
       <div className="mission-strip">
         <LockKeyhole /> <span>SECRET MISSION</span>
-        <strong>{objective === 'collect' ? 'Collect 7 coins' : 'Steal 3 coins'}</strong>
-        <small>
-          {objective === 'collect' ? `${self?.coins || 0} / 7` : `${self?.stolen || 0} / 3`}
-        </small>
+        <strong>{missionLabel(objective)}</strong>
+        <small>{self ? `${progressOf(self)} / ${targetOf(objective)}` : `0 / ${targetOf(objective)}`}</small>
       </div>
       <div className="arena">
         <div className="boundary" />
@@ -1575,17 +1361,11 @@ function Results({
   onRematch: () => void
   onLeave: () => void
 }) {
+  // Kazanan ve skorlar sunucudan gelir; burada sadece gösterilir.
   const winner = state.players.find((p) => p.id === state.winner)
-  const bothFailed = state.players.every((p) => {
-    const objective = p.objective || (p.id === 'p1' ? 'collect' : 'steal')
-    return objective === 'collect' ? (p.coins || 0) < 7 : (p.stolen || 0) < 3
-  })
-  const bothDone =
-    state.players.length >= 2 &&
-    state.players.every((p) => {
-      const objective = p.objective || (p.id === 'p1' ? 'collect' : 'steal')
-      return objective === 'collect' ? (p.coins || 0) >= 7 : (p.stolen || 0) >= 3
-    })
+  const done = state.players.map(missionDoneForDisplay)
+  const bothDone = state.players.length >= 2 && done.every(Boolean)
+  const bothFailed = state.players.length >= 2 && done.every((d) => !d)
 
   let headline = 'Total chaos.'
   if (winner) headline = `${winner.name || (winner.id === me ? 'You' : 'Them')} takes it.`
@@ -1601,28 +1381,24 @@ function Results({
       <h2>{headline}</h2>
       <div className="reveal">
         {state.players.map((p) => {
-          const objective = p.objective || (p.id === 'p1' ? 'collect' : 'steal')
-          const progress = objective === 'collect' ? p.coins || 0 : p.stolen || 0
-          const target = objective === 'collect' ? 7 : 3
-          const done = progress >= target
+          const objective = objectiveOf(p)
+          const progress = progressOf(p)
+          const target = targetOf(objective)
+          const ok = missionDoneForDisplay(p)
           return (
             <div className="result-row" key={p.id}>
               <div className={`avatar ${p.id === 'p1' ? 'pink' : 'green'}`}>
                 {p.id === me ? 'YOU' : 'THEM'}
               </div>
               <div>
-                <strong>
-                  {objective === 'collect' ? 'Collect 7 coins' : 'Steal 3 coins'}
-                </strong>
+                <strong>{missionLabel(objective)}</strong>
                 <small>
                   {objective === 'collect'
-                    ? `${progress} / 7 coins collected`
-                    : `${progress} / 3 coins stolen`}
+                    ? `${progress} / ${target} coins collected`
+                    : `${progress} / ${target} coins stolen`}
                 </small>
               </div>
-              <b style={{ color: done ? 'var(--mint)' : undefined }}>
-                {done ? 'COMPLETE' : 'FAILED'}
-              </b>
+              <b style={{ color: ok ? 'var(--mint)' : undefined }}>{ok ? 'COMPLETE' : 'FAILED'}</b>
             </div>
           )
         })}
