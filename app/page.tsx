@@ -1369,9 +1369,9 @@ function Home({
           <em>CHAOS</em>
         </h1>
         <p className="tagline">
-          Get a secret mission.
+          See the move. Steal the resource.
           <br />
-          Outsmart your friend.
+          Break their plan. Own the chaos.
         </p>
         <div className="home-actions">
           <button className="primary" onClick={onCreate}>
@@ -1400,6 +1400,11 @@ function Home({
               <span>{x}</span>
             </div>
           ))}
+        </div>
+        <div className="feature-rail" aria-label="Game features">
+          <div><span className="feature-icon">◎</span><span><b>3 rounds</b><small>Fast rematches</small></span></div>
+          <div><span className="feature-icon">↯</span><span><b>Chaos events</b><small>Rules keep changing</small></span></div>
+          <div><span className="feature-icon">↗</span><span><b>Level up</b><small>Titles, trails & emotes</small></span></div>
         </div>
       </div>
       <div className="home-doodle">
