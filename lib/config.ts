@@ -37,10 +37,13 @@ export const COIN_TYPES: CoinType[] = ['gold', 'blue', 'red', 'emerald']
 
 export const OBJECTIVE_POOL: Objective[] = [
   { id: 'gold-rush', kind: 'collect', label: 'Collect 3 Gold', shortLabel: '3 Gold', target: 3, coinType: 'gold' },
-  { id: 'blue-raid', kind: 'collect', label: 'Collect 2 Blue + 2 Red', shortLabel: '2 Blue + 2 Red', target: 4, coinType: 'mixed' },
+  { id: 'blue-raid', kind: 'collect', label: 'Collect 2 Blue + 2 Red', shortLabel: '2 Blue + 2 Red', target: 4, coinType: 'mixed', requirements: { blue: 2, red: 2 } },
   { id: 'emerald-hunt', kind: 'collect', label: 'Collect 3 Emerald', shortLabel: '3 Emerald', target: 3, coinType: 'emerald' },
   { id: 'resource-control', kind: 'steal', label: 'Steal 3 from your rival', shortLabel: '3 stolen', target: 3, coinType: 'mixed' },
-  { id: 'jackpot-run', kind: 'collect', label: 'Collect 1 Gold + 2 Blue', shortLabel: '1 Gold + 2 Blue', target: 3, coinType: 'mixed' },
+  { id: 'jackpot-run', kind: 'collect', label: 'Collect 1 Gold + 2 Blue', shortLabel: '1 Gold + 2 Blue', target: 3, coinType: 'mixed', requirements: { gold: 1, blue: 2 } },
+  { id: 'red-burn', kind: 'collect', label: 'Collect 2 Red + 1 Emerald', shortLabel: '2 Red + 1 Emerald', target: 3, coinType: 'mixed', requirements: { red: 2, emerald: 1 } },
+  { id: 'blue-pressure', kind: 'collect', label: 'Collect 4 Blue', shortLabel: '4 Blue', target: 4, coinType: 'blue' },
+  { id: 'gold-robbery', kind: 'steal', label: 'Steal 2 and secure 1 Gold', shortLabel: '2 stolen + 1 Gold', target: 3, coinType: 'mixed', requirements: { gold: 1 }, stealTarget: 2 },
 ]
 
 export const CHAOS_EVENTS: ChaosEvent[] = [
@@ -57,13 +60,15 @@ export const defaultObjectiveForPlayer = (id: string): Objective => {
 }
 
 export const generateObjectivePair = (): [Objective, Objective] => {
-  const pool = [...OBJECTIVE_POOL]
-  pool.sort(() => Math.random() - 0.5)
-  return [pool[0], pool[1] ?? pool[0]]
+  const shuffled = [...OBJECTIVE_POOL].sort(() => Math.random() - 0.5)
+  const first = shuffled[0] ?? OBJECTIVE_POOL[0]
+  const second = shuffled.find((item) => item.id !== first.id) ?? first
+  return [first, second]
 }
 
-export const nextChaosEvent = (): ChaosEvent => {
-  const event = CHAOS_EVENTS[Math.floor(Math.random() * CHAOS_EVENTS.length)]
+export const nextChaosEvent = (at = Date.now()): ChaosEvent => {
+  const slot = Math.floor(at / 15_000)
+  const event = CHAOS_EVENTS[slot % CHAOS_EVENTS.length]
   return event ?? CHAOS_EVENTS[0]
 }
 

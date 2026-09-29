@@ -22,6 +22,7 @@ import {
   STEAL_RADIUS,
   STEAL_TARGET,
   defaultObjectiveForPlayer,
+  generateObjectivePair,
   spawnCoins,
   spawnFor,
 } from '@/lib/config'
@@ -74,6 +75,7 @@ const blankPlayer = (id: 'p1' | 'p2'): Player => ({
   y: spawnFor(id).y,
   coins: 0,
   stolen: 0,
+  collectedTypes: {},
   score: 0,
   objective: defaultObjectiveForPlayer(id),
   rematch: false,
@@ -355,6 +357,7 @@ export default function Page() {
             ...p,
             coins: Math.max(p.coins || 0, prev.coins || 0),
             stolen: Math.max(p.stolen || 0, prev.stolen || 0),
+            collectedTypes: p.collectedTypes ?? prev.collectedTypes,
             objective: p.objective ?? prev.objective,
           }
         })
@@ -526,6 +529,10 @@ export default function Page() {
                   ? {
                       ...p,
                       coins: p.coins + nearbyCoins.length,
+                      collectedTypes: nearbyCoins.reduce(
+                        (counts, coin) => ({ ...counts, [coin.type]: (counts[coin.type] || 0) + 1 }),
+                        { ...(p.collectedTypes || {}) },
+                      ),
                       score: p.score + coinScore,
                     }
                   : p,
@@ -549,7 +556,7 @@ export default function Page() {
                 p.id === meId
                   ? {
                       ...p,
-                      stolen: Math.min(STEAL_TARGET, p.stolen + 1),
+                      stolen: p.stolen + 1,
                       score: p.score + 20,
                     }
                   : p,
@@ -714,6 +721,12 @@ export default function Page() {
       const by = data.by || 'opponent'
       setState((prev) => {
         if (prev.phase !== 'battle') return prev
+        const collectedTypes = prev.coins
+          .filter((coin) => ids.has(coin.id))
+          .reduce(
+            (counts, coin) => ({ ...counts, [coin.type]: (counts[coin.type] || 0) + 1 }),
+            {},
+          )
         const coins = prev.coins.map((c) =>
           ids.has(c.id) && !c.collectedBy ? { ...c, collectedBy: by } : c,
         )
@@ -721,7 +734,19 @@ export default function Page() {
           by === meRef.current
             ? prev.players
             : prev.players.map((p) =>
-                p.id === by ? { ...p, coins: p.coins + data.ids!.length } : p,
+                p.id === by
+                  ? {
+                      ...p,
+                      coins: p.coins + data.ids!.length,
+                      collectedTypes: Object.entries(collectedTypes).reduce(
+                        (counts, [type, amount]) => ({
+                          ...counts,
+                          [type]: (counts[type as keyof typeof counts] || 0) + amount,
+                        }),
+                        { ...(p.collectedTypes || {}) },
+                      ),
+                    }
+                  : p,
               )
         return { ...prev, coins, players }
       })
@@ -733,7 +758,7 @@ export default function Page() {
       setState((prev) => {
         if (prev.phase !== 'battle') return prev
         const players = prev.players.map((p) =>
-          p.id === by ? { ...p, stolen: Math.min(STEAL_TARGET, p.stolen + 1) } : p,
+          p.id === by ? { ...p, stolen: p.stolen + 1 } : p,
         )
         return { ...prev, players }
       })
@@ -908,6 +933,7 @@ export default function Page() {
     const ends = Date.now() + COUNTDOWN_MS
     lastChaosSwapAt.current = ends
     const firstEvent = nextChaosEvent()
+    const [p1Objective, p2Objective] = generateObjectivePair()
     lockDeadline('countdown', COUNTDOWN_MS)
     lockedDeadline.current = ends
     setState((prev) => ({
@@ -918,7 +944,11 @@ export default function Page() {
       chaosEvent: firstEvent,
       players: prev.players.map((p, index) => ({
         ...p,
-        objective: p.objective ?? (index === 0 ? defaultObjectiveForPlayer('p1') : defaultObjectiveForPlayer('p2')),
+        objective: index === 0 ? p1Objective : p2Objective,
+        coins: 0,
+        stolen: 0,
+        collectedTypes: {},
+        score: 0,
       })),
     }))
     setPhase('countdown')
@@ -1354,13 +1384,25 @@ function Battle({
         <small>{self ? `${progressOf(self)} / ${targetOf(objective)}` : `0 / ${targetOf(objective)}`}</small>
       </div>
       {state.chaosEvent && (
-        <div className="mission-strip" style={{ marginTop: 8, background: '#fff4cc', borderColor: '#f0b63c' }}>
+        <div
+          className="mission-strip"
+          style={{
+            marginTop: 8,
+            background: state.chaosEvent.id === 'blackout' ? '#ece7ff' : '#fff4cc',
+            borderColor: state.chaosEvent.id === 'blackout' ? '#7c6cff' : '#f0b63c',
+          }}
+        >
           <Zap /> <span>CHAOS EVENT</span>
           <strong>{state.chaosEvent.name}</strong>
           <small>{state.chaosEvent.boost}</small>
         </div>
       )}
-      <div className="arena">
+      <div
+        className="arena"
+        style={{
+          filter: state.chaosEvent?.id === 'blackout' ? 'brightness(0.72) saturate(0.8)' : 'none',
+        }}
+      >
         <div className="boundary" />
         {state.coins
           .filter((c) => !c.collectedBy)

@@ -12,6 +12,8 @@ export type Objective = {
   shortLabel: string
   target: number
   coinType?: CoinType | 'mixed'
+  requirements?: Partial<Record<CoinType, number>>
+  stealTarget?: number
 }
 
 export type ChaosEvent = {
@@ -28,6 +30,7 @@ export type Player = {
   y: number
   coins: number
   stolen: number
+  collectedTypes?: Partial<Record<CoinType, number>>
   score: number
   objective: Objective | null
   rematch: boolean

@@ -1,5 +1,5 @@
 import { defaultObjectiveForPlayer, OBJECTIVE_POOL } from './config'
-import type { Objective, Player } from './types'
+import type { CoinType, Objective, Player } from './types'
 
 /**
  * SADECE GÖRÜNTÜ yardımcıları. Skor, kazanan ve görev tamamlama kararı
@@ -32,11 +32,35 @@ export const targetOf = (o?: Objective | null) => {
   return Number(match[0]) || 0
 }
 
-export const progressOf = (p: Pick<Player, 'id' | 'objective' | 'coins' | 'stolen'>) =>
-  objectiveOf(p)?.kind === 'steal' ? p.stolen || 0 : p.coins || 0
+export const progressOf = (
+  p: Pick<Player, 'id' | 'objective' | 'coins' | 'stolen' | 'collectedTypes'>,
+) => {
+  const objective = objectiveOf(p)
+  if (objective?.requirements) {
+    const resourceProgress = Object.entries(objective.requirements).reduce(
+      (sum, [type, required]) => Math.min(p.collectedTypes?.[type as CoinType] || 0, required || 0) + sum,
+      0,
+    )
+    if (objective.kind === 'steal') return Math.min(p.stolen || 0, objective.stealTarget || 0) + resourceProgress
+    return resourceProgress
+  }
+  return objective?.kind === 'steal' ? p.stolen || 0 : p.coins || 0
+}
+
+export const objectiveSatisfied = (
+  p: Pick<Player, 'id' | 'objective' | 'coins' | 'stolen' | 'collectedTypes'>,
+) => {
+  const objective = objectiveOf(p)
+  if (!objective) return false
+  const resourcesMet = Object.entries(objective.requirements || {}).every(
+    ([type, required]) => (p.collectedTypes?.[type as CoinType] || 0) >= (required || 0),
+  )
+  const stealsMet = objective.kind !== 'steal' || (p.stolen || 0) >= (objective.stealTarget || objective.target)
+  return resourcesMet && stealsMet && (!objective.requirements || progressOf(p) >= objective.target)
+}
 
 /** Sunucunun missionDone alanı öncelikli; yoksa sadece etiket göstermek için türetilir. */
 export const missionDoneForDisplay = (p: Player) =>
-  p.missionDone ?? progressOf(p) >= (targetOf(objectiveOf(p)) || 0)
+  p.missionDone ?? objectiveSatisfied(p)
 
 export const missionLabel = (o?: Objective | null) => o?.label ?? 'Collect 3 Gold'
