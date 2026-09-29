@@ -32,8 +32,16 @@ import {
   spawnFor,
 } from '@/lib/config'
 import { clampPos, resolveMove } from '@/lib/movement'
-import { missionDoneForDisplay, missionLabel, objectiveOf, progressOf, targetOf } from '@/lib/display'
+import { missionDoneForDisplay, missionLabel, objectiveOf, objectiveSatisfied, progressOf, targetOf } from '@/lib/display'
 import type { Coin, Phase, Player, RemotePos, State } from '@/lib/types'
+
+type ProfileProgress = { xp: number; level: number; title: string }
+
+const profileForXp = (xp: number): ProfileProgress => {
+  const level = Math.max(1, Math.floor(xp / 250) + 1)
+  const title = xp >= 1500 ? 'Chaos Master' : xp >= 1000 ? 'Risk Taker' : xp >= 650 ? 'Coin Thief' : xp >= 300 ? 'Chaos Rookie' : 'Rookie'
+  return { xp, level, title }
+}
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
 const supabaseKey =
@@ -145,6 +153,7 @@ export default function Page() {
   const [notice, setNotice] = useState('')
   const [leaving, setLeaving] = useState(false)
   const [confirmLeave, setConfirmLeave] = useState(false)
+  const [profile, setProfile] = useState<ProfileProgress>({ xp: 0, level: 1, title: 'Rookie' })
   const [, setClock] = useState(0)
 
   const channelRef = useRef<RealtimeChannel | null>(null)
@@ -173,6 +182,7 @@ export default function Page() {
   const slowedUntil = useRef(0)
   const lastBumpAt = useRef(0)
   const lastMagnetAt = useRef(0)
+  const progressionAwardedRound = useRef(0)
 
   function applyChaosEffect(eventId: string | undefined, nextPlayers: Player[]) {
     if (eventId !== 'swap' || nextPlayers.length < 2) return nextPlayers
@@ -380,7 +390,7 @@ export default function Page() {
       const next: State = {
         ...raw,
         phase: nextPhase,
-        round: raw.round || stateRef.current.round,
+        round: Math.max(raw.round || 1, stateRef.current.round),
         roundScores: raw.roundScores ?? stateRef.current.roundScores,
         matchScores: raw.matchScores ?? stateRef.current.matchScores,
         countdownEndsAt,
@@ -407,6 +417,22 @@ export default function Page() {
   useEffect(() => {
     phaseRef.current = phase
   }, [phase])
+
+  useEffect(() => {
+    const saved = Number(localStorage.getItem('duo-chaos-xp') || 0)
+    setProfile(profileForXp(Number.isFinite(saved) ? saved : 0))
+  }, [])
+
+  useEffect(() => {
+    if (phase !== 'matchover' || progressionAwardedRound.current === state.round) return
+    progressionAwardedRound.current = state.round
+    const myScore = state.matchScores?.[meRef.current] || 0
+    const rivalScore = Object.entries(state.matchScores || {}).find(([id]) => id !== meRef.current)?.[1] || 0
+    const earned = 100 + Math.max(0, myScore - rivalScore > 0 ? 75 : 25)
+    const next = profileForXp(profile.xp + earned)
+    localStorage.setItem('duo-chaos-xp', String(next.xp))
+    setProfile(next)
+  }, [phase, profile.xp, state.matchScores, state.round])
 
   // Klavye + deep link
   useEffect(() => {
@@ -564,7 +590,13 @@ export default function Page() {
           if (nearbyCoins.length) {
             const collectedIds = new Set(nearbyCoins.map((c) => c.id))
             const coinScore = nearbyCoins.reduce(
-              (sum, coin) => sum + getCoinValue(coin.type, stateRef.current.chaosEvent?.id),
+              (sum, coin) =>
+                sum +
+                getCoinValue(
+                  coin.type,
+                  stateRef.current.chaosEvent?.id,
+                  stateRef.current.players.find((player) => player.id === meId)?.objective,
+                ),
               0,
             )
             setState((prev) => {
@@ -572,19 +604,24 @@ export default function Page() {
               const coins = prev.coins.map((c) =>
                 collectedIds.has(c.id) ? { ...c, collectedBy: meId } : c,
               )
-              const players = prev.players.map((p) =>
-                p.id === meId
-                  ? {
-                      ...p,
-                      coins: p.coins + nearbyCoins.length,
-                      collectedTypes: nearbyCoins.reduce(
-                        (counts, coin) => ({ ...counts, [coin.type]: (counts[coin.type] || 0) + 1 }),
-                        { ...(p.collectedTypes || {}) },
-                      ),
-                      score: p.score + coinScore,
-                    }
-                  : p,
-              )
+              const players = prev.players.map((p) => {
+                if (p.id !== meId) return p
+                const updated = {
+                  ...p,
+                  coins: p.coins + nearbyCoins.length,
+                  collectedTypes: nearbyCoins.reduce(
+                    (counts, coin) => ({ ...counts, [coin.type]: (counts[coin.type] || 0) + 1 }),
+                    { ...(p.collectedTypes || {}) },
+                  ),
+                  score: p.score + coinScore,
+                }
+                const missionBonus = !p.missionDone && objectiveSatisfied(updated) ? 75 : 0
+                return {
+                  ...updated,
+                  missionDone: missionBonus > 0 ? true : updated.missionDone,
+                  score: updated.score + missionBonus,
+                }
+              })
               return { ...prev, coins, players }
             })
             channelRef.current?.send({
@@ -1219,6 +1256,8 @@ export default function Page() {
         <Results
           state={state}
           me={me}
+          profile={profile}
+          isHost={me === 'p1'}
           onNextRound={() => void startNextRound()}
           onRematch={rematch}
           onLeave={() => setConfirmLeave(true)}
@@ -1635,12 +1674,16 @@ function Battle({
 function Results({
   state,
   me,
+  profile,
+  isHost,
   onNextRound,
   onRematch,
   onLeave,
 }: {
   state: State
   me: string
+  profile: ProfileProgress
+  isHost: boolean
   onNextRound: () => void
   onRematch: () => void
   onLeave: () => void
@@ -1697,9 +1740,12 @@ function Results({
           </div>
         ))}
       </div>
+      <div className="progression-callout">
+        <Sparkles /> <strong>{profile.title}</strong><span>LEVEL {profile.level} · {profile.xp} XP</span>
+      </div>
       {!isFinal && (
-        <button className="primary wide" onClick={onNextRound}>
-          NEXT ROUND <Zap />
+        <button className="primary wide" onClick={onNextRound} disabled={!isHost}>
+          {isHost ? 'NEXT ROUND' : 'WAITING FOR HOST'} <Zap />
         </button>
       )}
       {isFinal && (

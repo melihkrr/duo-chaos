@@ -56,7 +56,7 @@ export const objectiveSatisfied = (
     ([type, required]) => (p.collectedTypes?.[type as CoinType] || 0) >= (required || 0),
   )
   const stealsMet = objective.kind !== 'steal' || (p.stolen || 0) >= (objective.stealTarget || objective.target)
-  return resourcesMet && stealsMet && (!objective.requirements || progressOf(p) >= objective.target)
+  return resourcesMet && stealsMet && progressOf(p) >= objective.target
 }
 
 /** Sunucunun missionDone alanı öncelikli; yoksa sadece etiket göstermek için türetilir. */

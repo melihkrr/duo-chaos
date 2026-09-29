@@ -77,10 +77,11 @@ export const nextChaosEvent = (at = Date.now()): ChaosEvent => {
   return event ?? CHAOS_EVENTS[0]
 }
 
-export const getCoinValue = (type: CoinType, chaosEvent?: string) => {
-  const base = { gold: 16, blue: 12, red: 14, emerald: 22, diamond: 50 }[type] ?? 10
-  if (chaosEvent === 'gold-rush' && type === 'gold') return base * 3
-  if (chaosEvent === 'jackpot' && type === 'emerald') return base + 18
+export const getCoinValue = (type: CoinType, chaosEvent?: string, objective?: Objective | null) => {
+  if (type === 'diamond') return 50
+  const isTarget = objective?.requirements?.[type] || objective?.coinType === type
+  const base = type === 'emerald' ? 25 : isTarget ? 15 : 5
+  if (chaosEvent === 'gold-rush' && type === 'gold') return base + 25
   return base
 }
 

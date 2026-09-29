@@ -68,6 +68,9 @@ h1 em { color: var(--pink); font-style: normal; -webkit-text-stroke: 2px var(--i
 }
 .dash-button kbd { width: auto; height: 20px; padding: 0 5px; font-size: 8px; }
 .dash-button:disabled { opacity: .4; }
+.progression-callout { display: inline-flex; align-items: center; gap: 8px; margin: 0 auto 18px; padding: 9px 12px; border: 1px solid #dcd6d0; border-radius: 10px; background: #fff; color: var(--purple); font-size: 10px; font-weight: 900; letter-spacing: .08em; }
+.progression-callout svg { width: 14px; height: 14px; }
+.progression-callout span { color: var(--muted); font-size: 9px; }
 
 .mission-strip {
   display: flex;
