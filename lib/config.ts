@@ -67,6 +67,13 @@ export const nextChaosEvent = (): ChaosEvent => {
   return event ?? CHAOS_EVENTS[0]
 }
 
+export const getCoinValue = (type: CoinType, chaosEvent?: string) => {
+  const base = { gold: 16, blue: 12, red: 14, emerald: 22 }[type] ?? 10
+  if (chaosEvent === 'gold-rush' && type === 'gold') return base * 2
+  if (chaosEvent === 'jackpot' && type === 'emerald') return base + 18
+  return base
+}
+
 // --- Coin ---
 export const COIN_COUNT = 14
 

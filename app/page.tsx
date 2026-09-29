@@ -12,6 +12,7 @@ import {
   HEARTBEAT_MS,
   MOVE_SEND_MS,
   MOVE_SPEED,
+  getCoinValue,
   nextChaosEvent,
   PHASE_TICK_MS,
   POLL_MS,
@@ -156,6 +157,16 @@ export default function Page() {
   const advancedForDeadline = useRef(0)
   const lastBroadcastPos = useRef({ x: 0, y: 0 })
   const lastChaosSwapAt = useRef(0)
+
+  function applyChaosEffect(eventId: string | undefined, nextPlayers: Player[]) {
+    if (eventId !== 'swap' || nextPlayers.length < 2) return nextPlayers
+    const [first, second] = nextPlayers
+    if (!first || !second) return nextPlayers
+    return nextPlayers.map((player, index) => ({
+      ...player,
+      objective: index === 0 ? second.objective ?? player.objective : first.objective ?? player.objective,
+    }))
+  }
 
   function getToken() {
     const storageKey = `duo-chaos-token:${codeRef.current}`
@@ -432,7 +443,14 @@ export default function Page() {
 
       if (now - lastChaosSwapAt.current >= 15_000) {
         lastChaosSwapAt.current = now
-        setState((prev) => ({ ...prev, chaosEvent: nextChaosEvent() }))
+        setState((prev) => {
+          const nextEvent = nextChaosEvent()
+          const players =
+            nextEvent.id === 'swap'
+              ? applyChaosEffect(nextEvent.id, prev.players.map((p) => ({ ...p })))
+              : prev.players
+          return { ...prev, chaosEvent: nextEvent, players }
+        })
       }
 
       const pressedUp = keys.current.has('w') || keys.current.has('arrowup')
@@ -494,13 +512,23 @@ export default function Page() {
 
           if (nearbyCoins.length) {
             const collectedIds = new Set(nearbyCoins.map((c) => c.id))
+            const coinScore = nearbyCoins.reduce(
+              (sum, coin) => sum + getCoinValue(coin.type, stateRef.current.chaosEvent?.id),
+              0,
+            )
             setState((prev) => {
               if (prev.phase !== 'battle') return prev
               const coins = prev.coins.map((c) =>
                 collectedIds.has(c.id) ? { ...c, collectedBy: meId } : c,
               )
               const players = prev.players.map((p) =>
-                p.id === meId ? { ...p, coins: p.coins + nearbyCoins.length } : p,
+                p.id === meId
+                  ? {
+                      ...p,
+                      coins: p.coins + nearbyCoins.length,
+                      score: p.score + coinScore,
+                    }
+                  : p,
               )
               return { ...prev, coins, players }
             })
@@ -518,7 +546,13 @@ export default function Page() {
             setState((prev) => {
               if (prev.phase !== 'battle') return prev
               const players = prev.players.map((p) =>
-                p.id === meId ? { ...p, stolen: Math.min(STEAL_TARGET, p.stolen + 1) } : p,
+                p.id === meId
+                  ? {
+                      ...p,
+                      stolen: Math.min(STEAL_TARGET, p.stolen + 1),
+                      score: p.score + 20,
+                    }
+                  : p,
               )
               return { ...prev, players }
             })
@@ -873,6 +907,7 @@ export default function Page() {
 
     const ends = Date.now() + COUNTDOWN_MS
     lastChaosSwapAt.current = ends
+    const firstEvent = nextChaosEvent()
     lockDeadline('countdown', COUNTDOWN_MS)
     lockedDeadline.current = ends
     setState((prev) => ({
@@ -880,7 +915,11 @@ export default function Page() {
       phase: 'countdown',
       countdownEndsAt: ends,
       endsAt: ends + BATTLE_MS,
-      chaosEvent: nextChaosEvent(),
+      chaosEvent: firstEvent,
+      players: prev.players.map((p, index) => ({
+        ...p,
+        objective: p.objective ?? (index === 0 ? defaultObjectiveForPlayer('p1') : defaultObjectiveForPlayer('p2')),
+      })),
     }))
     setPhase('countdown')
     phaseRef.current = 'countdown'
