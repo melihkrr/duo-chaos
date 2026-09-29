@@ -11,8 +11,6 @@ import {
   CLOCK_TICK_MS,
   COLLECT_RADIUS,
   COUNTDOWN_MS,
-  DASH_COOLDOWN_MS,
-  DASH_DISTANCE,
   HEARTBEAT_MS,
   MATCH_ROUNDS,
   MOVE_SEND_MS,
@@ -81,6 +79,13 @@ function mapPlayerId(rawId: string, meId: string): string {
   }
   if (rawId === 'p1' || rawId === 'p2') return rawId
   return meId === 'p1' ? 'p2' : 'p1'
+}
+
+function formatTime(seconds: number) {
+  const safeSeconds = Math.max(0, Math.floor(seconds))
+  const minutes = Math.floor(safeSeconds / 60)
+  const remainder = safeSeconds % 60
+  return `${minutes}:${String(remainder).padStart(2, '0')}`
 }
 
 const blankPlayer = (id: 'p1' | 'p2'): Player => ({
@@ -177,8 +182,6 @@ export default function Page() {
   const advancedForDeadline = useRef(0)
   const lastBroadcastPos = useRef({ x: 0, y: 0 })
   const lastChaosSwapAt = useRef(0)
-  const dashAvailableAt = useRef(0)
-  const dashRequested = useRef(false)
   const slowedUntil = useRef(0)
   const lastBumpAt = useRef(0)
   const lastMagnetAt = useRef(0)
@@ -381,6 +384,7 @@ export default function Page() {
             ...p,
             coins: Math.max(p.coins || 0, prev.coins || 0),
             stolen: Math.max(p.stolen || 0, prev.stolen || 0),
+            score: Math.max(p.score || 0, prev.score || 0),
             collectedTypes: p.collectedTypes ?? prev.collectedTypes,
             objective: p.objective ?? prev.objective,
           }
@@ -446,10 +450,9 @@ export default function Page() {
 
     const down = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase()
-      if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(key)) {
+      if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key)) {
         e.preventDefault()
-        if (key === ' ') dashRequested.current = true
-        else keys.current.add(key)
+        keys.current.add(key)
       }
     }
     const up = (e: KeyboardEvent) => keys.current.delete(e.key.toLowerCase())
@@ -531,24 +534,12 @@ export default function Page() {
         const length = Math.hypot(dx, dy) || 1
         const step = MOVE_SPEED * dt * (now < slowedUntil.current ? BUMP_SPEED_MULTIPLIER : 1)
         const from = localPosition.current
-        let { x, y } = resolveMove(
+        const { x, y } = resolveMove(
           from.x,
           from.y,
           from.x + (dx / length) * step,
           from.y + (dy / length) * step,
         )
-        if (dashRequested.current && now >= dashAvailableAt.current) {
-          dashRequested.current = false
-          dashAvailableAt.current = now + DASH_COOLDOWN_MS
-          const dashed = resolveMove(
-            x,
-            y,
-            x + (dx / length) * DASH_DISTANCE,
-            y + (dy / length) * DASH_DISTANCE,
-          )
-          x = dashed.x
-          y = dashed.y
-        }
         localPosition.current = { x, y }
 
         setState((prev) => {
@@ -1242,10 +1233,6 @@ export default function Page() {
           remaining={displayRemaining}
           countdown={displayCountdown}
           phase={phase}
-          dashReady={dashAvailableAt.current <= now}
-          onDash={() => {
-            dashRequested.current = true
-          }}
           onMoveInput={(x, y) => {
             moveInput.current = { x, y }
           }}
@@ -1518,8 +1505,6 @@ function Battle({
   remaining,
   countdown,
   phase,
-  dashReady,
-  onDash,
   onMoveInput,
 }: {
   state: State
@@ -1528,8 +1513,6 @@ function Battle({
   remaining: number
   countdown: number
   phase: Phase
-  dashReady: boolean
-  onDash: () => void
   onMoveInput: (x: number, y: number) => void
 }) {
   const objective = objectiveOf(self)
@@ -1543,7 +1526,7 @@ function Battle({
           YOU <b>{self?.score || 0}</b>
         </div>
         <div className={`timer ${!isCountdown && remaining < 10 ? 'urgent' : ''}`}>
-          {isCountdown ? countdown : `0:${String(remaining).padStart(2, '0')}`}
+          {isCountdown ? countdown : formatTime(remaining)}
         </div>
         <div className="score right">
           <b>{opponent?.score || 0}</b> THEM <span className="dot green-bg" />
@@ -1551,7 +1534,7 @@ function Battle({
       </div>
       <div className="mission-strip">
         <span className="mission-label"><LockKeyhole /> SECRET MISSION</span>
-        <strong>{objective?.shortLabel || missionLabel(objective)}</strong>
+        <strong>{missionLabel(objective)}</strong>
         <small>{self ? `${progressOf(self)} / ${targetOf(objective)}` : `0 / ${targetOf(objective)}`}</small>
       </div>
       {state.chaosEvent && (
@@ -1661,11 +1644,6 @@ function Battle({
         <span className="touch-hint">
           {isCountdown ? 'get ready…' : 'joystick (mobile) or WASD'}
         </span>
-        {!isCountdown && (
-          <button className="dash-button" onClick={onDash} disabled={!dashReady}>
-            DASH <kbd>SPACE</kbd>
-          </button>
-        )}
       </div>
     </section>
   )
