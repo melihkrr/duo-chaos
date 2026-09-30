@@ -1,4 +1,4 @@
-import type { ChaosEvent, Coin, CoinType, Objective } from './types'
+import type { ChaosEvent, Coin, CoinType, EmoteId, Objective, TrailId } from './types'
 
 // --- Süreler ---
 export const BATTLE_MS = 90_000
@@ -120,3 +120,64 @@ export const spawnResourceWave = (round: number, wave: number): Coin[] => {
 }
 
 export const spawnFor = (id: string) => (id === 'p2' ? SPAWN.p2 : SPAWN.p1)
+
+// --- Guess / Read (scout) mekaniği ---
+/** Maç başına tarama hakkı. */
+export const SCOUT_CHARGES = 2
+/** İki tarama arasındaki bekleme süresi. */
+export const SCOUT_COOLDOWN_MS = 8_000
+/** İpucunun ekranda kalma süresi. */
+export const SCOUT_HINT_TTL_MS = 12_000
+/** İpucu gösterilirken rakibin görevinin kaçta kaçı açığa çıkar (0-1). */
+export const SCOUT_REVEAL_RATIO = 0.5
+
+// --- Kozmetikler ---
+export const EMOTES: Array<{ id: EmoteId; label: string; glyph: string; minLevel: number }> = [
+  { id: 'wave', label: 'Wave', glyph: '👋', minLevel: 1 },
+  { id: 'taunt', label: 'Taunt', glyph: '😜', minLevel: 2 },
+  { id: 'shock', label: 'Shock', glyph: '😱', minLevel: 3 },
+  { id: 'gg', label: 'Good Game', glyph: '🤝', minLevel: 4 },
+  { id: 'fire', label: 'On Fire', glyph: '🔥', minLevel: 5 },
+]
+
+export const TRAILS: Array<{ id: TrailId; label: string; color: string; minLevel: number }> = [
+  { id: 'none', label: 'None', color: 'transparent', minLevel: 1 },
+  { id: 'spark', label: 'Spark', color: '#facc15', minLevel: 1 },
+  { id: 'frost', label: 'Frost', color: '#67e8f9', minLevel: 2 },
+  { id: 'ember', label: 'Ember', color: '#fb7185', minLevel: 3 },
+  { id: 'shadow', label: 'Shadow', color: '#a78bfa', minLevel: 4 },
+]
+
+export const emoteById = (id?: EmoteId | null) => EMOTES.find((item) => item.id === id) ?? null
+export const trailById = (id?: TrailId | null) => TRAILS.find((item) => item.id === id) ?? TRAILS[0]
+
+// --- İlerleme (XP) ---
+export const XP_PER_WIN = 120
+export const XP_PER_MATCH = 40
+export const XP_PER_ROUND = 25
+export const XP_PER_MISSION = 60
+
+export type ProfileProgress = { xp: number; level: number; title: string; nextAt: number; progress: number }
+
+const TITLES = [
+  'Rookie',
+  'Scout',
+  'Raider',
+  'Tactician',
+  'Veteran',
+  'Champion',
+  'Legend',
+  'Chaos Master',
+]
+
+/** XP'den seviye/ünvan türetir. Sunucu ile aynı eğriyi kullanır. */
+export const profileForXp = (xp: number): ProfileProgress => {
+  const safeXp = Math.max(0, Math.floor(xp || 0))
+  const level = Math.max(1, Math.floor(Math.sqrt(safeXp / 100)) + 1)
+  const floorXp = (level - 1) ** 2 * 100
+  const nextAt = level ** 2 * 100
+  const span = Math.max(1, nextAt - floorXp)
+  const progress = Math.min(1, Math.max(0, (safeXp - floorXp) / span))
+  const title = TITLES[Math.min(TITLES.length - 1, level - 1)] ?? TITLES[0]
+  return { xp: safeXp, level, title, nextAt, progress }
+}

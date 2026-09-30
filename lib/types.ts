@@ -5,6 +5,24 @@ export type ChaosEventType = 'gold-rush' | 'blackout' | 'magnet' | 'swap' | 'jac
 
 export type ObjectiveKind = 'collect' | 'steal'
 
+/** Oyuncunun seçebileceği emote (kısa tepki animasyonu). */
+export type EmoteId = 'wave' | 'taunt' | 'shock' | 'gg' | 'fire'
+
+/** Oyuncunun arkasında bıraktığı iz efekti. */
+export type TrailId = 'none' | 'spark' | 'frost' | 'ember' | 'shadow'
+
+/** Sunucudan gelen kısmi ipucu (Guess/Read mekaniği). */
+export type ScoutHint = {
+  /** Rakibin görevinin türü: toplama mı, çalma mı. */
+  kind: ObjectiveKind
+  /** Rakibin hedeflediği ana coin türü (varsa). */
+  coinType?: CoinType | 'mixed'
+  /** Rakibin görev hedefi (kaç adet). */
+  target: number
+  /** İpucunun üretildiği zaman (ms). */
+  at: number
+}
+
 export type Objective = {
   id: string
   kind: ObjectiveKind
@@ -40,6 +58,20 @@ export type Player = {
   rematch: boolean
   /** Sunucu doldurur. Gelmezse display.ts sadece görüntü için hedefe göre türetir. */
   missionDone?: boolean
+  /** Guess/Read: kalan tarama hakkı. Sunucu otoritesi. */
+  scoutCharges?: number
+  /** Guess/Read: son taramanın üretildiği zaman (cooldown için). */
+  scoutUsedAt?: number
+  /** Guess/Read: rakibin görevi hakkında elde edilen kısmi ipucu. */
+  revealedHint?: ScoutHint | null
+  /** Aktif emote ve bitiş zamanı (cosmetic). */
+  emote?: EmoteId | null
+  emoteUntil?: number
+  /** Seçili iz efekti (cosmetic). */
+  trail?: TrailId
+  /** Sunucudan gelen seviye/ünvan (progression). */
+  level?: number
+  title?: string
 }
 
 export type Coin = { id: number; x: number; y: number; type: CoinType; collectedBy?: string }
@@ -57,6 +89,24 @@ export type State = {
   chaosEventEndsAt?: number
   /** Sadece sunucudan gelir. Client asla hesaplamaz. */
   winner?: string
+  /** Sunucu tarafından üretilen bir sonraki chaos olayının zamanı. */
+  nextChaosAt?: number
+  /** Sunucu tarafından üretilen bir sonraki kaynak dalgasının zamanı. */
+  nextWaveAt?: number
+  /** Sunucu bağlantı durumu (UI göstergesi için). */
+  connection?: 'idle' | 'connecting' | 'live' | 'error'
 }
 
 export type RemotePos = { x: number; y: number; at: number }
+
+/** Sunucudan gelen oyuncu ilerlemesi (XP / seviye / kozmetik). */
+export type Progress = {
+  clientId: string
+  xp: number
+  level: number
+  title: string
+  emote: EmoteId
+  trail: TrailId
+  wins: number
+  matches: number
+}
