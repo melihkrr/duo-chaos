@@ -368,10 +368,17 @@ export const useDuoChaos = () => {
           // Sunucudan gelen adı koru; boşsa mevcut adı bırak.
           const serverName = typeof server.name === 'string' && server.name.trim() ? server.name : player.name
           const merged = { ...player, ...server, id: player.id, name: serverName } as Player
-          // KONUM OTORİTESİ: yerel oyuncunun (p1) x/y'si HER ZAMAN client'a
+          // OYUN İLERLEMESİ OTORİTESİ (p1): `duo_tick` artık çağrılmadığı için
+          // sunucu coin/görev ilerlemesini GÜNCELLEMEZ. Sunucu snapshot'ındaki
+          // `objectivesDone`, `collectedTypes`, `coins`, `stolen`, `missionDone`,
+          // `objective`, `score` alanları her zaman 0/boş gelir. Bunları
+          // uygularsak her yoklamada (1 sn) oyuncunun ilerlemesi SIFIRLANIR:
+          // "görevi tamamladım ama sayaç artmadı, yeni görev gelmedi" hatası
+          // tam olarak buydu. Bu yüzden p1 için bu alanları client'tan koruruz.
+          //
+          // KONUM OTORİTESİ: yerel oyuncunun (p1) x/y'si de HER ZAMAN client'a
           // aittir. Sunucu snapshot'ı gecikmeli gelir; onu uygularsak oyuncu
-          // her yoklamada geriye zıplar ("donma + birden ilerleme"). Bu yüzden
-          // p1 için sunucudan gelen x/y'yi yok sayarız.
+          // her yoklamada geriye zıplar ("donma + birden ilerleme").
           //
           // `slowedUntil` de client'a aittir: sunucu bunu KENDİ saatiyle
           // damgalar; saat farkı yüzünden yanlış yorumlanıp oyuncuyu kalıcı
@@ -380,6 +387,14 @@ export const useDuoChaos = () => {
             merged.x = player.x
             merged.y = player.y
             merged.slowedUntil = player.slowedUntil
+            merged.coins = player.coins
+            merged.stolen = player.stolen
+            merged.collectedTypes = player.collectedTypes
+            merged.objectivesDone = player.objectivesDone
+            merged.missionDone = player.missionDone
+            merged.objective = player.objective
+            merged.score = player.score
+            merged.roundScore = player.roundScore
           }
           // Rakip (p2) konumu: taze bir `move` broadcast'i varsa sunucunun
           // gecikmeli x/y'si ile ezme; broadcast yoksa sunucu değeri otoritedir

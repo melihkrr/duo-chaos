@@ -371,7 +371,12 @@ export const useGameLoop = (deps: LoopDeps) => {
           // oyuncunun topladığı puan silinir ("görev tamamlanınca 1 skor
           // kazanıyor" şikâyeti tam olarak buydu). Görev tamamlama yalnızca
           // `objectivesDone` sayacını ve bir bonusu ekler.
-          if (objectiveSatisfied(next)) {
+          // ÖNEMLİ: `!next.missionDone` guard'ı şart. Görev tamamlandıktan
+          // sonra `collectedTypes` yeni görev verilene kadar hedefi KARŞILAMAYA
+          // DEVAM EDER; guard olmadan bu dal her karede tekrar tetiklenir,
+          // `objectivesDone` sonsuz artar ve `else if` (yeni görev atama) dalı
+          // HİÇ çalışmaz → "sayaç artmadı / yeni görev gelmedi" hatası.
+          if (!next.missionDone && objectiveSatisfied(next)) {
             changed = true
             const done = (next.objectivesDone ?? 0) + 1
             // Tamamlanma anını işaretle; yeni görev `holdUntil` sonrası gelir.

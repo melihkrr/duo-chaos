@@ -96,6 +96,13 @@ export function Battle({
   const rivalProgress = rival ? progressOf(rival) : 0
   const myTrail = trailById(me?.trail)
 
+  // Geri sayım: `countdown` fazında kalan süreyi 3-2-1 olarak gösteririz.
+  // `countdownEndsAt` sunucu saatinden yerel saate çevrilmiş bir deadline'dır.
+  const countdownLeft = state.countdownEndsAt - now
+  const countdownStep = Math.ceil(countdownLeft / 1000)
+  const showCountdown =
+    state.phase === 'countdown' && countdownLeft > 0 && countdownStep >= 1 && countdownStep <= 3
+
   return (
     <section className="battle-wrap">
       <header className="hud">
@@ -138,6 +145,15 @@ export function Battle({
       <ChaosBanner chaos={chaos} />
 
       <div className="arena">
+        {showCountdown && (
+          <div className="countdown-overlay" role="status" aria-live="polite">
+            <span key={countdownStep} className="countdown-num">
+              {countdownStep}
+            </span>
+            <span className="countdown-hint">Get ready!</span>
+          </div>
+        )}
+
         {OBSTACLES.map((obstacle, index) => (
           <div
             key={index}
