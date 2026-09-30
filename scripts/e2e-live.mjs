@@ -225,6 +225,24 @@ const run = async () => {
     const avatarAfter = await host.locator('.avatar.me').getAttribute('style')
     check('host avatar moves with keyboard', avatarBefore !== avatarAfter, `${avatarBefore} -> ${avatarAfter}`)
 
+    // Both in-arena characters must be VISIBLE and identifiable: each avatar
+    // renders a face glyph (🐰 for you, 🐻 for the rival) plus a name label.
+    // This is what makes "players see each other's characters" work.
+    const meFace = await host.locator('.avatar.me .avatar-face').textContent().catch(() => '')
+    const rivalFace = await host.locator('.avatar.rival .avatar-face').textContent().catch(() => '')
+    const meName = await host.locator('.avatar.me .avatar-name').textContent().catch(() => '')
+    const rivalName = await host.locator('.avatar.rival .avatar-name').textContent().catch(() => '')
+    check('host in-arena character shows a face', (meFace ?? '').trim().length > 0, `got "${meFace}"`)
+    check('rival in-arena character shows a face', (rivalFace ?? '').trim().length > 0, `got "${rivalFace}"`)
+    check('host in-arena character shows a name', (meName ?? '').trim().length > 0, `got "${meName}"`)
+    check('rival in-arena character shows a name', (rivalName ?? '').includes('Ayse'), `got "${rivalName}"`)
+
+    // The guest must ALSO see the host's character (the rival from its view).
+    const guestRivalFace = await guest.locator('.avatar.rival .avatar-face').textContent().catch(() => '')
+    const guestRivalName = await guest.locator('.avatar.rival .avatar-name').textContent().catch(() => '')
+    check('guest sees rival character face', (guestRivalFace ?? '').trim().length > 0, `got "${guestRivalFace}"`)
+    check('guest sees rival character name (Melih)', (guestRivalName ?? '').includes('Melih'), `got "${guestRivalName}"`)
+
     // Coins should be rendered in the arena.
     const coinCount = await host.locator('.arena .coin').count()
     check('coins rendered in arena', coinCount > 0, `got ${coinCount}`)

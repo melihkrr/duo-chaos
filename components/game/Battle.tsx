@@ -123,7 +123,12 @@ export function Battle({
               {trail.id !== 'none' && (
                 <span className="avatar-trail" style={{ background: trail.color }} aria-hidden />
               )}
-              <span className="avatar-body" />
+              <span className="avatar-body">
+                <span className="avatar-face" aria-hidden>
+                  {isMe ? '🐰' : '🐻'}
+                </span>
+              </span>
+              <span className="avatar-name">{isMe ? 'You' : player.name}</span>
               {player.emote && <span className="avatar-emote">{player.emote}</span>}
             </div>
           )

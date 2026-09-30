@@ -857,6 +857,9 @@ h3 {
   border: 3px solid var(--ink);
   border-radius: 50% 50% 46% 46%;
   box-shadow: 0 4px 0 rgba(43, 36, 64, 0.22);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
 }
 
 .avatar.me .avatar-body {
@@ -865,6 +868,46 @@ h3 {
 
 .avatar.rival .avatar-body {
   background: linear-gradient(150deg, var(--mint), #8ce8d6);
+}
+
+/* Karakter yüzü — oyuncunun arenadaki kimliği (HUD/lobi ile aynı). */
+.avatar-face {
+  font-size: 20px;
+  line-height: 1;
+  transform: translateY(1px);
+  filter: drop-shadow(0 1px 0 rgba(43, 36, 64, 0.25));
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Arenadaki karakterin altındaki isim etiketi. */
+.avatar-name {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 96px;
+  padding: 1px 7px;
+  border: 2px solid var(--ink);
+  border-radius: var(--r-pill);
+  background: var(--card);
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 2px 0 rgba(43, 36, 64, 0.18);
+  pointer-events: none;
+}
+
+.avatar.me .avatar-name {
+  background: var(--pink-soft);
+}
+
+.avatar.rival .avatar-name {
+  background: var(--mint-soft);
 }
 
 .avatar.slowed {
@@ -1460,6 +1503,16 @@ h3 {
   .avatar-body {
     width: 28px;
     height: 28px;
+  }
+
+  .avatar-face {
+    font-size: 17px;
+  }
+
+  .avatar-name {
+    max-width: 78px;
+    font-size: 9px;
+    padding: 1px 6px;
   }
 
   .score-row {
