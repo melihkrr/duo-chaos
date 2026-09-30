@@ -9,7 +9,9 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "check": "pnpm run typecheck && pnpm run lint"
+    "check": "pnpm run typecheck && pnpm run lint",
+    "db:reset": "node scripts/reset-and-migrate.mjs",
+    "db:apply": "node scripts/apply-migration.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.2",
@@ -26,10 +28,12 @@
     "@eslint/eslintrc": "^3.3.7",
     "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^24",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9.18.0",
     "eslint-config-next": "^16.3.3",
+    "pg": "^8.23.0",
     "postcss": "^8.5",
     "tailwindcss": "^4.3.3",
     "typescript": "5.7.3"

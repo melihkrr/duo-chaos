@@ -6,18 +6,55 @@ are applied in filename order.
 
 ## Apply the migrations
 
-Using the Supabase CLI:
+### Option A — automated (no CLI login required)
+
+The repo ships two Node scripts that connect straight to the project's
+Postgres instance using the database password. They are handy when the
+Supabase CLI is not authenticated or Docker is unavailable.
+
+```bash
+# Apply a single migration file (idempotent, wraps in a transaction).
+set SUPABASE_DB_PASSWORD=<db-password>
+pnpm db:apply supabase/migrations/0009_player_names.sql
+
+# Rebuild the whole schema from scratch: drops every duo_* object and
+# replays migrations/0001..0009 in order. Use this when the live project
+# was created from an older generation of SQL.
+set SUPABASE_DB_PASSWORD=<db-password>
+pnpm db:reset
+```
+
+Both scripts send `notify pgrst, 'reload schema'` when they finish.
+
+Environment variables (all optional except the password):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SUPABASE_DB_PASSWORD` | — | **Required.** Database password |
+| `SUPABASE_PROJECT_REF` | `fanrtyidfhdhlaskwrid` | Project ref |
+| `SUPABASE_DB_HOST` | `aws-0-us-east-1.pooler.supabase.com` | Override host |
+| `SUPABASE_DB_PORT` | `5432` | Override port |
+| `SUPABASE_DB_USER` | `postgres.<ref>` | Override user |
+
+### Option B — Supabase CLI
 
 ```bash
 supabase link --project-ref <your-project-ref>
 supabase db push
 ```
 
-Or paste each file into the Supabase SQL editor in order (`0001` → `0008`).
+### Option C — SQL editor
+
+Paste each file into the Supabase SQL editor in order (`0001` → `0009`).
 
 > **Important:** the migrations must actually be applied to the project the
 > client points at. If they are not, every RPC call fails with
 > `Could not find the function public.duo_* in the schema cache`.
+>
+> If the live tables have **different columns** than `0001_schema.sql`
+> (e.g. `display_name` instead of `name`, or `status` instead of `phase`),
+> the project was provisioned from an older SQL generation — run `pnpm db:reset`
+> to rebuild it cleanly.
 
 ### Troubleshooting: "Could not find the function … in the schema cache"
 
@@ -33,6 +70,7 @@ must match the SQL parameter names exactly. The client always sends:
 | `p_client_id` | `p_client_id` |
 | `p_xp` | `p_xp` |
 | `p_emote`, `p_trail` | `p_emote`, `p_trail` |
+| `p_name` | `p_name` |
 
 If you see an error naming a parameter that is **not** in the table above
 (e.g. `duo_create_room(p_code, p_player)`), either:
@@ -65,11 +103,12 @@ The client reads these variables (see [`.env.example`](../.env.example)):
 ### Room lifecycle
 | RPC | Args | Purpose |
 |---|---|---|
-| `duo_create_room` | `p_code, p_token` | Host creates a room (slot 1) |
-| `duo_join_room` | `p_code, p_token` | Join as slot 2 (idempotent reconnect) |
+| `duo_create_room` | `p_code, p_token, p_name` | Host creates a room (slot 1) with a display name |
+| `duo_join_room` | `p_code, p_token, p_name` | Join as slot 2 (idempotent reconnect) with a display name |
+| `duo_set_name` | `p_code, p_token, p_name` | Change the caller's display name while in a room |
 | `duo_leave` | `p_code, p_token` | Leave; deletes the room when empty |
 | `duo_rematch` | `p_code, p_token` | Flag ready; resets to lobby when both ready |
-| `duo_public_state` | `p_code, p_token` | Authoritative snapshot (objectives redacted) |
+| `duo_public_state` | `p_code, p_token` | Authoritative snapshot (objectives redacted, both names exposed) |
 
 ### Gameplay
 | RPC | Args | Purpose |
@@ -103,6 +142,10 @@ The client reads these variables (see [`.env.example`](../.env.example)):
 - **Objective secrecy** is enforced in `duo_public_state`: the opponent's
   objective is `null` unless the caller has scouted (`revealed_hint` set).
 - **Coin waves** and the **magnet drift** are applied server-side in `duo_tick`.
+- **Display names** are stored on the player row (`duo_players.name`, capped at
+  16 chars) and exposed for both players in `duo_public_state`. Clients also
+  broadcast a `name` realtime event for instant updates, but the snapshot is the
+  source of truth.
 
 ## Housekeeping
 
