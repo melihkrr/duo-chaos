@@ -1,7 +1,14 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { BATTLE_MS, COUNTDOWN_MS, MATCH_ROUNDS, POLL_MS, REMOTE_POS_TTL } from './config'
+import {
+  BATTLE_MS,
+  COIN_RESPAWN_MS,
+  COUNTDOWN_MS,
+  MATCH_ROUNDS,
+  POLL_MS,
+  REMOTE_POS_TTL,
+} from './config'
 import { playSound, unlockAudio } from './sound'
 import { useChaos } from './useChaos'
 import { useCosmetics } from './useCosmetics'
@@ -259,9 +266,15 @@ export const useDuoChaos = () => {
       const data = payload as { ids?: number[]; by?: string }
       if (!data || data.by === room.playerId || !data.ids) return
       const ids = new Set(data.ids)
+      // Rakip topladığında da coin AYNI konumda, 3 sn sonra yeniden doğar.
+      // `respawnAt` yazmazsak coin sonsuza dek toplanmış kalır ve bir daha
+      // görünmez; bu da "coin kayboldu" hissi verir.
+      const respawnAt = Date.now() + COIN_RESPAWN_MS
       setState((prev) => ({
         ...prev,
-        coins: prev.coins.map((coin) => (ids.has(coin.id) ? { ...coin, collectedBy: 'p2' } : coin)),
+        coins: prev.coins.map((coin) =>
+          ids.has(coin.id) ? { ...coin, collectedBy: 'p2', respawnAt } : coin,
+        ),
         players: prev.players.map((player, index) =>
           index === 1 ? { ...player, coins: player.coins + ids.size } : player,
         ),
@@ -351,10 +364,22 @@ export const useDuoChaos = () => {
           // Sunucudan gelen adı koru; boşsa mevcut adı bırak.
           const serverName = typeof server.name === 'string' && server.name.trim() ? server.name : player.name
           const merged = { ...player, ...server, id: player.id, name: serverName } as Player
-          // Rakip pozisyonu: yakın zamanda bir `move` broadcast'i geldiyse
-          // sunucunun (gecikmeli) x/y'si ile ezme — aksi halde rakip her
-          // yoklamada geriye zıplar. Broadcast taze değilse sunucu değeri
-          // otoritedir (yeniden bağlanma / ışınlanma).
+          // KONUM OTORİTESİ: yerel oyuncunun (p1) x/y'si HER ZAMAN client'a
+          // aittir. Sunucu snapshot'ı gecikmeli gelir; onu uygularsak oyuncu
+          // her yoklamada geriye zıplar ("donma + birden ilerleme"). Bu yüzden
+          // p1 için sunucudan gelen x/y'yi yok sayarız.
+          //
+          // `slowedUntil` de client'a aittir: sunucu bunu KENDİ saatiyle
+          // damgalar; saat farkı yüzünden yanlış yorumlanıp oyuncuyu kalıcı
+          // yavaşlatabilir. Yavaşlama zaten yerel olarak (steal anında) kurulur.
+          if (player.id === 'p1') {
+            merged.x = player.x
+            merged.y = player.y
+            merged.slowedUntil = player.slowedUntil
+          }
+          // Rakip (p2) konumu: taze bir `move` broadcast'i varsa sunucunun
+          // gecikmeli x/y'si ile ezme; broadcast yoksa sunucu değeri otoritedir
+          // (yeniden bağlanma / ışınlanma).
           if (player.id === 'p2') {
             const remote = remotePos.current.get('rival') ?? remotePos.current.get('p2')
             if (remote && Date.now() - remote.at < REMOTE_POS_TTL) {
@@ -377,7 +402,16 @@ export const useDuoChaos = () => {
           endsAt: localEndsAt > 0 ? localEndsAt : prev.endsAt,
           countdownEndsAt: localCountdownEndsAt > 0 ? localCountdownEndsAt : prev.countdownEndsAt,
           winner: data.winner ?? prev.winner,
-          coins: data.coins && data.coins.length > 0 ? data.coins : prev.coins,
+          // COIN OTORİTESİ: coinlerin yeniden doğması tamamen client tarafında
+          // yönetilir (aynı konum + 3 sn). Sunucu snapshot'ı `duo_tick`
+          // çağrılmadığı için coinleri hiç canlandırmaz; onu uygularsak coinler
+          // her yoklamada "yok olup tekrar çıkar" ve renkleri zıplar. Bu yüzden
+          // coinleri yalnızca YENİ bir tur başladığında (round değiştiğinde)
+          // sunucudan alırız; aksi halde client'ın kendi listesini koruruz.
+          coins:
+            data.coins && data.coins.length > 0 && (data.round ?? prev.round) !== prev.round
+              ? data.coins
+              : prev.coins,
           players,
         }
       })

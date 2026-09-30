@@ -85,9 +85,15 @@ export const useGameLoop = (deps: LoopDeps) => {
   const lastAction = useRef(0)
   const lastSteal = useRef(0)
   const lastPhase = useRef<State['phase']>('home')
+  const lastRound = useRef<number>(-1)
   // Rakip için yumuşatılmış (interpolasyonlu) konum. Broadcast hedefi ile
   // bu değer arasında her karede yumuşak geçiş yapılır.
   const remoteTarget = useRef<{ x: number; y: number } | null>(null)
+  // Yerel oyuncunun ANLIK konumu. React render'ını beklemeden her karede
+  // güncellenir; böylece `state` bir kare geride kalsa bile hareket akıcı kalır
+  // ("donma + birden ilerleme" sorununun kökü buydu: döngü, commit edilmemiş
+  // eski `state.players[0]`'dan hesapladığı için ilerleme kaybediyordu).
+  const localPos = useRef<{ x: number; y: number } | null>(null)
   // Sanal joystick vektörü. `VirtualJoystick` `setJoystick` ile buraya yazar;
   // böylece her pointer hareketinde React render tetiklenmez (yalnızca RAF okur).
   const joystick = useRef<JoystickVector>({ x: 0, y: 0 })
@@ -152,10 +158,21 @@ export const useGameLoop = (deps: LoopDeps) => {
       return
     }
 
-    if (state.phase !== 'battle') return
+    if (state.phase !== 'battle') {
+      // Savaş dışındayken yerel konum ref'ini bırak; yeni turda `state`'ten
+      // yeniden tohumlanır (oyuncu doğru başlangıç noktasına döner).
+      localPos.current = null
+      return
+    }
 
     const me = state.players[0]
     if (!me) return
+
+    // Yeni tur: konum ref'ini sıfırla ki oyuncu spawn noktasından başlasın.
+    if (lastRound.current !== state.round) {
+      lastRound.current = state.round
+      localPos.current = { x: me.x, y: me.y }
+    }
 
     // --- Girdi: klavye + sanal joystick birleşir. ---
     let dx = 0
@@ -168,19 +185,29 @@ export const useGameLoop = (deps: LoopDeps) => {
     dy += joystick.current.y
 
     // --- Hareket (yerel, iyimser). ---
-    let nextX = me.x
-    let nextY = me.y
+    //
+    // Konumu `state`'ten değil, `localPos` ref'inden okuruz. `state` yalnızca
+    // React commit edildikten sonra güncellenir; döngü 60Hz çalıştığı için
+    // aradaki karelerde eski konumdan hesaplamak ilerleme kaybettirir ve
+    // "donma + birden ilerleme" yaratır. `localPos` her karede anında güncellenir.
+    if (!localPos.current) localPos.current = { x: me.x, y: me.y }
+    const fromX = localPos.current.x
+    const fromY = localPos.current.y
+    let nextX = fromX
+    let nextY = fromY
     const moving = Math.hypot(dx, dy) > 0.01
     if (moving) {
       const length = Math.hypot(dx, dy) || 1
       const slowed = (me.slowedUntil ?? 0) > now
       const speed = MOVE_SPEED * (slowed ? BUMP_SPEED_MULTIPLIER : 1)
-      const targetX = me.x + (dx / length) * speed * dt
-      const targetY = me.y + (dy / length) * speed * dt
-      const resolved = resolveMove(me.x, me.y, targetX, targetY)
+      const targetX = fromX + (dx / length) * speed * dt
+      const targetY = fromY + (dy / length) * speed * dt
+      const resolved = resolveMove(fromX, fromY, targetX, targetY)
       nextX = resolved.x
       nextY = resolved.y
     }
+    // Ref'i hemen güncelle — bir sonraki kare bu değerden devam eder.
+    localPos.current = { x: nextX, y: nextY }
 
     // --- Rakip interpolasyonu (yalnızca hedefe yaklaşırken yazarız). ---
     //
