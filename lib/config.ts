@@ -123,12 +123,11 @@ export const getCoinValue = (type: CoinType, chaosEvent?: string, objective?: Ob
 // --- Coin ---
 export const COIN_COUNT = 14
 /**
- * Toplanan bir coin bu süre sonra rastgele bir konumda ve rastgele bir
- * renkte (türde) yeniden doğar. Oyun böylece kaynak açısından canlı kalır.
+ * Toplanan bir coin bu süre sonra AYNI konumda, rastgele bir renkte (türde)
+ * yeniden doğar. Konum sabit kaldığı için arena düzeni bozulmaz; yalnızca
+ * renk değişir.
  */
-export const COIN_RESPAWN_MS = 4_000
-/** Yeniden doğan coinin merkeze çok yakın olmaması için kenar payı (arena %). */
-export const COIN_RESPAWN_MARGIN = 8
+export const COIN_RESPAWN_MS = 3_000
 
 export const spawnCoins = (): Coin[] =>
   Array.from({ length: COIN_COUNT }, (_, i) => ({

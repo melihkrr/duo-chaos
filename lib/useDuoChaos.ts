@@ -222,7 +222,7 @@ export const useDuoChaos = () => {
     }
   }, [advancePhase])
 
-  useGameLoop({
+  const loop = useGameLoop({
     state,
     setState,
     token: room.token,
@@ -231,21 +231,28 @@ export const useDuoChaos = () => {
     call: room.call,
     syncChaos: chaos.sync,
     advancePhase,
+    remotePos,
   })
+
+  // Sanal joystick girdisini döngüye bağlar. `VirtualJoystick` bu setter'ı
+  // çağırır; değer bir ref'te tutulduğu için pointer hareketi React render'ı
+  // tetiklemez (yalnızca RAF okur).
+  const onJoystick = loop.setJoystick
 
   // Realtime olaylarını bağla.
   useEffect(() => {
+    // Rakip hareketi: yalnızca HEDEFİ kaydederiz, state'e yazmayız.
+    //
+    // Neden: broadcast 60Hz gelir. Her pakette `setState` çağırmak saniyede
+    // 60 render tetikler ve döngünün kendi interpolasyonuyla çakışır — bu da
+    // hareketin "laglı/titrek" görünmesine yol açar. Bunun yerine hedefi
+    // `remotePos`'a yazarız; `useGameLoop` her karede yumuşakça yaklaştırır ve
+    // tek bir `setState` ile ekrana basar.
     const offMove = room.on('move', (payload) => {
       const data = payload as { by?: string; x?: number; y?: number }
       if (!data || data.by === room.playerId) return
       if (typeof data.x !== 'number' || typeof data.y !== 'number') return
       remotePos.current.set(data.by ?? 'rival', { x: data.x, y: data.y, at: Date.now() })
-      setState((prev) => ({
-        ...prev,
-        players: prev.players.map((player, index) =>
-          index === 1 ? { ...player, x: data.x as number, y: data.y as number } : player,
-        ),
-      }))
     })
 
     const offCollect = room.on('collect', (payload) => {
@@ -718,6 +725,7 @@ export const useDuoChaos = () => {
     secondsLeft,
     lobbyReady,
     serverPlayerCount,
+    onJoystick,
     createRoom,
     joinRoom,
     restore,

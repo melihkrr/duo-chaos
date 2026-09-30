@@ -79,9 +79,7 @@ export default function Page() {
           cosmetics={cosmetics}
           level={progress.profile.level}
           secondsLeft={game.secondsLeft}
-          onJoystick={() => {
-            /* joystick girdisi useGameLoop içindeki klavye ile birleşir */
-          }}
+          onJoystick={game.onJoystick}
           onEmote={game.triggerEmote}
         />
       )}
