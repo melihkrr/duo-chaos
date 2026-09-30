@@ -21,7 +21,7 @@ export type ScoutApi = {
  * Guess/Read mekaniği: rakibin gizli görevi hakkında kısmi ipucu alır.
  * Sunucu otoritesi; client sadece cooldown/TTL sayacını yönetir.
  */
-export const useScout = (code: string | null, playerId: 'p1' | 'p2'): ScoutApi => {
+export const useScout = (code: string | null, playerId: 'p1' | 'p2', token: string | null = null): ScoutApi => {
   const [charges, setCharges] = useState(SCOUT_CHARGES)
   const [usedAt, setUsedAt] = useState(0)
   const [hint, setHint] = useState<ScoutHint | null>(null)
@@ -72,7 +72,7 @@ export const useScout = (code: string | null, playerId: 'p1' | 'p2'): ScoutApi =
       if (hasSupabase) {
         const data = await rpc<{ charges?: number; hint?: ScoutHint }>('duo_scout', {
           p_code: code,
-          p_player: playerId,
+          p_token: token,
         })
         if (data) {
           if (typeof data.charges === 'number') setCharges(data.charges)
@@ -90,7 +90,7 @@ export const useScout = (code: string | null, playerId: 'p1' | 'p2'): ScoutApi =
       pendingRef.current = false
       setPending(false)
     }
-  }, [charges, code, cooldownLeft, playerId])
+  }, [charges, code, cooldownLeft, token])
 
   return { charges, cooldownLeft, hint: liveHint, hintLeft, canScout, scout, sync, reset }
 }

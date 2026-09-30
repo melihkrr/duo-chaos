@@ -22,6 +22,8 @@ import type { Coin, Player, State } from './types'
 type LoopDeps = {
   state: State
   setState: React.Dispatch<React.SetStateAction<State>>
+  /** Oyuncunun sunucu token'ı (RPC kimlik doğrulaması). */
+  token: string | null
   /** Yerel oyuncunun pozisyonunu yayınlar. */
   publishMove: (x: number, y: number) => void
   /** Toplama/çalma olayını yayınlar. */
@@ -85,13 +87,13 @@ export const useGameLoop = (deps: LoopDeps) => {
   }, [])
 
   const step = useCallback((now: number, dt: number) => {
-    const { state, setState, publishMove, broadcast, call, syncChaos, advancePhase } = depsRef.current
+    const { state, setState, token, publishMove, broadcast, call, syncChaos, advancePhase } = depsRef.current
 
     // Faz geçişleri.
     if (state.phase === 'countdown' && state.countdownEndsAt > 0 && now >= state.countdownEndsAt) {
       playSound('start')
       setState((prev) => ({ ...prev, phase: 'battle', endsAt: now + BATTLE_MS }))
-      void call('duo_advance_phase', { p_from: 'countdown' })
+      void call('duo_advance_phase', { p_token: token })
       return
     }
     if (state.phase === 'battle' && state.endsAt > 0 && now >= state.endsAt) {
@@ -170,7 +172,7 @@ export const useGameLoop = (deps: LoopDeps) => {
           ),
         }))
         broadcast('collect', { ids: [...ids], by: 'p1' })
-        void call('duo_collect', { p_player: 'p1', p_ids: [...ids] })
+        void call('duo_collect', { p_token: token, p_coin_id: [...ids][0] })
       }
     }
 
@@ -196,7 +198,7 @@ export const useGameLoop = (deps: LoopDeps) => {
         }),
       }))
       broadcast('steal', { by: 'p1' })
-      void call('duo_steal', { p_player: 'p1' })
+      void call('duo_steal', { p_token: token })
     }
   }, [])
 

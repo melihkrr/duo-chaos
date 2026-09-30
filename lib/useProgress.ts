@@ -146,11 +146,12 @@ export const useProgress = (): ProgressApi => {
         return
       }
       try {
+        // XP is computed client-side to match the server's p_xp contract.
+        const gained =
+          (input.won ? 120 : 40) + (input.rounds ?? 0) * 25 + (input.missions ?? 0) * 60
         const data = await rpc('duo_award_progress', {
           p_client_id: clientId,
-          p_won: input.won,
-          p_rounds: input.rounds ?? 0,
-          p_missions: input.missions ?? 0,
+          p_xp: gained,
         })
         if (data) applyServer(data)
         setOnline(true)

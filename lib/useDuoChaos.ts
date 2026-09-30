@@ -32,7 +32,7 @@ export const useDuoChaos = () => {
   const room = useRoom()
   const progress = useProgress()
   const chaos = useChaos()
-  const scout = useScout(room.code, room.playerId)
+  const scout = useScout(room.code, room.playerId, room.token)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [now, setNow] = useState(() => Date.now())
@@ -55,7 +55,7 @@ export const useDuoChaos = () => {
   const publishMove = useCallback(
     (x: number, y: number) => {
       room.broadcast('move', { by: room.playerId, x, y })
-      void room.call('duo_move', { p_player: room.playerId, p_x: x, p_y: y })
+      void room.call('duo_move', { p_token: room.token ?? room.playerId, p_x: x, p_y: y })
     },
     [room],
   )
@@ -64,7 +64,7 @@ export const useDuoChaos = () => {
     async (from: Phase) => {
       const data = await room.call<{ phase?: Phase; winner?: string; roundScores?: Record<string, number>; matchScores?: Record<string, number> }>(
         'duo_advance_phase',
-        { p_from: from },
+        { p_token: room.token ?? room.playerId },
       )
       if (data?.phase) {
         setState((prev) => ({
@@ -103,6 +103,7 @@ export const useDuoChaos = () => {
   useGameLoop({
     state,
     setState,
+    token: room.token,
     publishMove,
     broadcast: room.broadcast,
     call: room.call,
@@ -186,7 +187,7 @@ export const useDuoChaos = () => {
         chaos?: { id?: string; endsAt?: number }
         players?: Array<Partial<Player> & { id?: string }>
         coins?: Coin[]
-      }>('duo_public_state', { p_player: room.playerId })
+      }>('duo_public_state', { p_token: room.token ?? room.playerId })
       if (cancelled || !data) return
       setState((prev) => {
         const players = prev.players.map((player, index) => {
@@ -243,7 +244,7 @@ export const useDuoChaos = () => {
     unlockAudio()
     try {
       const code = makeCode()
-      const data = await room.call<{ token?: string }>('duo_create_room', { p_code: code, p_player: 'p1' })
+      const data = await room.call<{ token?: string }>('duo_create_room', { p_code: code, p_token: `t-${code}` })
       const token = data?.token ?? `t-${code}`
       saveToken(code, token)
       await room.connect(code, 'p1', token)
@@ -266,7 +267,7 @@ export const useDuoChaos = () => {
       try {
         const data = await room.call<{ token?: string }>('duo_join_room', {
           p_code: normalized,
-          p_player: 'p2',
+          p_token: `t-${normalized}`,
         })
         const token = data?.token ?? `t-${normalized}`
         saveToken(normalized, token)
@@ -296,7 +297,7 @@ export const useDuoChaos = () => {
   const startGame = useCallback(async () => {
     setBusy(true)
     try {
-      await room.call('duo_start_round', { p_round: 1 })
+      await room.call('duo_start_round', { p_token: room.token ?? room.playerId })
       resetRound(1, room.code ?? 'round-1')
       scout.reset()
       setPhase('countdown', { countdownEndsAt: Date.now() + COUNTDOWN_MS })
@@ -309,7 +310,7 @@ export const useDuoChaos = () => {
     setBusy(true)
     try {
       const nextRound = state.round + 1
-      await room.call('duo_start_round', { p_round: nextRound })
+      await room.call('duo_start_round', { p_token: room.token ?? room.playerId })
       resetRound(nextRound, room.code ?? `round-${nextRound}`)
       scout.reset()
       setPhase('countdown', { countdownEndsAt: Date.now() + COUNTDOWN_MS })
@@ -321,7 +322,7 @@ export const useDuoChaos = () => {
   const rematch = useCallback(async () => {
     setBusy(true)
     try {
-      await room.call('duo_rematch', { p_player: room.playerId })
+      await room.call('duo_rematch', { p_token: room.token ?? room.playerId })
       resetMatch()
       scout.reset()
       setPhase('lobby')
@@ -331,7 +332,7 @@ export const useDuoChaos = () => {
   }, [resetMatch, room, scout, setPhase])
 
   const leaveGame = useCallback(async () => {
-    await room.call('duo_leave', { p_player: room.playerId })
+    await room.call('duo_leave', { p_token: room.token ?? room.playerId })
     await room.disconnect()
     resetMatch()
     setPhase('home')

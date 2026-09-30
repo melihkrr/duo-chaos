@@ -15,6 +15,39 @@ supabase db push
 
 Or paste each file into the Supabase SQL editor in order (`0001` → `0008`).
 
+> **Important:** the migrations must actually be applied to the project the
+> client points at. If they are not, every RPC call fails with
+> `Could not find the function public.duo_* in the schema cache`.
+
+### Troubleshooting: "Could not find the function … in the schema cache"
+
+PostgREST resolves RPCs by **argument name**, so the JSON keys the client sends
+must match the SQL parameter names exactly. The client always sends:
+
+| Client key | SQL parameter |
+|---|---|
+| `p_code` | `p_code` |
+| `p_token` | `p_token` |
+| `p_x`, `p_y` | `p_x`, `p_y` |
+| `p_coin_id` | `p_coin_id` |
+| `p_client_id` | `p_client_id` |
+| `p_xp` | `p_xp` |
+| `p_emote`, `p_trail` | `p_emote`, `p_trail` |
+
+If you see an error naming a parameter that is **not** in the table above
+(e.g. `duo_create_room(p_code, p_player)`), either:
+
+1. the migrations were never applied — run `supabase db push` (or paste the
+   files), then reload the PostgREST schema cache with
+   `notify pgrst, 'reload schema';`, **or**
+2. an older client build is cached — hard-refresh the browser.
+
+After applying migrations, force a schema-cache reload:
+
+```sql
+notify pgrst, 'reload schema';
+```
+
 ## Environment
 
 The client reads these variables (see [`.env.example`](../.env.example)):
