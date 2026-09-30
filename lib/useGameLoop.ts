@@ -314,8 +314,21 @@ export const useGameLoop = (deps: LoopDeps) => {
         remotePos.current?.get('rival') ??
         remotePos.current?.get(rivalSlot === 'p1' ? 'p2' : 'p1')
       const fresh = broadcast && now - broadcast.at < REMOTE_POS_TTL
-      const goalX = fresh ? broadcast.x : rivalTarget.x
-      const goalY = fresh ? broadcast.y : rivalTarget.y
+      // KÖK SORUN ("hareket ediyorum, sonra birden başlangıç konumuna gidiyor"):
+      // Broadcast bayatladığında (rakip durdu, paket kaybı) hedefi sunucu
+      // snapshot'ına (`rivalTarget.x/y`) düşürüyorduk. Sunucu x/y'si `duo_move`
+      // yalnızca hareket sırasında yazıldığı için BAYAT olabilir (hatta spawn);
+      // bu da rakibi geriye zıplatıyordu. Bu turda bir kez canlı broadcast
+      // gördüysek son bilinen konumu KORURUZ; sunucu konumuna yalnızca hiç
+      // broadcast görülmediyse (geç katılma / yeniden bağlanma) düşeriz.
+      //
+      // EK GÜVENCE: `broadcast` varsa (taze olmasa bile) onu sunucu
+      // snapshot'ına TERCİH EDERİZ. Sunucu x/y'si yalnızca hiç broadcast
+      // görülmediyse (geç katılma / yeniden bağlanma) kullanılır. Böylece
+      // rakip durduğunda bile son bilinen konumda kalır; spawn'a zıplamaz.
+      const hasBroadcast = broadcast !== undefined
+      const goalX = hasBroadcast ? broadcast.x : rivalTarget.x
+      const goalY = hasBroadcast ? broadcast.y : rivalTarget.y
       const remote = remoteTarget.current
       if (!remote) {
         remoteTarget.current = { x: goalX, y: goalY }
@@ -342,8 +355,13 @@ export const useGameLoop = (deps: LoopDeps) => {
         const leadX = goalX + vel.x * dt
         const leadY = goalY + vel.y * dt
         const dist = Math.hypot(remote.x - leadX, remote.y - leadY)
-        if (dist > REMOTE_SNAP_DISTANCE) {
-          // Çok büyük fark: ışınlanma / yeniden bağlanma — anında hizala.
+        // ANİ ZIPLAMA YALNIZCA GERÇEK IŞINLANMADA: Taze broadcast varken büyük
+        // fark, dead-reckoning aşırı sapmasından (paket kaybı) kaynaklanır;
+        // anında hizalamak rakibi ileri-geri zıplatır ("birden başlangıç
+        // konumuna gidiyor" hissi). Bu yüzden taze veri varken asla anında
+        // atlamayız; yalnızca veri YOKKEN (yeniden bağlanma / respawn) hizalarız.
+        if (dist > REMOTE_SNAP_DISTANCE && !fresh) {
+          // Çok büyük fark + taze veri yok: ışınlanma / yeniden bağlanma.
           remote.x = leadX
           remote.y = leadY
           remoteVel.current = { x: 0, y: 0 }

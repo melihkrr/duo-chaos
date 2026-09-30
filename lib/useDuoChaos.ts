@@ -8,13 +8,15 @@ import {
   MATCH_ROUNDS,
   POLL_MS,
   REMOTE_POS_TTL,
+  generateObjectivePair,
+  spawnCoins,
 } from './config'
 import { friendlyError } from './errors'
 import { playSound, unlockAudio } from './sound'
 import { useChaos } from './useChaos'
 import { useCosmetics } from './useCosmetics'
 import { useGameLoop } from './useGameLoop'
-import { useGameState } from './useGameState'
+import { blankPlayer, useGameState } from './useGameState'
 import { useProgress } from './useProgress'
 import { useRoom, readToken, saveToken } from './useRoom'
 import { useScout } from './useScout'
@@ -236,6 +238,24 @@ export const useDuoChaos = () => {
   const [rematchReady, setRematchReady] = useState(false)
   const [rivalRematchReady, setRivalRematchReady] = useState(false)
   const remotePos = useRef<Map<string, { x: number; y: number; at: number }>>(new Map())
+  // Bu turda rakipten EN AZ BİR `move` broadcast'i aldık mı?
+  //
+  // KÖK SORUN ("hareket ediyorum, sonra birden başlangıç konumuna gidiyor"):
+  // Rakibin konumu iki kaynaktan gelir: (1) 60Hz `move` broadcast'i — taze ve
+  // akıcı; (2) 1 sn'de bir yoklanan sunucu snapshot'ı (`duo_public_state`) —
+  // GECİKMELİ. `duo_move` yalnızca oyuncu HAREKET EDERKEN yazılır ve
+  // `not_live`/ağ hatası durumunda sessizce düşer; bu yüzden sunucudaki x/y
+  // sık sık eski (hatta spawn) konumda kalır. Eski kod, broadcast 600 ms'den
+  // eskiyse sunucu değerini uyguluyordu; rakip durduğunda (yeni broadcast
+  // gelmez) sunucunun BAYAT konumu devreye girip rakibi geriye/spawn'a
+  // zıplatıyordu.
+  //
+  // ÇÖZÜM: Bu turda bir kez broadcast gördüysek, sunucu snapshot'ı ARTIK rakip
+  // konumu için otorite DEĞİLDİR. Broadcast kesilse bile son bilinen konumu
+  // koruruz (rakip donar ama asla geriye zıplamaz). Sunucu konumu yalnızca
+  // HİÇ broadcast görülmediyse (geç katılma / yeniden bağlanma) kullanılır.
+  // Tur değişiminde sıfırlanır.
+  const rivalBroadcastSeenRef = useRef(false)
   // `room` her render'da yeni bir nesne kimliği taşır (useRoom dönüşü
   // memoize edilmemiş). Bu yüzden yoklama effect'lerinin bağımlılığı olarak
   // `room` kullanmak, effect'in her render'da yeniden kurulup interval'i
@@ -503,6 +523,12 @@ export const useDuoChaos = () => {
       const slot = data.by ?? 'rival'
       remotePos.current.set(slot, { x: data.x, y: data.y, at })
       remotePos.current.set('rival', { x: data.x, y: data.y, at })
+      // Bu turda rakipten canlı konum aldık: artık sunucu snapshot'ı rakip
+      // konumunu GERİYE ÇEKEMEZ (aşağıdaki poll merge'e bakınız).
+      rivalBroadcastSeenRef.current = true
+      // `useGameLoop`'a da "bu turda broadcast gördük" bilgisini taşı. Ayrı bir
+      // prop eklemek yerine `remotePos` map'ine bir sentinel anahtar yazarız.
+      remotePos.current.set('__seen__', { x: 0, y: 0, at })
     })
 
     const offCollect = room.on('collect', (payload) => {
@@ -772,8 +798,12 @@ export const useDuoChaos = () => {
             // veya `'p2'` aradığı için `p1` anahtarını bulamıyordu. Bu blok
             // yalnızca rakip (`p2`) için çalıştığından rakibin slotu `p2`'dir;
             // yine de `'rival'` geriye dönük anahtarını da deneriz.
+            // Bu turda rakipten canlı broadcast aldıysak sunucu konumunu ASLA
+            // uygulamayız: sunucu x/y'si gecikmeli/bayat olabilir ve rakibi
+            // geriye (spawn'a) zıplatırdı. Yalnızca hiç broadcast görmediysek
+            // (geç katılma / yeniden bağlanma) sunucu konumunu benimseriz.
             const remote = remotePos.current.get('p2') ?? remotePos.current.get('rival')
-            if (remote && Date.now() - remote.at < REMOTE_POS_TTL) {
+            if (rivalBroadcastSeenRef.current || (remote && Date.now() - remote.at < REMOTE_POS_TTL)) {
               merged.x = player.x
               merged.y = player.y
             }
@@ -987,6 +1017,9 @@ export const useDuoChaos = () => {
       // henüz hareket etmemişse eski konumda "asılı" kalır ve iki oyuncu aynı
       // noktada başlıyormuş gibi görünür. Sunucu spawn konumu devralır.
       remotePos.current.clear()
+      // Yeni turda "broadcast gördük" mandalını da sıfırla: rakip henüz
+      // hareket etmediyse sunucu spawn konumu otorite olmalı.
+      rivalBroadcastSeenRef.current = false
       // ÖNEMLİ: `resetRound` `countdownEndsAt`/`endsAt`'i sıfırlar. Misafirin
       // geri sayımı silinmesin diye sunucudan gelen EN SON deadline'ları
       // hemen geri yazarız. Aksi halde misafir "3-2-1" görmeden ya da geç
@@ -1076,6 +1109,54 @@ export const useDuoChaos = () => {
             : prev.players
         // Sunucu fazı lobiden çıktıysa (host başlattı) yerel fazı da ilerlet.
         const nextPhase = data.phase && data.phase !== 'lobby' ? data.phase : prev.phase
+        // ÖNEMLİ: Misafir lobiden ÇIKARKEN turu yeniden tohumlamalı. Aksi halde
+        // misafir ilk turda `initialState`'in varsayılan coin/görev düzenini
+        // korur; host ise `duo_start_round` seed'iyle (`CODE:1`) farklı bir düzen
+        // üretir → "iki taraf farklı oyun oynuyor". Ayrıca rakibin eski broadcast
+        // konumu temizlenmezse "ikisi aynı noktada başlıyor" hatası oluşur.
+        //
+        // DİKKAT: `resetRound`'u bu `setState` güncelleyicisinin İÇİNDE
+        // ÇAĞIRMAYIZ. `resetRound` kendi `setState`'ini tetikler; iç içe
+        // güncelleyicilerde dıştakine verilen `prev` reset ÖNCESİ durumdur ve
+        // döndürdüğümüz nesne reset'in `coins`/`players`/`objective` değişimini
+        // EZER. Bu yüzden reset alanlarını doğrudan burada hesaplayıp tek bir
+        // güncellemede uygularız (yarış yok, kayıp yok).
+        const leavingLobby = prev.phase === 'lobby' && nextPhase !== 'lobby'
+        if (leavingLobby) {
+          const round = data.round ?? prev.round
+          const roundSeed = roundSeedFor(room.code, round)
+          const [first, second] = generateObjectivePair(roundSeed)
+          scout.reset()
+          remotePos.current.clear()
+          rivalBroadcastSeenRef.current = false
+          const { countdownEndsAt, endsAt } = serverDeadlineRef.current
+          return {
+            ...prev,
+            phase: nextPhase,
+            round,
+            // Coin/görev düzenini tur seed'inden yeniden üret (host ile birebir).
+            coins: spawnCoins(roundSeed),
+            chaosEvent: undefined,
+            chaosEventEndsAt: undefined,
+            winner: undefined,
+            endsAt: localEndsAt > 0 ? localEndsAt : endsAt > 0 ? endsAt : prev.endsAt,
+            countdownEndsAt:
+              localCountdownEndsAt > 0
+                ? localCountdownEndsAt
+                : countdownEndsAt > 0
+                  ? countdownEndsAt
+                  : prev.countdownEndsAt,
+            players: prev.players.map((player, index) => ({
+              ...blankPlayer(player.id as 'p1' | 'p2'),
+              name: player.name,
+              xp: player.xp,
+              level: player.level,
+              title: player.title,
+              trail: player.trail,
+              objective: index === 0 ? first : second,
+            })),
+          }
+        }
         return {
           ...prev,
           phase: nextPhase,
@@ -1096,7 +1177,7 @@ export const useDuoChaos = () => {
       cancelled = true
       window.clearInterval(id)
     }
-  }, [noteServerNow, room.code, room.playerId, room.token, setState, state.phase, toLocal])
+  }, [noteServerNow, room.code, room.playerId, room.token, scout, setState, state.phase, toLocal])
 
   // Maç sonunda XP ver.
   const awarded = useRef(false)
@@ -1251,6 +1332,7 @@ export const useDuoChaos = () => {
       scout.reset()
       // Yeni maçta rakibin eski broadcast konumunu bırak.
       remotePos.current.clear()
+      rivalBroadcastSeenRef.current = false
       // Sunucu deadline'larını yerel saate çevir (saat farkı düzeltmesi).
       noteServerNow(res?.serverNow)
       const localCountdown = toLocal(res?.countdownEndsAt)
@@ -1284,6 +1366,7 @@ export const useDuoChaos = () => {
       // Yeni turda rakibin eski broadcast konumunu bırak (iki oyuncu aynı
       // noktada başlamasın).
       remotePos.current.clear()
+      rivalBroadcastSeenRef.current = false
       // Sunucu deadline'ını sakla; misafir tarafı da aynı değeri kullanır.
       if (localCountdown > 0) serverDeadlineRef.current.countdownEndsAt = localCountdown
       // Yeni tur başlarken onay bayraklarını sıfırla; bir sonraki sonuç
