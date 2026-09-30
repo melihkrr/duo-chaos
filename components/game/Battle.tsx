@@ -40,8 +40,6 @@ type Props = {
   celebrateRef: React.RefObject<number>
   /** Rakip oyundan ayrıldı mı? True iken oyun duraklar ve bir uyarı gösterilir. */
   rivalLeft: boolean
-  /** "Bekle" — rakibin geri dönmesini bekler (duraklatılmış halde). */
-  onWaitForRival: () => void
   /** "Odadan ayrıl" — oyuncu odayı terk eder. */
   onLeaveRoom: () => void
   onEmote: () => void
@@ -61,7 +59,6 @@ export function Battle({
   liveRivalPos,
   celebrateRef,
   rivalLeft,
-  onWaitForRival,
   onLeaveRoom,
   onEmote,
 }: Props) {
@@ -180,6 +177,9 @@ export function Battle({
 
   const me = state.players[0]
   const rival = state.players[1]
+  // Yerel oyuncu (p1) maçı kazandı mı? Rakip ayrıldığında popup'ta "You win"
+  // göstermek için kullanılır.
+  const meWon = state.winner === 'p1'
   const myObjective = objectiveOf(me)
   const rivalObjective = objectiveOf(rival)
   const myTrail = trailById(me?.trail)
@@ -298,15 +298,17 @@ export function Battle({
           <div className="rival-left-overlay" role="alertdialog" aria-live="assertive">
             <div className="rival-left-card">
               <span className="rival-left-emoji" aria-hidden>
-                🐻💨
+                {meWon ? '🏆' : state.winner ? '🎈' : '🐻💨'}
               </span>
-              <h2>Your rival left the game</h2>
+              <h2>{meWon ? 'You win!' : state.winner ? 'Next time' : 'Your rival left the game'}</h2>
               <p>
-                {rival?.name ?? 'Your rival'} disconnected. The match is paused — you can wait for
-                them to come back, or leave the room.
+                {meWon
+                  ? `${rival?.name ?? 'Your rival'} left the match — you win. You can stay here and wait for a rematch, or leave the room.`
+                  : state.winner
+                    ? `${rival?.name ?? 'Your rival'} left the match. Better luck next time — you can stay for a rematch, or leave the room.`
+                    : `${rival?.name ?? 'Your rival'} disconnected. The match is paused — you can wait for them to come back, or leave the room.`}
               </p>
               <div className="rival-left-actions">
-                <Button onClick={onWaitForRival}>⏳ Wait for rival</Button>
                 <Button variant="ghost" onClick={onLeaveRoom}>
                   🚪 Leave room
                 </Button>

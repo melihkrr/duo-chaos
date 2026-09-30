@@ -139,6 +139,13 @@ export const useDuoChaos = () => {
   // onayıyla başlamalı"). Host tek başına turu başlatamaz.
   const [nextReady, setNextReady] = useState(false)
   const [rivalNextReady, setRivalNextReady] = useState(false)
+  // RÖVANŞ (rematch) onayı: maç bittiğinde İKİ oyuncunun da onayı gerekir.
+  // Sunucu `duo_rematch` yalnızca iki taraf da hazır olunca odayı `lobby`'ye
+  // çeker; bu yüzden istemci tek başına `lobby`'ye geçmemeli (aksi halde
+  // uzlaşma fazı onu tekrar `matchover`'a geri çekerdi — "rematch'e basınca
+  // yine sonuç ekranına dönüyorum" hatası).
+  const [rematchReady, setRematchReady] = useState(false)
+  const [rivalRematchReady, setRivalRematchReady] = useState(false)
   const remotePos = useRef<Map<string, { x: number; y: number; at: number }>>(new Map())
   // `room` her render'da yeni bir nesne kimliği taşır (useRoom dönüşü
   // memoize edilmemiş). Bu yüzden yoklama effect'lerinin bağımlılığı olarak
@@ -241,6 +248,10 @@ export const useDuoChaos = () => {
     }
     // Bağlanır bağlanmaz ve her tur başlangıcında yayınla.
     publish()
+    // RAKİBE "BURADAYIM" SİNYALİ: Yeniden bağlandığımızda rakibin ekranındaki
+    // "rakip ayrıldı" uyarısını hemen kapatması için `hello` yayınlarız.
+    // (Presence senkronu gecikebilir; bu sinyal anında temizler.)
+    room.broadcast('hello', { by: room.playerId })
     // Periyodik heartbeat: tek bir paket kaybolsa bile yakınsar.
     const id = window.setInterval(publish, 3_000)
     return () => window.clearInterval(id)
@@ -497,6 +508,24 @@ export const useDuoChaos = () => {
       }
     })
 
+    // RÖVANŞ ONAYI: Rakip "rematch" için hazır olduğunu bildirir. Sunucu
+    // tarafı iki onayı da görünce odayı `lobby`'ye çeker; istemci faz
+    // uzlaşmasıyla oraya geçer. Burada yalnızca UI durumunu işaretleriz.
+    const offRematchReady = room.on('rematch-ready', (payload) => {
+      const data = payload as { by?: string }
+      if (!data || data.by === room.playerId) return
+      setRivalRematchReady(true)
+    })
+
+    // RAKİP GERİ DÖNDÜ: Rakip yeniden bağlandığında (broadcast 'hello' veya
+    // presence yeniden göründüğünde) "rakip ayrıldı" uyarısını KESİN olarak
+    // kapatırız. Aksi halde rakip geri gelse bile popup ekranda kalıyordu.
+    const offHello = room.on('hello', (payload) => {
+      const data = payload as { by?: string }
+      if (!data || data.by === room.playerId) return
+      setRivalLeft(false)
+    })
+
     // SKOR SENKRONU: Rakip MUTLAK skorunu yayınlar; biz de rakibin (index 1)
     // skorunu bu değere EŞİTLERİZ. Delta eklemek yerine eşitlemek, kaçan bir
     // paketin kalıcı sapmaya yol açmasını engeller (her yayın kendini düzeltir).
@@ -524,6 +553,8 @@ export const useDuoChaos = () => {
 
     return () => {
       offNextReady()
+      offRematchReady()
+      offHello()
       offMove()
       offCollect()
       offSteal()
@@ -1157,17 +1188,77 @@ export const useDuoChaos = () => {
     return () => window.clearInterval(id)
   }, [nextReady, rivalNextReady, room, state.phase])
 
+  /**
+   * RÖVANŞ (rematch) — İKİ OYUNCUNUN DA ONAYI GEREKİR.
+   *
+   * Kök sorun: Eski `rematch` sunucuya `duo_rematch` çağırıp HEMEN yerel fazı
+   * `lobby`'ye çekiyordu. Ancak sunucu odayı yalnızca İKİ oyuncu da hazır
+   * olduğunda `lobby`'ye çeker. Tek başına basıldığında sunucu `matchover`
+   * kalır; faz uzlaşması da istemciyi tekrar `matchover`'a çekerdi — bu da
+   * "rematch'e basınca yine sonuç ekranına dönüyorum" hatasıydı.
+   *
+   * Çözüm: Yerel onayı kaydedip rakibe `rematch-ready` yayınlarız. Sunucu
+   * iki onayı da görünce odayı `lobby`'ye çeker; istemci faz uzlaşmasıyla
+   * oraya geçer ve `resetMatch`/`scout.reset` bu geçişte uygulanır.
+   */
   const rematch = useCallback(async () => {
     setBusy(true)
     try {
+      setRematchReady(true)
+      room.broadcast('rematch-ready', { by: room.playerId })
       await room.call('duo_rematch', { p_token: room.token ?? room.playerId })
-      resetMatch()
-      scout.reset()
-      setPhase('lobby')
+      // Fazı BURADA değiştirmeyiz; sunucu iki onayı görünce `lobby`'ye çeker
+      // ve uzlaşma effect'i geçişi yapar (aşağıdaki effect'e bakınız).
     } finally {
       setBusy(false)
     }
-  }, [resetMatch, room, scout, setPhase])
+  }, [room])
+
+  // RÖVANŞ ONAY HEARTBEAT: Yerel onay verildiyse ama rakip hâlâ onaylamadıysa
+  // onayımızı periyodik olarak yeniden yayınlarız (tek paket kaybolursa
+  // el sıkışma yakınsasın diye).
+  useEffect(() => {
+    if (!rematchReady || rivalRematchReady) return
+    if (state.phase !== 'matchover') return
+    const id = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return
+      room.broadcast('rematch-ready', { by: room.playerId })
+    }, 1_500)
+    return () => window.clearInterval(id)
+  }, [rematchReady, rivalRematchReady, room, state.phase])
+
+  // RÖVANŞ BAYRAKLARINI SIFIRLA: Sonuç ekranı her yeni maç için göründüğünde
+  // onay bayraklarını temizle. (Aynı desen `readyRoundRef` için de kullanılır.)
+  const rematchRoundRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (state.phase !== 'matchover') return
+    if (rematchRoundRef.current === 'matchover') return
+    rematchRoundRef.current = 'matchover'
+    setRematchReady(false)
+    setRivalRematchReady(false)
+  }, [state.phase])
+
+  // RÖVANŞ GEÇİŞİ: Sunucu iki onayı da görüp odayı `lobby`'ye çektiğinde
+  // (faz uzlaşması `matchover` → `lobby` geçişini zaten kabul eder) yerel
+  // maç durumunu sıfırlarız. Böylece iki oyuncu da AYNI anda lobiye döner.
+  //
+  // NOT: `setState`-in-effect lint kuralına takılmamak için bayrak sıfırlama
+  // yerine yalnızca `resetMatch`/`scout.reset` (harici sistem güncellemesi)
+  // yapılır; onay bayrakları bir sonraki `matchover` girişinde sıfırlanır.
+  const rematchAppliedRef = useRef(false)
+  useEffect(() => {
+    if (state.phase !== 'lobby') {
+      rematchAppliedRef.current = false
+      return
+    }
+    if (rematchAppliedRef.current) return
+    // Yalnızca gerçek bir rövanş sonrası (onay verilmişken) uygula; normal
+    // ilk lobi girişinde `resetMatch` zaten çağrılmıştır.
+    if (!rematchReady && !rivalRematchReady) return
+    rematchAppliedRef.current = true
+    resetMatch()
+    scout.reset()
+  }, [resetMatch, rivalRematchReady, rematchReady, scout, state.phase])
 
   const leaveGame = useCallback(async () => {
     // Rakibe "ayrıldım" sinyali yayınla; oyunu duraklatıp bilgilendirsin.
@@ -1190,15 +1281,6 @@ export const useDuoChaos = () => {
     // sayfa yenilendiğinde eski odaya tekrar katılmaya çalışır.
     syncUrl('/')
   }, [resetMatch, room, setPhase])
-
-  /**
-   * Rakip ayrıldıktan sonra "Bekle" seçeneği: uyarıyı kapatır ve oyunu
-   * duraklatılmış halde bırakır. Rakip geri gelirse (presence yeniden
-   * görünürse) oyun kaldığı yerden devam eder.
-   */
-  const waitForRival = useCallback(() => {
-    setRivalLeft(false)
-  }, [])
 
   const setName = useCallback(
     (next: string) => {
@@ -1238,8 +1320,16 @@ export const useDuoChaos = () => {
   //   1. `rivalLeft` — rakip 'leave' broadcast'i gönderdi (temiz çıkış).
   //   2. Presence düştü — rakip sekmesini kapatıp broadcast gönderemeden
   //      düştü. Yalnızca aktif bir maç sırasında dikkate alınır.
+  //
+  // ÖNEMLİ: Her iki sinyal de `!room.opponentPresent` ile kapılanır. Rakip
+  // yeniden bağlanıp presence'da göründüğü anda `rivalGone` OTOMATİK olarak
+  // `false` olur — böylece "rakip geri geldi ama popup hâlâ duruyor" hatası
+  // (setState-in-effect kullanmadan) kökten çözülür.
   const inActiveMatch = state.phase === 'countdown' || state.phase === 'battle'
-  const rivalGone = rivalLeft || (inActiveMatch && Boolean(room.code) && !room.opponentPresent)
+  const rivalGone =
+    Boolean(room.code) &&
+    !room.opponentPresent &&
+    (rivalLeft || inActiveMatch)
 
   return {
     state,
@@ -1267,8 +1357,9 @@ export const useDuoChaos = () => {
     nextReady,
     rivalNextReady,
     rematch,
+    rematchReady,
+    rivalRematchReady,
     leaveGame,
-    waitForRival,
     setName,
     copyInvite,
     triggerEmote: () => cosmetics.triggerEmote(),

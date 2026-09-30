@@ -6,23 +6,27 @@ import type { State } from '../../lib/types'
 
 type Props = {
   state: State
-  isHost: boolean
   /** Yerel oyuncu "sonraki tur" için onay verdi mi? */
   nextReady: boolean
   /** Rakip "sonraki tur" için onay verdi mi? */
   rivalNextReady: boolean
   /** Onay ver — tur ancak iki oyuncu da onaylayınca başlar. */
   onApproveNextRound: () => void
+  /** Yerel oyuncu rövanş için onay verdi mi? */
+  rematchReady: boolean
+  /** Rakip rövanş için onay verdi mi? */
+  rivalRematchReady: boolean
   onRematch: () => void
   busy?: boolean
 }
 
 export function Results({
   state,
-  isHost,
   nextReady,
   rivalNextReady,
   onApproveNextRound,
+  rematchReady,
+  rivalRematchReady,
   onRematch,
   busy,
 }: Props) {
@@ -81,13 +85,23 @@ export function Results({
 
       <div className="results-actions">
         {isMatchOver ? (
-          isHost ? (
-            <Button onClick={onRematch} disabled={busy}>
-              Rematch
+          <>
+            {/* RÖVANŞ: İKİ oyuncunun da onayı gerekir. Onay vermeden önce
+                buton "Rematch"; verdikten sonra rakip beklenir. Sunucu iki
+                onayı da görünce odayı lobiye çeker. */}
+            <Button onClick={onRematch} disabled={busy || rematchReady}>
+              {rematchReady ? '✅ Rematch — waiting for rival' : 'Rematch'}
             </Button>
-          ) : (
-            <p className="muted">Waiting for host to rematch…</p>
-          )
+            <p className="muted next-ready-status" aria-live="polite">
+              {rematchReady && rivalRematchReady
+                ? 'Both ready — starting a new match…'
+                : rematchReady
+                  ? 'Waiting for your rival to accept…'
+                  : rivalRematchReady
+                    ? 'Your rival wants a rematch. Your turn!'
+                    : 'Both players must accept to start a rematch.'}
+            </p>
+          </>
         ) : (
           <>
             {/* Tur, İKİ oyuncunun da onayıyla başlar. Onay vermeden önce

@@ -94,7 +94,6 @@ export default function Page() {
           liveRivalPos={game.liveRivalPos}
           celebrateRef={game.celebrateRef}
           rivalLeft={game.rivalLeft}
-          onWaitForRival={game.waitForRival}
           onLeaveRoom={() => setConfirmLeave(true)}
           onEmote={game.triggerEmote}
         />
@@ -103,10 +102,11 @@ export default function Page() {
       {(state.phase === 'results' || state.phase === 'matchover') && (
         <Results
           state={state}
-          isHost={isHost}
           nextReady={game.nextReady}
           rivalNextReady={game.rivalNextReady}
           onApproveNextRound={game.approveNextRound}
+          rematchReady={game.rematchReady}
+          rivalRematchReady={game.rivalRematchReady}
           onRematch={() => void game.rematch()}
           busy={game.busy}
         />
