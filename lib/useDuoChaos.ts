@@ -1003,6 +1003,29 @@ export const useDuoChaos = () => {
   }, [nextReady])
 
   /**
+   * YENİ TUR ONAY BAYRAKLARINI SIFIRLA.
+   *
+   * Kök sorun: `nextReady`/`rivalNextReady` yalnızca `beginNextRound` içinde
+   * sıfırlanıyordu. Bir turun el sıkışması tamamlandıktan sonra bu bayraklar
+   * `true` kalıyor ve BİR SONRAKİ turun sonuç ekranına taşınıyordu. O ekranda
+   * iki oyuncudan biri "next round"a bastığı anda host'un `offNextReady`
+   * işleyicisi `nextReadyRef.current === true` (bayat) gördüğü için turu
+   * ANINDA başlatıyordu — diğer oyuncu hiç onay vermeden. Bu da "biri next
+   * diyor bekliyor, diğerinde tur kendiliğinden başlıyor" hatasına yol açıyordu.
+   *
+   * Çözüm: Sonuç ekranı her YENİ tur için göründüğünde onay bayraklarını
+   * sıfırla. Böylece her turda el sıkışma baştan yapılır.
+   */
+  const readyRoundRef = useRef<number | null>(null)
+  useEffect(() => {
+    if (state.phase !== 'results') return
+    if (readyRoundRef.current === state.round) return
+    readyRoundRef.current = state.round
+    setNextReady(false)
+    setRivalNextReady(false)
+  }, [state.phase, state.round])
+
+  /**
    * "Next round" butonu: yalnızca YEREL onayı kaydeder ve rakibe bildirir.
    * Tur, iki taraf da onaylayınca başlar. Böylece bir oyuncu hazır olmadan
    * diğeri turu zorla başlatamaz.
