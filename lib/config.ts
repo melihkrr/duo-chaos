@@ -27,11 +27,15 @@ export const COLLECT_RADIUS = 9
 export const STEAL_RADIUS = 10
 export const PLAYER_HIT_R = 4.2
 /**
- * Rakip pozisyonunu yumuşatma katsayısı (0-1). Her karede hedefe doğru
- * bu oran kadar yaklaşılır. 1 = yumuşatma yok (anlık zıplama), düşük değer =
- * daha yumuşak ama daha gecikmeli. 0.35 akıcı ve tepkisel bir denge verir.
+ * Rakip pozisyonu için ÜSTEL yumuşatma oranı (1/saniye). Kare hızından
+ * bağımsız çalışır: her karede `alpha = 1 - exp(-k * dt)` kadar hedefe
+ * yaklaşılır. Böylece 30fps'te de 144fps'te de AYNI yakınsama süresi elde
+ * edilir (eski sabit `0.35` katsayısı kare hızına bağlıydı ve mobilde
+ * "laglı/titrek" görünüme yol açıyordu).
+ *
+ * Zaman sabiti ≈ 1/k saniye. k=12 → ~83ms; akıcı ama tepkisel.
  */
-export const REMOTE_SMOOTHING = 0.35
+export const REMOTE_SMOOTHING_K = 12
 /** Yumuşatma sırasında bu mesafeden (arena %) büyük farklar anında atlanır. */
 export const REMOTE_SNAP_DISTANCE = 18
 export const ARENA = { minX: 5, maxX: 95, minY: 7, maxY: 93 }

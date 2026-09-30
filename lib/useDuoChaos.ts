@@ -218,6 +218,34 @@ export const useDuoChaos = () => {
     (id) => room.broadcast('trail', { by: room.playerId, id }),
   )
 
+  // İZ (TRAIL) SENKRONU.
+  //
+  // Kök sorun: `offTrail` yalnızca rakip izini DEĞİŞTİRDİĞİNDE tetiklenir.
+  // Oyun başladığında (veya yeni turda) rakip kendi izini hiç "değiştirmez";
+  // bu yüzden karşı taraf rakibin izini hep varsayılan/seed değerle görür.
+  // Sonuç: "iki oyuncu birbirinin izini doğru renkte görmüyor".
+  //
+  // Çözüm: yerel iz seçimini bağlantı kurulduğunda, tur başladığında ve
+  // periyodik olarak yayınlarız. Böylece rakip her zaman OTORİTE iz değerini
+  // görür. `trailRef` ile en güncel seçimi effect'i yeniden kurmadan okuruz.
+  const trailRef = useRef(cosmetics.trail)
+  useEffect(() => {
+    trailRef.current = cosmetics.trail
+  }, [cosmetics.trail])
+
+  useEffect(() => {
+    if (!room.code) return
+    const publish = () => {
+      if (typeof document !== 'undefined' && document.hidden) return
+      room.broadcast('trail', { by: room.playerId, id: trailRef.current })
+    }
+    // Bağlanır bağlanmaz ve her tur başlangıcında yayınla.
+    publish()
+    // Periyodik heartbeat: tek bir paket kaybolsa bile yakınsar.
+    const id = window.setInterval(publish, 3_000)
+    return () => window.clearInterval(id)
+  }, [room, room.code, room.playerId, state.phase, state.round])
+
   const publishMove = useCallback(
     (x: number, y: number) => {
       // Pozisyonu her karede yayınla: rakip bu broadcast ile akıcı görünür.
@@ -358,22 +386,38 @@ export const useDuoChaos = () => {
     })
 
     const offCollect = room.on('collect', (payload) => {
-      const data = payload as { ids?: number[]; by?: string }
-      if (!data || data.by === room.playerId || !data.ids) return
+      const data = payload as { ids?: number[]; by?: string; respawnAt?: number }
+      if (!data || data.by === room.playerId || !data.ids || data.ids.length === 0) return
       const ids = new Set(data.ids)
       // Rakip topladığında da coin AYNI konumda, 3 sn sonra yeniden doğar.
       // `respawnAt` yazmazsak coin sonsuza dek toplanmış kalır ve bir daha
       // görünmez; bu da "coin kayboldu" hissi verir.
-      const respawnAt = Date.now() + COIN_RESPAWN_MS
-      setState((prev) => ({
-        ...prev,
-        coins: prev.coins.map((coin) =>
-          ids.has(coin.id) ? { ...coin, collectedBy: 'p2', respawnAt } : coin,
-        ),
-        players: prev.players.map((player, index) =>
-          index === 1 ? { ...player, coins: player.coins + ids.size } : player,
-        ),
-      }))
+      //
+      // ÖNEMLİ: `respawnAt`'i gönderen tarafın verdiği değerle (varsa) kurarız;
+      // böylece iki istemci AYNI anda canlandırır. Yoksa yerel saatten türetiriz.
+      const respawnAt =
+        typeof data.respawnAt === 'number' && data.respawnAt > 0
+          ? data.respawnAt
+          : Date.now() + COIN_RESPAWN_MS
+      setState((prev) => {
+        // Zaten toplanmış coinleri TEKRAR saymayız (idempotent). Aksi halde
+        // aynı `collect` paketi iki kez gelirse rakip skoru şişer.
+        let newlyCollected = 0
+        const coins = prev.coins.map((coin) => {
+          if (!ids.has(coin.id)) return coin
+          if (coin.collectedBy) return coin
+          newlyCollected += 1
+          return { ...coin, collectedBy: 'p2' as const, respawnAt }
+        })
+        if (newlyCollected === 0) return prev
+        return {
+          ...prev,
+          coins,
+          players: prev.players.map((player, index) =>
+            index === 1 ? { ...player, coins: player.coins + newlyCollected } : player,
+          ),
+        }
+      })
     })
 
     const offSteal = room.on('steal', (payload) => {
@@ -686,12 +730,27 @@ export const useDuoChaos = () => {
       const localCountdownEndsAt = toLocal(data.countdownEndsAt)
       setState((prev) => {
         const serverPhase = data.phase as Phase
-        // Faz yalnızca İLERİ gider: `home → lobby → countdown → battle →
-        // results → matchover`. Sunucu geriye dönük bir faz döndürürse
-        // (gecikmeli yanıt) yok sayarız; aksi halde oyun geriye zıplar.
+        // Faz geçişleri. Döngüsel bir akış vardır: bir tur bittiğinde
+        // `results`'a, yeni tur başladığında TEKRAR `countdown`'a döneriz.
+        // Bu yüzden düz bir "rank" karşılaştırması YETMEZ: `results` (rank 4)
+        // → `countdown` (rank 2) geçişi "geriye dönük" görünür ve misafir
+        // oyuncu sonsuza dek "Both ready — starting…" ekranında takılı kalır.
+        //
+        // Kök sorun buydu: host `duo_start_round` çağırınca sunucu fazı
+        // `countdown`'a çekiyor; ancak misafirin uzlaşma mantığı bunu
+        // reddediyordu. Çözüm: geçerli İLERİ geçişleri açıkça tanımlarız.
         const order: Phase[] = ['home', 'lobby', 'countdown', 'battle', 'results', 'matchover']
         const rank = (p: Phase) => order.indexOf(p)
-        const nextPhase = rank(serverPhase) > rank(prev.phase) ? serverPhase : prev.phase
+        const forward = (from: Phase, to: Phase) => {
+          if (from === to) return false
+          // Yeni tur: sonuç ekranından tekrar geri sayıma dönüş geçerlidir.
+          if (from === 'results' && to === 'countdown') return true
+          // Maç bitti → rövanş: `matchover` → `lobby`/`countdown` geçerlidir.
+          if (from === 'matchover' && (to === 'lobby' || to === 'countdown')) return true
+          // Aksi halde yalnızca ileri yönlü geçişler kabul edilir.
+          return rank(to) > rank(from)
+        }
+        const nextPhase = forward(prev.phase, serverPhase) ? serverPhase : prev.phase
         if (nextPhase === prev.phase && !data.winner) return prev
         return {
           ...prev,
@@ -713,6 +772,36 @@ export const useDuoChaos = () => {
       window.clearInterval(id)
     }
   }, [noteServerNow, room.code, room.playerId, room.token, setState, state.phase, toLocal])
+
+  // YENİ TUR SENKRONU (misafir tarafı).
+  //
+  // Host `duo_start_round` çağırdığında sunucu `round`'u artırır ve fazı
+  // `countdown`'a çeker. Host kendi tarafında `resetRound` çağırıp coin/görev
+  // düzenini yeniden tohumlar; ancak MİSAFİR bunu yapmaz — yalnızca faz
+  // uzlaşması ile `phase`'i ilerletir. Sonuç: misafir yeni turda ESKİ coin
+  // düzenini ve ESKİ görevleri görür (iki taraf farklı oyun oynar).
+  //
+  // Çözüm: sunucu `round` değeri yerel `round`'dan ileri geçtiğinde misafir de
+  // `resetRound` ile aynı seed'den coin/görev düzenini yeniden üretir. Seed
+  // oda koduna bağlı olduğu için iki taraf BİREBİR aynı düzeni görür.
+  const syncedRoundRef = useRef<number | null>(null)
+  useEffect(() => {
+    if (state.phase !== 'countdown' && state.phase !== 'battle') return
+    if (syncedRoundRef.current === state.round) return
+    // İlk senkronu atla: tur zaten `startGame`/`beginNextRound` ile kuruldu.
+    if (syncedRoundRef.current === null) {
+      syncedRoundRef.current = state.round
+      return
+    }
+    // Sunucu turu ilerletti → misafir de aynı seed'den yeniden tohumla.
+    if (state.round > syncedRoundRef.current) {
+      syncedRoundRef.current = state.round
+      resetRound(state.round, room.code ?? `round-${state.round}`)
+      scout.reset()
+      setNextReady(false)
+      setRivalNextReady(false)
+    }
+  }, [resetRound, room.code, scout, state.phase, state.round])
 
   // Skoru kalıcı hale getir. `duo_tick` çağrılmadığı için sunucu skoru
   // saklamaz; sayfa yenilendiğinde yerel skor sıfırlanıyordu. Burada skoru

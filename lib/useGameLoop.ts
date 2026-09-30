@@ -13,7 +13,7 @@ import {
   MOVE_SPEED,
   PHASE_TICK_MS,
   REMOTE_POS_TTL,
-  REMOTE_SMOOTHING,
+  REMOTE_SMOOTHING_K,
   REMOTE_SNAP_DISTANCE,
   STEAL_COOLDOWN_MS,
   STEAL_RADIUS,
@@ -102,6 +102,10 @@ export const useGameLoop = (deps: LoopDeps) => {
   // Rakip için yumuşatılmış (interpolasyonlu) konum. Broadcast hedefi ile
   // bu değer arasında her karede yumuşak geçiş yapılır.
   const remoteTarget = useRef<{ x: number; y: number } | null>(null)
+  // Rakibin son broadcast örneği (hız tahmini / dead-reckoning için).
+  const remoteSample = useRef<{ x: number; y: number; at: number } | null>(null)
+  // Rakibin tahmini hızı (arena %/s). Paketler arasında hedefi ileri taşır.
+  const remoteVel = useRef<{ x: number; y: number }>({ x: 0, y: 0 })
   // Yerel oyuncunun ANLIK konumu. React render'ını beklemeden her karede
   // güncellenir; böylece `state` bir kare geride kalsa bile hareket akıcı kalır
   // ("donma + birden ilerleme" sorununun kökü buydu: döngü, commit edilmemiş
@@ -232,6 +236,11 @@ export const useGameLoop = (deps: LoopDeps) => {
       // görünmesini engeller).
       livePos.current = { x: me.x, y: me.y }
       objectiveHold.current = 0
+      // Rakip interpolasyon durumunu sıfırla: yeni turda eski hız/örnek
+      // kalırsa rakip yanlış yöne "sürüklenir" (dead-reckoning artığı).
+      remoteTarget.current = null
+      remoteSample.current = null
+      remoteVel.current = { x: 0, y: 0 }
     }
 
     // --- Girdi: klavye + sanal joystick birleşir. ---
@@ -272,12 +281,26 @@ export const useGameLoop = (deps: LoopDeps) => {
     // DOM'a yazar; React render'ı beklemez → akıcı hareket.
     livePos.current = { x: nextX, y: nextY }
 
-    // --- Rakip interpolasyonu (yalnızca hedefe yaklaşırken yazarız). ---
+    // --- Rakip interpolasyonu (profesyonel, kare hızından bağımsız). ---
     //
     // Hedef önceliği: taze broadcast konumu (`remotePos`) > sunucu snapshot'ı
     // (`state.players[1]`). Broadcast 60Hz geldiği için asıl akıcılık kaynağı
     // odur; snapshot yalnızca broadcast kesildiğinde (yeniden bağlanma) devreye
-    // girer. Her iki durumda da state'e yalnızca interpolasyon sonucu yazılır.
+    // girer.
+    //
+    // NEDEN ESKİ YÖNTEM LAGLIYDI:
+    //   1. `remote.x += (goalX - remote.x) * 0.35` SABİT bir katsayı kullanıyordu;
+    //      kare hızı düşünce (mobil, arka plan sekmesi) yakınsama yavaşlıyor,
+    //      yükselince titriyordu. Kare hızından BAĞIMSIZ olmalı.
+    //   2. Hız (velocity) extrapolasyonu yoktu: rakip hep hedefin GERİSİNDE
+    //      kalıyordu (smoothing gecikmesi). Bu da "rakip laglı hareket ediyor"
+    //      hissinin ana kaynağıydı.
+    //
+    // ÇÖZÜM:
+    //   - Üstel yumuşatma katsayısını `dt` ile ölçekleriz:
+    //     `alpha = 1 - exp(-k * dt)` → her kare hızında AYNI yakınsama süresi.
+    //   - Son iki broadcast örneğinden hızı tahmin edip hedefi ileri taşırız
+    //     (dead-reckoning). Böylece rakip, paketler arasında da akıcı ilerler.
     const rivalTarget = state.players[1]
     if (rivalTarget) {
       const broadcast = remotePos.current?.get('rival') ?? remotePos.current?.get('p2')
@@ -288,18 +311,42 @@ export const useGameLoop = (deps: LoopDeps) => {
       if (!remote) {
         remoteTarget.current = { x: goalX, y: goalY }
       } else {
-        const dist = Math.hypot(remote.x - goalX, remote.y - goalY)
+        // --- Hız tahmini (dead-reckoning) ---
+        // Yeni bir broadcast örneği geldiyse hızı güncelle; aksi halde son
+        // bilinen hızı koru (paket gecikmesinde de akıcı kalsın).
+        const prevSample = remoteSample.current
+        if (fresh && broadcast && (!prevSample || broadcast.at !== prevSample.at)) {
+          const dtSample = prevSample ? Math.max(1, broadcast.at - prevSample.at) / 1000 : 0
+          if (prevSample && dtSample > 0) {
+            // Ani ışınlanmalarda (respawn) sahte hız üretmemek için sınırla.
+            const rawVx = (broadcast.x - prevSample.x) / dtSample
+            const rawVy = (broadcast.y - prevSample.y) / dtSample
+            const speed = Math.hypot(rawVx, rawVy)
+            const maxSpeed = MOVE_SPEED * 1.6
+            const scale = speed > maxSpeed ? maxSpeed / speed : 1
+            remoteVel.current = { x: rawVx * scale, y: rawVy * scale }
+          }
+          remoteSample.current = { x: broadcast.x, y: broadcast.y, at: broadcast.at }
+        }
+        // Hedefi hız ile ileri taşı (yalnızca taze veri varken).
+        const vel = fresh ? remoteVel.current : { x: 0, y: 0 }
+        const leadX = goalX + vel.x * dt
+        const leadY = goalY + vel.y * dt
+        const dist = Math.hypot(remote.x - leadX, remote.y - leadY)
         if (dist > REMOTE_SNAP_DISTANCE) {
           // Çok büyük fark: ışınlanma / yeniden bağlanma — anında hizala.
-          remote.x = goalX
-          remote.y = goalY
+          remote.x = leadX
+          remote.y = leadY
+          remoteVel.current = { x: 0, y: 0 }
         } else if (dist > REMOTE_SETTLE) {
-          remote.x += (goalX - remote.x) * REMOTE_SMOOTHING
-          remote.y += (goalY - remote.y) * REMOTE_SMOOTHING
+          // Kare hızından bağımsız üstel yumuşatma.
+          const alpha = 1 - Math.exp(-REMOTE_SMOOTHING_K * dt)
+          remote.x += (leadX - remote.x) * alpha
+          remote.y += (leadY - remote.y) * alpha
         } else if (dist > 0) {
           // Hedefe çok yakın: otur.
-          remote.x = goalX
-          remote.y = goalY
+          remote.x = leadX
+          remote.y = leadY
         }
       }
       // Rakip konumunu da doğrudan DOM'a yazarız (state'e değil) — böylece
@@ -462,7 +509,10 @@ export const useGameLoop = (deps: LoopDeps) => {
       publishMove(nextX, nextY)
     }
     if (collectedIds.length > 0) {
-      broadcast('collect', { ids: collectedIds, by: playerId })
+      // `respawnAt`'i de yayınlarız: rakip coinleri TAM AYNI anda canlandırsın.
+      // Aksi halde iki taraf farklı zamanlarda canlandırır ve "bende var, onda
+      // yok" uyumsuzluğu oluşur.
+      broadcast('collect', { ids: collectedIds, by: playerId, respawnAt: now + COIN_RESPAWN_MS })
       // Sunucuya TOPLANAN HER coini bildir. Önceden yalnızca ilk coin
       // (`collectedIds[0]`) gönderiliyordu; aynı karede birden fazla coin
       // toplandığında sunucu yalnızca birini işliyor ve skor/görev ilerlemesi
