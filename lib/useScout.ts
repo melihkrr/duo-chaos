@@ -29,10 +29,17 @@ export const useScout = (code: string | null, playerId: 'p1' | 'p2', token: stri
   const [pending, setPending] = useState(false)
   const pendingRef = useRef(false)
 
+  // Sayaç yalnızca aktif bir cooldown veya ipucu TTL'i varken çalışır.
+  // Boştayken (home/lobby) hiç render tetiklenmez.
+  const cooldownActive = usedAt > 0 && now - usedAt < SCOUT_COOLDOWN_MS
+  const hintActive = hint !== null && now - hint.at < SCOUT_HINT_TTL_MS
+  const ticking = cooldownActive || hintActive
+
   useEffect(() => {
+    if (!ticking) return
     const id = window.setInterval(() => setNow(Date.now()), 250)
     return () => window.clearInterval(id)
-  }, [])
+  }, [ticking])
 
   const cooldownLeft = Math.max(0, SCOUT_COOLDOWN_MS - (now - usedAt))
   const rawHintLeft = hint ? Math.max(0, SCOUT_HINT_TTL_MS - (now - hint.at)) : 0

@@ -202,7 +202,13 @@ export const useGameLoop = (deps: LoopDeps) => {
     }
   }, [])
 
+  // Ana döngü yalnızca aktif fazlarda (countdown/battle) çalışır.
+  // home/lobby/results'ta RAF tamamen durur — boşuna 60fps render yok.
+  const phase = deps.state.phase
+  const loopActive = phase === 'countdown' || phase === 'battle'
+
   useEffect(() => {
+    if (!loopActive) return
     let raf = 0
     let last = performance.now()
     const tick = (now: number) => {
@@ -213,7 +219,7 @@ export const useGameLoop = (deps: LoopDeps) => {
     }
     raf = window.requestAnimationFrame(tick)
     return () => window.cancelAnimationFrame(raf)
-  }, [step])
+  }, [step, loopActive])
 
   // Faz değişiminde ses.
   useEffect(() => {

@@ -30,10 +30,14 @@ export function Modal({ open, title, subtitle, onClose, children, footer }: Prop
   const focusFirst = useCallback(() => {
     const panel = panelRef.current
     if (!panel) return
-    const focusable = panel.querySelector<HTMLElement>(
-      'input, textarea, select, button, [href], [tabindex]:not([tabindex="-1"])',
-    )
-    focusable?.focus()
+    // Prefer an explicitly marked element (e.g. the code input), otherwise
+    // fall back to the first focusable node.
+    const target =
+      panel.querySelector<HTMLElement>('[data-autofocus]') ??
+      panel.querySelector<HTMLElement>(
+        'input, textarea, select, button, [href], [tabindex]:not([tabindex="-1"])',
+      )
+    target?.focus()
   }, [])
 
   // Escape to close + focus trap.

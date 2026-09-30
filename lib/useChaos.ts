@@ -27,10 +27,14 @@ export const useChaos = (): ChaosApi => {
   const [now, setNow] = useState(() => Date.now())
   const lastId = useRef<string | null>(null)
 
+  // Sayaç yalnızca canlı bir chaos olayı varken çalışır.
+  const ticking = event !== null && endsAt > 0 && now < endsAt
+
   useEffect(() => {
+    if (!ticking) return
     const id = window.setInterval(() => setNow(Date.now()), 250)
     return () => window.clearInterval(id)
-  }, [])
+  }, [ticking])
 
   const sync = useCallback((input: { id?: string; endsAt?: number }) => {
     const next = byId(input.id)

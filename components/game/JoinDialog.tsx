@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { Button } from '../ui/Button'
 import { Modal } from '../ui/Modal'
 
@@ -23,14 +23,8 @@ export function JoinDialog({ open, onClose, onJoin, busy }: Props) {
   const [touched, setTouched] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  // Focus the input when the dialog opens. State is reset by remounting the
-  // dialog (see the `key` in Home), so no setState-in-effect is needed.
-  useEffect(() => {
-    if (!open) return
-    const raf = window.requestAnimationFrame(() => inputRef.current?.focus())
-    return () => window.cancelAnimationFrame(raf)
-  }, [open])
-
+  // Focus is handled by <Modal> via the `data-autofocus` attribute below.
+  // State is reset by remounting the dialog (see the `key` in Home).
   const normalized = code.trim().toUpperCase()
   const valid = CODE_PATTERN.test(normalized)
   const showError = touched && normalized.length > 0 && !valid
@@ -72,6 +66,7 @@ export function JoinDialog({ open, onClose, onJoin, busy }: Props) {
           <span className="field-label">Room code</span>
           <input
             ref={inputRef}
+            data-autofocus
             className={['code-input', showError ? 'invalid' : ''].filter(Boolean).join(' ')}
             value={code}
             onChange={(event) => {

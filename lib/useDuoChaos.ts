@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { BATTLE_MS, COUNTDOWN_MS, MATCH_ROUNDS } from './config'
+import { BATTLE_MS, COUNTDOWN_MS, MATCH_ROUNDS, POLL_MS } from './config'
 import { playSound, unlockAudio } from './sound'
 import { useChaos } from './useChaos'
 import { useCosmetics } from './useCosmetics'
@@ -43,10 +43,12 @@ export const useDuoChaos = () => {
   const { state, setState, setPhase, resetRound, resetMatch, updatePlayer } = game
 
   // Saat tiki (geri sayım / süre göstergesi).
+  // Yalnızca aktif fazlarda çalışır; home/lobby/results'ta gereksiz render yok.
   useEffect(() => {
+    if (state.phase !== 'countdown' && state.phase !== 'battle') return
     const id = window.setInterval(() => setNow(Date.now()), 200)
     return () => window.clearInterval(id)
-  }, [])
+  }, [state.phase])
 
   const cosmetics = useCosmetics(
     { emote: progress.progress.emote, trail: progress.progress.trail },
@@ -176,8 +178,15 @@ export const useDuoChaos = () => {
   }, [cosmetics, room, setState])
 
   // Sunucu snapshot'ını periyodik çek.
+  //
+  // Maliyet optimizasyonu: yalnızca aktif oyun fazlarında (countdown/battle)
+  // ve sekme görünürken çalışır. Lobby/home/results fazlarında hiç istek
+  // atılmaz — bu fazlardaki değişimler zaten realtime broadcast ile gelir.
+  // Aralık `POLL_MS` haritasından seçilir (battle'da 1s, countdown'da 0.5s).
   useEffect(() => {
     if (!room.code) return
+    const active = state.phase === 'countdown' || state.phase === 'battle'
+    if (!active) return
     let cancelled = false
     const pull = async () => {
       const data = await room.call<{
@@ -218,13 +227,37 @@ export const useDuoChaos = () => {
         })
       }
     }
-    const interval = window.setInterval(() => void pull(), 1200)
+
+    const intervalMs = state.phase === 'countdown' ? POLL_MS.countdown : POLL_MS.battle
+    let timer = 0
+
+    const schedule = () => {
+      timer = window.setTimeout(async () => {
+        if (cancelled) return
+        // Sekme arka plandaysa istek atma; görünür olunca devam et.
+        if (typeof document !== 'undefined' && document.hidden) {
+          schedule()
+          return
+        }
+        await pull()
+        schedule()
+      }, intervalMs)
+    }
+
     void pull()
+    schedule()
+
+    const onVisibility = () => {
+      if (!document.hidden) void pull()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+
     return () => {
       cancelled = true
-      window.clearInterval(interval)
+      window.clearTimeout(timer)
+      document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [chaos, room, scout, setState])
+  }, [chaos, room, scout, setState, state.phase])
 
   // Maç sonunda XP ver.
   const awarded = useRef(false)
