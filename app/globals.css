@@ -1796,3 +1796,68 @@ h3 {
     transform: none;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Player name entry (home hero + lobby seat)
+   --------------------------------------------------------------------------- */
+.name-field {
+  width: min(320px, 100%);
+  margin: 0 auto 18px;
+  text-align: left;
+}
+
+.name-input {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: var(--r-md);
+  border: 2px solid var(--line-strong);
+  background: var(--paper-2);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  transition: border-color 140ms var(--ease-soft), box-shadow 140ms var(--ease-soft);
+}
+
+.name-input::placeholder {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.name-input:focus {
+  outline: none;
+  border-color: var(--pink);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--pink) 24%, transparent);
+}
+
+.name-input-sm {
+  padding: 6px 10px;
+  font-size: 0.95rem;
+  border-radius: var(--r-sm);
+}
+
+.seat-edit {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-pill);
+  border: 2px solid var(--line);
+  background: var(--paper-2);
+  color: var(--ink);
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: transform 140ms var(--ease-bounce), background 140ms var(--ease-soft);
+}
+
+.seat-edit:hover {
+  background: var(--pink-soft);
+  transform: scale(1.08);
+}
+
+.seat-edit:focus-visible {
+  outline: 3px solid var(--pink);
+  outline-offset: 2px;
+}

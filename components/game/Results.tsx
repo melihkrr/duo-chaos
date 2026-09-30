@@ -12,11 +12,10 @@ type Props = {
   isHost: boolean
   onNextRound: () => void
   onRematch: () => void
-  onLeave: () => void
   busy?: boolean
 }
 
-export function Results({ state, progress, isHost, onNextRound, onRematch, onLeave, busy }: Props) {
+export function Results({ state, progress, isHost, onNextRound, onRematch, busy }: Props) {
   const isMatchOver = state.phase === 'matchover'
   const winner = state.winner
   const meWon = winner === 'p1'
@@ -94,9 +93,6 @@ export function Results({ state, progress, isHost, onNextRound, onRematch, onLea
             Next round
           </Button>
         )}
-        <Button variant="ghost" onClick={onLeave}>
-          Leave
-        </Button>
       </div>
     </Panel>
   )

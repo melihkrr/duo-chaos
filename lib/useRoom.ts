@@ -9,12 +9,16 @@ export type RoomApi = {
   code: string | null
   playerId: 'p1' | 'p2'
   token: string | null
+  /** Yerel oyuncunun görünen adı. */
+  name: string
   status: RoomStatus
   opponentPresent: boolean
   /** Odaya bağlanır ve realtime kanalı açar. */
-  connect: (code: string, playerId: 'p1' | 'p2', token?: string) => Promise<void>
-  /** Bağlantıyı kapatır. */
+  connect: (code: string, playerId: 'p1' | 'p2', token?: string, name?: string) => Promise<void>
+  /** Bağlantıyı kapatır ve oda durumunu temizler. */
   disconnect: () => Promise<void>
+  /** Yerel oyuncunun adını değiştirir ve rakiplere yayınlar. */
+  setName: (name: string) => void
   /** Broadcast olayı yayınlar. */
   broadcast: (event: string, payload: unknown) => void
   /** Sunucu RPC'sini çağırır (kod enjekte edilir). */
@@ -24,6 +28,25 @@ export type RoomApi = {
 }
 
 const TOKEN_KEY = 'duo-chaos:token'
+const NAME_KEY = 'duo-chaos:name'
+
+export const saveName = (name: string) => {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(NAME_KEY, name)
+  } catch {
+    /* yoksay */
+  }
+}
+
+export const readName = (): string => {
+  if (typeof window === 'undefined') return ''
+  try {
+    return window.localStorage.getItem(NAME_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
 
 export const saveToken = (code: string, token: string) => {
   if (typeof window === 'undefined') return
@@ -51,16 +74,22 @@ export const useRoom = (): RoomApi => {
   const [code, setCode] = useState<string | null>(null)
   const [playerId, setPlayerId] = useState<'p1' | 'p2'>('p1')
   const [token, setToken] = useState<string | null>(null)
+  const [name, setNameState] = useState<string>(() => readName())
   const [status, setStatus] = useState<RoomStatus>('idle')
   const [opponentPresent, setOpponentPresent] = useState(false)
 
   const channelRef = useRef<ReturnType<NonNullable<ReturnType<typeof getSupabase>>['channel']> | null>(null)
   const handlers = useRef<Map<string, Set<(payload: unknown) => void>>>(new Map())
   const codeRef = useRef<string | null>(null)
+  const nameRef = useRef<string>(name)
 
   useEffect(() => {
     codeRef.current = code
   }, [code])
+
+  useEffect(() => {
+    nameRef.current = name
+  }, [name])
 
   const disconnect = useCallback(async () => {
     const supabase = getSupabase()
@@ -69,16 +98,26 @@ export const useRoom = (): RoomApi => {
     }
     channelRef.current = null
     handlers.current.clear()
+    // Oda durumunu tamamen temizle; aksi halde TopBar/poll eski odaya bağlı kalır.
+    codeRef.current = null
+    setCode(null)
+    setToken(null)
     setOpponentPresent(false)
     setStatus('idle')
   }, [])
 
   const connect = useCallback(
-    async (nextCode: string, nextPlayer: 'p1' | 'p2', nextToken?: string) => {
+    async (nextCode: string, nextPlayer: 'p1' | 'p2', nextToken?: string, nextName?: string) => {
       const normalized = nextCode.trim().toUpperCase()
+      const resolvedName = (nextName ?? nameRef.current ?? '').trim()
       setCode(normalized)
       setPlayerId(nextPlayer)
       setToken(nextToken ?? null)
+      if (resolvedName) {
+        setNameState(resolvedName)
+        nameRef.current = resolvedName
+        saveName(resolvedName)
+      }
       codeRef.current = normalized
 
       const supabase = getSupabase()
@@ -131,6 +170,22 @@ export const useRoom = (): RoomApi => {
     void channel.send({ type: 'broadcast', event, payload })
   }, [])
 
+  const setName = useCallback(
+    (next: string) => {
+      const trimmed = next.trim().slice(0, 16)
+      if (!trimmed) return
+      setNameState(trimmed)
+      nameRef.current = trimmed
+      saveName(trimmed)
+      // Rakibe yeni adı bildir (kanal varsa).
+      const channel = channelRef.current
+      if (channel) {
+        void channel.send({ type: 'broadcast', event: 'name', payload: { by: playerId, name: trimmed } })
+      }
+    },
+    [playerId],
+  )
+
   const call = useCallback(
     async <T = unknown>(fn: string, args?: Record<string, unknown>): Promise<T | null> => {
       if (!hasSupabase) return null
@@ -156,5 +211,18 @@ export const useRoom = (): RoomApi => {
     [disconnect],
   )
 
-  return { code, playerId, token, status, opponentPresent, connect, disconnect, broadcast, call, on }
+  return {
+    code,
+    playerId,
+    token,
+    name,
+    status,
+    opponentPresent,
+    connect,
+    disconnect,
+    setName,
+    broadcast,
+    call,
+    on,
+  }
 }

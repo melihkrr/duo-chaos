@@ -24,6 +24,18 @@ const mapPlayerId = (rawId: string, meId: string): string => {
   return rawId === 'p2' ? 'p1' : 'p2'
 }
 
+/** `duo_public_state` RPC'sinin döndürdüğü anlık görüntü. */
+type PublicSnapshot = {
+  phase?: Phase
+  round?: number
+  endsAt?: number
+  countdownEndsAt?: number
+  winner?: string
+  chaos?: { id?: string; endsAt?: number }
+  players?: Array<Partial<Player> & { id?: string }>
+  coins?: Coin[]
+}
+
 /**
  * DUO CHAOS'un tüm parçalarını birleştiren orkestratör.
  * Sayfa bileşeni sadece bunu tüketir.
@@ -169,11 +181,26 @@ export const useDuoChaos = () => {
       }))
     })
 
+    // Rakip adını değiştirdiğinde anında yansıt.
+    const offName = room.on('name', (payload) => {
+      const data = payload as { by?: string; name?: string }
+      if (!data || data.by === room.playerId || !data.name) return
+      const nextName = data.name.trim().slice(0, 16)
+      if (!nextName) return
+      setState((prev) => ({
+        ...prev,
+        players: prev.players.map((player, index) =>
+          index === 1 ? { ...player, name: nextName } : player,
+        ),
+      }))
+    })
+
     return () => {
       offMove()
       offCollect()
       offSteal()
       offEmote()
+      offName()
     }
   }, [cosmetics, room, setState])
 
@@ -189,22 +216,21 @@ export const useDuoChaos = () => {
     if (!active) return
     let cancelled = false
     const pull = async () => {
-      const data = await room.call<{
-        phase?: Phase
-        round?: number
-        endsAt?: number
-        countdownEndsAt?: number
-        winner?: string
-        chaos?: { id?: string; endsAt?: number }
-        players?: Array<Partial<Player> & { id?: string }>
-        coins?: Coin[]
-      }>('duo_public_state', { p_token: room.token ?? room.playerId })
+      let data: PublicSnapshot | null = null
+      try {
+        data = await room.call<PublicSnapshot>('duo_public_state', { p_token: room.token ?? room.playerId })
+      } catch {
+        // Oda silinmiş olabilir (rakip çıktı / leave). Sessizce dur; UI'yi bozma.
+        return
+      }
       if (cancelled || !data) return
       setState((prev) => {
-        const players = prev.players.map((player, index) => {
+        const players = prev.players.map((player) => {
           const server = data.players?.find((item) => mapPlayerId(String(item.id), room.playerId) === player.id)
           if (!server) return player
-          return { ...player, ...server, id: player.id, name: player.name } as Player
+          // Sunucudan gelen adı koru; boşsa mevcut adı bırak.
+          const serverName = typeof server.name === 'string' && server.name.trim() ? server.name : player.name
+          return { ...player, ...server, id: player.id, name: serverName } as Player
         })
         return {
           ...prev,
@@ -273,40 +299,50 @@ export const useDuoChaos = () => {
     if (state.phase !== 'matchover') awarded.current = false
   }, [state.phase])
 
-  const createRoom = useCallback(async () => {
-    setBusy(true)
-    setError(null)
-    unlockAudio()
-    try {
-      const code = makeCode()
-      const data = await room.call<{ token?: string }>('duo_create_room', { p_code: code, p_token: `t-${code}` })
-      const token = data?.token ?? `t-${code}`
-      saveToken(code, token)
-      await room.connect(code, 'p1', token)
-      resetMatch()
-      setPhase('lobby')
-      playSound('join')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not create room')
-    } finally {
-      setBusy(false)
-    }
-  }, [resetMatch, room, setPhase])
+  const createRoom = useCallback(
+    async (name?: string) => {
+      setBusy(true)
+      setError(null)
+      unlockAudio()
+      try {
+        const code = makeCode()
+        const displayName = (name ?? room.name ?? '').trim()
+        const data = await room.call<{ token?: string; name?: string }>('duo_create_room', {
+          p_code: code,
+          p_token: `t-${code}`,
+          p_name: displayName || null,
+        })
+        const token = data?.token ?? `t-${code}`
+        saveToken(code, token)
+        await room.connect(code, 'p1', token, data?.name ?? displayName)
+        resetMatch()
+        setPhase('lobby')
+        playSound('join')
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Could not create room')
+      } finally {
+        setBusy(false)
+      }
+    },
+    [resetMatch, room, setPhase],
+  )
 
   const joinRoom = useCallback(
-    async (code: string) => {
+    async (code: string, name?: string) => {
       setBusy(true)
       setError(null)
       unlockAudio()
       const normalized = code.trim().toUpperCase()
       try {
-        const data = await room.call<{ token?: string }>('duo_join_room', {
+        const displayName = (name ?? room.name ?? '').trim()
+        const data = await room.call<{ token?: string; name?: string }>('duo_join_room', {
           p_code: normalized,
           p_token: `t-${normalized}`,
+          p_name: displayName || null,
         })
         const token = data?.token ?? `t-${normalized}`
         saveToken(normalized, token)
-        await room.connect(normalized, 'p2', token)
+        await room.connect(normalized, 'p2', token, data?.name ?? displayName)
         resetMatch()
         setPhase('lobby')
         playSound('join')
@@ -367,11 +403,32 @@ export const useDuoChaos = () => {
   }, [resetMatch, room, scout, setPhase])
 
   const leaveGame = useCallback(async () => {
-    await room.call('duo_leave', { p_token: room.token ?? room.playerId })
+    // Önce sunucudan ayrılmayı dene (best-effort). Hata olsa bile yerel
+    // durumu mutlaka temizle, aksi halde kullanıcı odada takılı kalır.
+    try {
+      await room.call('duo_leave', { p_token: room.token ?? room.playerId })
+    } catch {
+      /* yoksay — yerel çıkış yine de gerçekleşmeli */
+    }
     await room.disconnect()
     resetMatch()
     setPhase('home')
   }, [resetMatch, room, setPhase])
+
+  const setName = useCallback(
+    (next: string) => {
+      const trimmed = next.trim().slice(0, 16)
+      if (!trimmed) return
+      room.setName(trimmed)
+      // Yerel oyuncu (index 0) adını hemen güncelle.
+      updatePlayer('p1', { name: trimmed })
+      // Sunucuya da yaz (best-effort).
+      if (room.code) {
+        void room.call('duo_set_name', { p_token: room.token ?? room.playerId, p_name: trimmed })
+      }
+    },
+    [room, updatePlayer],
+  )
 
   const copyInvite = useCallback(async () => {
     if (!room.code) return
@@ -406,6 +463,7 @@ export const useDuoChaos = () => {
     startNextRound,
     rematch,
     leaveGame,
+    setName,
     copyInvite,
     triggerEmote: () => cosmetics.triggerEmote(),
   }

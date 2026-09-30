@@ -34,10 +34,11 @@ export default function Page() {
       {state.phase === 'home' && (
         <Home
           progress={progress}
-          onCreate={() => void game.createRoom()}
-          onJoin={(code) => void game.joinRoom(code)}
+          onCreate={(name) => void game.createRoom(name)}
+          onJoin={(code, name) => void game.joinRoom(code, name)}
           busy={game.busy}
           error={game.error}
+          initialName={room.name}
         />
       )}
 
@@ -49,7 +50,7 @@ export default function Page() {
           opponentPresent={room.opponentPresent}
           onCopy={() => void game.copyInvite()}
           onStart={() => void game.startGame()}
-          onLeave={() => void game.leaveGame()}
+          onRename={game.setName}
           busy={game.busy}
         />
       )}
@@ -76,7 +77,6 @@ export default function Page() {
           isHost={isHost}
           onNextRound={() => void game.startNextRound()}
           onRematch={() => void game.rematch()}
-          onLeave={() => void game.leaveGame()}
           busy={game.busy}
         />
       )}
