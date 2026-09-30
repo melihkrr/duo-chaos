@@ -261,6 +261,19 @@ export const useDuoChaos = () => {
   // kurulumunda bir kez bağlanır. Güncel değerleri ref'lerde tutarız.
   const nextReadyRef = useRef(false)
   const beginNextRoundRef = useRef<(() => Promise<void>) | null>(null)
+  // Güncel tur numarası. `next-ready` el sıkışmasını TURA bağlamak için
+  // realtime işleyicisinden okunur (işleyici effect kurulumunda bir kez
+  // bağlandığı için `state.round`'a doğrudan erişemez).
+  const roundRef = useRef(1)
+  // Sunucudan gelen EN SON yerel-saat deadline'ları. Misafir yeni turda
+  // `resetRound` çağırdığında bu değerler `0`'lanır (resetRound `endsAt` ve
+  // `countdownEndsAt`'i sıfırlar). Bu yüzden resetten HEMEN sonra sunucu
+  // deadline'larını geri yazarız; aksi halde misafirin geri sayımı silinir ve
+  // tur başlamaz ("birinde 3-2-1 sayılırken diğerinde sayılmadan başlıyor").
+  const serverDeadlineRef = useRef<{ countdownEndsAt: number; endsAt: number }>({
+    countdownEndsAt: 0,
+    endsAt: 0,
+  })
   const noteServerNow = useCallback((serverNow?: number) => {
     if (typeof serverNow === 'number' && serverNow > 0) {
       serverOffsetRef.current = serverNow - Date.now()
@@ -482,7 +495,14 @@ export const useDuoChaos = () => {
       const data = payload as { by?: string; x?: number; y?: number }
       if (!data || data.by === room.playerId) return
       if (typeof data.x !== 'number' || typeof data.y !== 'number') return
-      remotePos.current.set(data.by ?? 'rival', { x: data.x, y: data.y, at: Date.now() })
+      // Gönderenin SLOTU ile anahtarla (`p1`/`p2`). Ayrıca kanonik `'rival'`
+      // anahtarına da yazarız; böylece hem slot bazlı hem de eski `'rival'`
+      // bazlı okuyucular aynı taze konumu görür. Bu, "rakip hareketi bende
+      // görünmüyor" hatasının kalıcı çözümüdür.
+      const at = Date.now()
+      const slot = data.by ?? 'rival'
+      remotePos.current.set(slot, { x: data.x, y: data.y, at })
+      remotePos.current.set('rival', { x: data.x, y: data.y, at })
     })
 
     const offCollect = room.on('collect', (payload) => {
@@ -587,8 +607,16 @@ export const useDuoChaos = () => {
     // başlar. Bu, "next round iki oyuncunun da onayıyla başlamalı" isteğini
     // karşılar: host tek başına turu başlatamaz.
     const offNextReady = room.on('next-ready', (payload) => {
-      const data = payload as { by?: string }
+      const data = payload as { by?: string; round?: number }
       if (!data || data.by === room.playerId) return
+      // ÖNEMLİ: Onayı TUR NUMARASINA bağlarız. Eski kod yalnızca `by` alanına
+      // bakıyordu; önceki turdan GECİKMİŞ bir `next-ready` paketi (veya
+      // heartbeat) yeni turun sonuç ekranında `rivalNextReady`'yi yeniden
+      // `true` yapıyor ve host, rakip hiç onay vermeden turu başlatıyordu
+      // ("bir oyuncu next round demeden tur başladı" hatası). Artık paketin
+      // `round` alanı yerel tur ile eşleşmiyorsa YOK SAYARIZ.
+      const currentRound = roundRef.current
+      if (typeof data.round === 'number' && data.round !== currentRound) return
       setRivalNextReady(true)
       // Host, rakibin onayını alınca ve kendisi de onaylamışsa turu başlatır.
       // (Effect yerine olay işleyicisinde başlatırız; lint kuralı gereği.)
@@ -682,6 +710,10 @@ export const useDuoChaos = () => {
       noteServerNow(data.serverNow)
       const localEndsAt = toLocal(data.endsAt)
       const localCountdownEndsAt = toLocal(data.countdownEndsAt)
+      // En son sunucu deadline'larını sakla: misafir yeni turda `resetRound`
+      // çağırınca bu değerler sıfırlanır; resetten sonra geri yazarız.
+      if (localCountdownEndsAt > 0) serverDeadlineRef.current.countdownEndsAt = localCountdownEndsAt
+      if (localEndsAt > 0) serverDeadlineRef.current.endsAt = localEndsAt
       setState((prev) => {
         const players = prev.players.map((player) => {
           const server = data.players?.find((item) => mapPlayerId(String(item.id), myId) === player.id)
@@ -734,7 +766,13 @@ export const useDuoChaos = () => {
             // Rakip konumu: taze bir `move` broadcast'i varsa sunucunun
             // gecikmeli x/y'si ile ezme; broadcast yoksa sunucu değeri
             // otoritedir (yeniden bağlanma / ışınlanma).
-            const remote = remotePos.current.get('rival') ?? remotePos.current.get('p2')
+            //
+            // ÖNEMLİ: `move` broadcast'i gönderenin SLOTU ile anahtarlanır.
+            // Yerel oyuncu `p2` ise rakip `p1`'dir; eski kod yalnızca `'rival'`
+            // veya `'p2'` aradığı için `p1` anahtarını bulamıyordu. Bu blok
+            // yalnızca rakip (`p2`) için çalıştığından rakibin slotu `p2`'dir;
+            // yine de `'rival'` geriye dönük anahtarını da deneriz.
+            const remote = remotePos.current.get('p2') ?? remotePos.current.get('rival')
             if (remote && Date.now() - remote.at < REMOTE_POS_TTL) {
               merged.x = player.x
               merged.y = player.y
@@ -945,8 +983,24 @@ export const useDuoChaos = () => {
       scout.reset()
       setNextReady(false)
       setRivalNextReady(false)
+      // Yeni turda rakibin ESKİ broadcast konumunu bırak. Aksi halde rakip
+      // henüz hareket etmemişse eski konumda "asılı" kalır ve iki oyuncu aynı
+      // noktada başlıyormuş gibi görünür. Sunucu spawn konumu devralır.
+      remotePos.current.clear()
+      // ÖNEMLİ: `resetRound` `countdownEndsAt`/`endsAt`'i sıfırlar. Misafirin
+      // geri sayımı silinmesin diye sunucudan gelen EN SON deadline'ları
+      // hemen geri yazarız. Aksi halde misafir "3-2-1" görmeden ya da geç
+      // başlıyordu. `setState` ile tek seferde uygularız (yarış yok).
+      const { countdownEndsAt, endsAt } = serverDeadlineRef.current
+      if (countdownEndsAt > 0 || endsAt > 0) {
+        setState((prev) => ({
+          ...prev,
+          countdownEndsAt: countdownEndsAt > 0 ? countdownEndsAt : prev.countdownEndsAt,
+          endsAt: endsAt > 0 ? endsAt : prev.endsAt,
+        }))
+      }
     }
-  }, [resetRound, room.code, scout, state.phase, state.round])
+  }, [resetRound, room.code, scout, setState, state.phase, state.round])
 
   // Skoru kalıcı hale getir. `duo_tick` çağrılmadığı için sunucu skoru
   // saklamaz; sayfa yenilendiğinde yerel skor sıfırlanıyordu. Burada skoru
@@ -1195,9 +1249,12 @@ export const useDuoChaos = () => {
       }
       resetRound(1, roundSeedFor(room.code, 1))
       scout.reset()
+      // Yeni maçta rakibin eski broadcast konumunu bırak.
+      remotePos.current.clear()
       // Sunucu deadline'larını yerel saate çevir (saat farkı düzeltmesi).
       noteServerNow(res?.serverNow)
       const localCountdown = toLocal(res?.countdownEndsAt)
+      if (localCountdown > 0) serverDeadlineRef.current.countdownEndsAt = localCountdown
       setPhase('countdown', {
         countdownEndsAt: localCountdown > 0 ? localCountdown : Date.now() + COUNTDOWN_MS,
       })
@@ -1224,6 +1281,11 @@ export const useDuoChaos = () => {
       scout.reset()
       noteServerNow(res?.serverNow)
       const localCountdown = toLocal(res?.countdownEndsAt)
+      // Yeni turda rakibin eski broadcast konumunu bırak (iki oyuncu aynı
+      // noktada başlamasın).
+      remotePos.current.clear()
+      // Sunucu deadline'ını sakla; misafir tarafı da aynı değeri kullanır.
+      if (localCountdown > 0) serverDeadlineRef.current.countdownEndsAt = localCountdown
       // Yeni tur başlarken onay bayraklarını sıfırla; bir sonraki sonuç
       // ekranı temiz başlasın.
       setNextReady(false)
@@ -1245,6 +1307,12 @@ export const useDuoChaos = () => {
   useEffect(() => {
     nextReadyRef.current = nextReady
   }, [nextReady])
+
+  // Güncel tur numarasını ref'e yaz; `offNextReady` işleyicisi onay paketini
+  // bu değerle doğrular (gecikmiş/eski tur paketlerini yok sayar).
+  useEffect(() => {
+    roundRef.current = state.round
+  }, [state.round])
 
   /**
    * YENİ TUR ONAY BAYRAKLARINI SIFIRLA.
@@ -1281,12 +1349,15 @@ export const useDuoChaos = () => {
    */
   const approveNextRound = useCallback(() => {
     setNextReady(true)
-    room.broadcast('next-ready', { by: room.playerId })
+    // Onayı TURA bağlarız: rakip, paketin `round` alanı kendi turuyla
+    // eşleşmezse yok sayar. Böylece önceki turdan gecikmiş bir onay yeni turu
+    // erken başlatamaz.
+    room.broadcast('next-ready', { by: room.playerId, round: state.round })
     // Rakip zaten onaylamışsa ve host bizsek turu hemen başlat.
     if (rivalNextReady && room.playerId === 'p1') {
       void beginNextRound()
     }
-  }, [beginNextRound, rivalNextReady, room])
+  }, [beginNextRound, rivalNextReady, room, state.round])
 
   // NEXT-READY HEARTBEAT: Yerel oyuncu onayladıysa ama rakip hâlâ onaylamadıysa
   // onayımızı periyodik olarak yeniden yayınlarız. Tek bir `next-ready` paketi
@@ -1297,10 +1368,10 @@ export const useDuoChaos = () => {
     if (state.phase !== 'results') return
     const id = window.setInterval(() => {
       if (typeof document !== 'undefined' && document.hidden) return
-      room.broadcast('next-ready', { by: room.playerId })
+      room.broadcast('next-ready', { by: room.playerId, round: state.round })
     }, 1_500)
     return () => window.clearInterval(id)
-  }, [nextReady, rivalNextReady, room, state.phase])
+  }, [nextReady, rivalNextReady, room, state.phase, state.round])
 
   /**
    * RÖVANŞ (rematch) — İKİ OYUNCUNUN DA ONAYI GEREKİR.

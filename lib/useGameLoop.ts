@@ -303,7 +303,16 @@ export const useGameLoop = (deps: LoopDeps) => {
     //     (dead-reckoning). Böylece rakip, paketler arasında da akıcı ilerler.
     const rivalTarget = state.players[1]
     if (rivalTarget) {
-      const broadcast = remotePos.current?.get('rival') ?? remotePos.current?.get('p2')
+      // ÖNEMLİ: `move` broadcast'i gönderenin SLOTU ile anahtarlanır (`p1`/`p2`).
+      // Yerel oyuncu `p2` olduğunda rakip `p1`'dir; eski kod yalnızca `'rival'`
+      // veya `'p2'` aradığı için `p1` anahtarını ASLA bulamıyordu → "rakip
+      // hareketi bende hiç görünmüyor" hatası. Artık rakibin GERÇEK slotuyla
+      // ararız; `'rival'` anahtarı yalnızca geriye dönük uyumluluk içindir.
+      const rivalSlot = rivalTarget.id
+      const broadcast =
+        remotePos.current?.get(rivalSlot) ??
+        remotePos.current?.get('rival') ??
+        remotePos.current?.get(rivalSlot === 'p1' ? 'p2' : 'p1')
       const fresh = broadcast && now - broadcast.at < REMOTE_POS_TTL
       const goalX = fresh ? broadcast.x : rivalTarget.x
       const goalY = fresh ? broadcast.y : rivalTarget.y

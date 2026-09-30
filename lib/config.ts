@@ -16,8 +16,16 @@ export const RECONCILE_MS = 1000
 export const HEARTBEAT_MS = 400
 export const PHASE_TICK_MS = 80
 export const CLOCK_TICK_MS = 150
-/** Peer broadcast pozisyonunun sunucu snapshot'ını ezme süresi */
-export const REMOTE_POS_TTL = 5000
+/**
+ * Peer broadcast pozisyonunun sunucu snapshot'ını ezme süresi.
+ *
+ * ÖNEMLİ: Bu değer eskiden 5000 ms idi. Rakibin `move` yayını durduğunda
+ * (sekme arka plana düştü, paket kaybı) istemci 5 SANİYE boyunca donmuş eski
+ * konumu "taze" sayıp kullanıyordu → "rakip 5 sn sonra hareket ediyor" hatası.
+ * 600 ms, 60Hz yayında ~36 paketlik bir toleranstır; bu süre dolunca sunucu
+ * snapshot'ı (1 sn'de bir) devralır ve rakip doğru konuma oturur.
+ */
+export const REMOTE_POS_TTL = 600
 export const POLL_MS = { lobby: 700, countdown: 500, battle: RECONCILE_MS, other: 1500 }
 
 // --- Hareket / çarpışma ---
