@@ -232,7 +232,8 @@ export const useGameLoop = (deps: LoopDeps) => {
           ),
         }))
         broadcast('collect', { ids: [...ids], by: 'p1' })
-        void call('duo_collect', { p_token: token, p_coin_id: [...ids][0] })
+        // Sunucu yazımı best-effort: tur sıfırlanırken yarışıp hata fırlatabilir.
+        void call('duo_collect', { p_token: token, p_coin_id: [...ids][0] }).catch(() => undefined)
       }
     }
 
@@ -258,7 +259,7 @@ export const useGameLoop = (deps: LoopDeps) => {
         }),
       }))
       broadcast('steal', { by: 'p1' })
-      void call('duo_steal', { p_token: token })
+      void call('duo_steal', { p_token: token }).catch(() => undefined)
     }
 
     // Görev tamamlama + yeniden doğma (tek bir setState'te toplanır).

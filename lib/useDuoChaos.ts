@@ -128,8 +128,15 @@ export const useDuoChaos = () => {
 
   const publishMove = useCallback(
     (x: number, y: number) => {
+      // Pozisyonu her karede yayınla: rakip bu broadcast ile akıcı görünür.
       room.broadcast('move', { by: room.playerId, x, y })
-      void room.call('duo_move', { p_token: room.token ?? room.playerId, p_x: x, p_y: y })
+      // Sunucuya yazma "best-effort"tur. 60Hz'de yayın yaptığımız için
+      // `duo_start_round` oyuncu satırını sıfırlarken bir `duo_move` yarışıp
+      // `not_a_player` fırlatabilir; bu zararsızdır (sonraki kare başarılı olur).
+      // Yakalanmazsa unhandled rejection → `pageerror` olur, bu yüzden yutarız.
+      void room
+        .call('duo_move', { p_token: room.token ?? room.playerId, p_x: x, p_y: y })
+        .catch(() => undefined)
     },
     [room],
   )
