@@ -105,7 +105,10 @@ type PublicSnapshot = {
   endsAt?: number
   countdownEndsAt?: number
   winner?: string
-  chaos?: { id?: string; endsAt?: number }
+  /** Sunucu chaos olayını `chaosEvent` adıyla döndürür (id/name/description/boost). */
+  chaosEvent?: { id?: string; name?: string; description?: string; boost?: string } | null
+  /** Chaos olayının bitiş anı (sunucu epoch ms). */
+  chaosEventEndsAt?: number
   players?: Array<Partial<Player> & { id?: string }>
   coins?: Coin[]
 }
@@ -601,7 +604,14 @@ export const useDuoChaos = () => {
           players,
         }
       })
-      if (data.chaos) chaos.sync(data.chaos)
+      // Sunucu chaos olayını `chaosEvent` + `chaosEventEndsAt` (sunucu epoch ms)
+      // olarak döndürür. Bitiş anını yerel saate çevirip uygularız; aksi halde
+      // saat farkı yüzünden sayaç yanlış görünür.
+      if (data.chaosEvent?.id) {
+        chaos.sync({ id: data.chaosEvent.id, endsAt: toLocal(data.chaosEventEndsAt) })
+      } else {
+        chaos.clear()
+      }
       const me = data.players?.find((item) => mapPlayerId(String(item.id), myId) === 'p1')
       if (me) {
         scout.sync({

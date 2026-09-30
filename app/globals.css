@@ -415,7 +415,7 @@ h3 {
   /* 🎮 hero metninin/eyebrow rozetinin üstüne binmesin diye sol-alt
      köşeye, içerikten uzak bir noktaya taşındı. */
   top: 22%;
-  left: 16%;
+  left: 40%;
   transform: rotate(-12deg);
   animation-delay: 0s;
 }

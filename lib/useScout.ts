@@ -77,12 +77,23 @@ export const useScout = (code: string | null, playerId: 'p1' | 'p2', token: stri
     setUsedAt(at)
     try {
       if (hasSupabase) {
-        const data = await rpc<{ charges?: number; hint?: ScoutHint }>('duo_scout', {
-          p_code: code,
-          p_token: token,
-        })
+        // Sunucu `chargesLeft` döndürür (eski `charges` değil). İkisini de
+        // kabul ederiz ki sunucu sözleşmesi değişse bile istemci kırılmasın.
+        const data = await rpc<{ chargesLeft?: number; charges?: number; hint?: ScoutHint }>(
+          'duo_scout',
+          {
+            p_code: code,
+            p_token: token,
+          },
+        )
         if (data) {
-          if (typeof data.charges === 'number') setCharges(data.charges)
+          const nextCharges =
+            typeof data.chargesLeft === 'number'
+              ? data.chargesLeft
+              : typeof data.charges === 'number'
+                ? data.charges
+                : null
+          if (nextCharges !== null) setCharges(nextCharges)
           if (data.hint) setHint({ ...data.hint, at: data.hint.at ?? at })
         }
       } else {
