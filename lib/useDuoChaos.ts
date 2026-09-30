@@ -58,6 +58,18 @@ const syncUrl = (path: string) => {
 const mapPlayerId = (rawId: string, meId: string): string => (rawId === meId ? 'p1' : 'p2')
 
 /**
+ * Tur seed'i — sunucunun `duo_start_round` içinde ürettiği `round_seed` ile
+ * BİREBİR aynı olmalıdır: `CODE:round`.
+ *
+ * Neden kritik? Coin düzeni bu seed'den deterministik olarak üretilir. Sunucu
+ * (`duo_spawn_coins`) ve istemci (`spawnCoins`) AYNI seed'i kullanmazsa iki
+ * taraf farklı konum/renk üretir; sunucu otoritesi uygulandığında coinler
+ * "zıplar". Bu yüzden istemci de tam olarak `CODE:round` tohumlar.
+ */
+const roundSeedFor = (code: string | null | undefined, round: number): string =>
+  code ? `${code}:${round}` : `round-${round}`
+
+/**
  * Skor kalıcılığı. `duo_tick` çağrılmadığı için sunucu skoru saklamaz; sayfa
  * yenilendiğinde yerel skor sıfırlanıyordu ("yenileyince puanım sıfırlanıyor").
  * Skoru oda bazında localStorage'da tutarız; `restore` sırasında geri yükleriz.
@@ -94,6 +106,83 @@ const clearScores = (code: string) => {
   }
 }
 
+/**
+ * Sunucudan gelen coin satırı. `duo_public_state` / `duo_sync_coins` artık
+ * `respawnAt` alanını da döndürür; böylece istemci, rakip tarafından toplanan
+ * bir coin'in NE ZAMAN geri geleceğini kesin olarak bilir.
+ */
+type ServerCoin = {
+  id: number
+  x: number
+  y: number
+  type: Coin['type']
+  collectedBy?: string | null
+  respawnAt?: number | null
+}
+
+/**
+ * Sunucu coin listesini yerel `Coin[]` biçimine çevirir.
+ *
+ * ÖNEMLİ: Sunucu `collectedBy` alanını sunucu `player_id`'si (`'p1'`/`'p2'`)
+ * olarak döndürür. Yerel state'te slot 0 her zaman "ben" olduğundan, bu değeri
+ * `mapPlayerId` ile yerel slota çeviririz; aksi halde misafir oyuncu kendi
+ * topladığı coini "rakip topladı" sanır.
+ *
+ * `respawnAt` sunucu epoch-ms'dir; yerel saate çevirmek için `toLocal`
+ * kullanılır. Aksi halde saat farkı olan bir istemcide coin ya hemen ya da çok
+ * geç canlanır.
+ */
+const toLocalCoins = (
+  coins: ServerCoin[] | undefined,
+  myId: string,
+  toLocal: (serverTs?: number) => number,
+): Coin[] | null => {
+  if (!coins || coins.length === 0) return null
+  return coins.map((coin) => {
+    const localRespawn = toLocal(coin.respawnAt ?? undefined)
+    return {
+      id: coin.id,
+      x: coin.x,
+      y: coin.y,
+      type: coin.type,
+      collectedBy: coin.collectedBy ? mapPlayerId(String(coin.collectedBy), myId) : undefined,
+      respawnAt: localRespawn > 0 ? localRespawn : undefined,
+    }
+  })
+}
+
+/**
+ * Sunucu coin listesini yerel listeyle birleştirir (sunucu OTORİTEDİR).
+ *
+ * Neden birleştirme? Sunucu snapshot'ı ~1 sn gecikmeli gelir. Yerel oyuncu bir
+ * coini yeni topladıysa ve sunucu henüz bu toplamayı işlemediyse, snapshot o
+ * coini "toplanmamış" gösterir. Doğrudan uygularsak coin bir anlığına geri
+ * gelir ("coin geri geldi / titredi" hatası). Bu yüzden:
+ *   * Sunucu "toplanmış" diyorsa → toplanmış kabul et (otorite).
+ *   * Sunucu "toplanmamış" diyorsa ama yerelde toplanmışsa → yerel kararı koru
+ *     (henüz sunucuya ulaşmamış olabilir).
+ *   * Konum ve renk HER ZAMAN sunucudan alınır (iki istemci birebir aynı görsün).
+ */
+const mergeCoins = (local: Coin[], server: Coin[]): Coin[] => {
+  const byId = new Map(server.map((coin) => [coin.id, coin]))
+  return local.map((coin) => {
+    const remote = byId.get(coin.id)
+    if (!remote) return coin
+    // Sunucu toplanmış diyorsa otoritedir; değilse yerel "toplandı" kararını koru.
+    const collectedBy = remote.collectedBy ?? coin.collectedBy
+    const respawnAt = remote.collectedBy ? remote.respawnAt : coin.respawnAt
+    return {
+      ...coin,
+      // Konum + renk sunucudan (iki istemci birebir aynı).
+      x: remote.x,
+      y: remote.y,
+      type: remote.type,
+      collectedBy,
+      respawnAt,
+    }
+  })
+}
+
 /** `duo_public_state` RPC'sinin döndürdüğü anlık görüntü. */
 type PublicSnapshot = {
   phase?: Phase
@@ -110,7 +199,7 @@ type PublicSnapshot = {
   /** Chaos olayının bitiş anı (sunucu epoch ms). */
   chaosEventEndsAt?: number
   players?: Array<Partial<Player> & { id?: string }>
-  coins?: Coin[]
+  coins?: ServerCoin[]
 }
 
 /**
@@ -659,25 +748,34 @@ export const useDuoChaos = () => {
         const serverPhase = data.phase ?? prev.phase
         const phase =
           prev.phase === 'battle' && serverPhase === 'countdown' ? prev.phase : serverPhase
-        return {
-          ...prev,
-          phase,
-          round: data.round ?? prev.round,
-          endsAt: localEndsAt > 0 ? localEndsAt : prev.endsAt,
-          countdownEndsAt: localCountdownEndsAt > 0 ? localCountdownEndsAt : prev.countdownEndsAt,
-          winner: data.winner ?? prev.winner,
-          // COIN OTORİTESİ: coinlerin yeniden doğması tamamen client tarafında
-          // yönetilir (aynı konum + 3 sn). Sunucu snapshot'ı `duo_tick`
-          // çağrılmadığı için coinleri hiç canlandırmaz; onu uygularsak coinler
-          // her yoklamada "yok olup tekrar çıkar" ve renkleri zıplar. Bu yüzden
-          // coinleri yalnızca YENİ bir tur başladığında (round değiştiğinde)
-          // sunucudan alırız; aksi halde client'ın kendi listesini koruruz.
-          coins:
-            data.coins && data.coins.length > 0 && (data.round ?? prev.round) !== prev.round
-              ? data.coins
-              : prev.coins,
-          players,
-        }
+        // COIN OTORİTESİ (CANLI): sunucu artık coinlerin TEK otoritesidir.
+          // `duo_spawn_coins` istemcinin `spawnCoins()` algoritmasını birebir
+          // yansıtır; bu yüzden sunucu konumları/renkleri istemciyle AYNIDIR ve
+          // güvenle uygulanabilir. Sunucu ayrıca `respawn_at`'i döndürür ve
+          // okuma sırasında süresi dolan coinleri tembel olarak canlandırır.
+          //
+          // Yeni tur başladığında (round değiştiğinde) sunucu listesini TAM
+          // olarak benimseriz; aksi halde yerel listeyle BİRLEŞTİRİRİZ. Birleştirme
+          // şart: snapshot ~1 sn gecikmeli gelir; yerel oyuncu bir coini yeni
+          // topladıysa ve sunucu henüz işlemediyse, doğrudan uygulamak coini bir
+          // anlığına geri getirir ("coin geri geldi / titredi" hatası).
+          const serverCoins = toLocalCoins(data.coins, myId, toLocal)
+          const roundChanged = (data.round ?? prev.round) !== prev.round
+          const coins = !serverCoins
+            ? prev.coins
+            : roundChanged
+              ? serverCoins
+              : mergeCoins(prev.coins, serverCoins)
+          return {
+            ...prev,
+            phase,
+            round: data.round ?? prev.round,
+            endsAt: localEndsAt > 0 ? localEndsAt : prev.endsAt,
+            countdownEndsAt: localCountdownEndsAt > 0 ? localCountdownEndsAt : prev.countdownEndsAt,
+            winner: data.winner ?? prev.winner,
+            coins,
+            players,
+          }
       })
       // Sunucu chaos olayını `chaosEvent` + `chaosEventEndsAt` (sunucu epoch ms)
       // olarak döndürür. Bitiş anını yerel saate çevirip uygularız; aksi halde
@@ -747,6 +845,7 @@ export const useDuoChaos = () => {
       phase === 'results' || phase === 'matchover' || phase === 'battle' || phase === 'countdown'
     if (!reconcilable) return
     const myToken = room.token ?? room.playerId
+    const myId = room.playerId
     let cancelled = false
     const pull = async () => {
       let data: PublicSnapshot | null = null
@@ -782,7 +881,21 @@ export const useDuoChaos = () => {
           return rank(to) > rank(from)
         }
         const nextPhase = forward(prev.phase, serverPhase) ? serverPhase : prev.phase
-        if (nextPhase === prev.phase && !data.winner) return prev
+        // COIN UZLAŞMASI (güvenlik ağı): faz değişmese bile coinleri sunucuyla
+        // yakınsarız. Bu, paket kaybı / sekme arka plana düşmesi / geç katılma
+        // sonrası oluşan "bende var, onda yok" uyumsuzluğunu kalıcı olarak
+        // onarır. Sunucu `duo_spawn_coins` ile istemciyle AYNI düzeni üretir ve
+        // okuma sırasında süresi dolan coinleri tembel olarak canlandırır.
+        const serverCoins = toLocalCoins(data.coins, myId, toLocal)
+        const roundChanged = (data.round ?? prev.round) !== prev.round
+        const coins = !serverCoins
+          ? prev.coins
+          : roundChanged
+            ? serverCoins
+            : mergeCoins(prev.coins, serverCoins)
+        const phaseChanged = nextPhase !== prev.phase
+        const coinsChanged = coins !== prev.coins
+        if (!phaseChanged && !data.winner && !coinsChanged) return prev
         return {
           ...prev,
           phase: nextPhase,
@@ -790,6 +903,7 @@ export const useDuoChaos = () => {
           round: data.round ?? prev.round,
           endsAt: localEndsAt > 0 ? localEndsAt : prev.endsAt,
           countdownEndsAt: localCountdownEndsAt > 0 ? localCountdownEndsAt : prev.countdownEndsAt,
+          coins,
         }
       })
     }
@@ -827,7 +941,7 @@ export const useDuoChaos = () => {
     // Sunucu turu ilerletti → misafir de aynı seed'den yeniden tohumla.
     if (state.round > syncedRoundRef.current) {
       syncedRoundRef.current = state.round
-      resetRound(state.round, room.code ?? `round-${state.round}`)
+      resetRound(state.round, roundSeedFor(room.code, state.round))
       scout.reset()
       setNextReady(false)
       setRivalNextReady(false)
@@ -1079,7 +1193,7 @@ export const useDuoChaos = () => {
         setError(friendlyError(res.reason, 'We could not start the match. Please try again.'))
         return
       }
-      resetRound(1, room.code ?? 'round-1')
+      resetRound(1, roundSeedFor(room.code, 1))
       scout.reset()
       // Sunucu deadline'larını yerel saate çevir (saat farkı düzeltmesi).
       noteServerNow(res?.serverNow)
@@ -1106,7 +1220,7 @@ export const useDuoChaos = () => {
         'duo_start_round',
         { p_token: room.token ?? room.playerId },
       )
-      resetRound(nextRound, room.code ?? `round-${nextRound}`)
+      resetRound(nextRound, roundSeedFor(room.code, nextRound))
       scout.reset()
       noteServerNow(res?.serverNow)
       const localCountdown = toLocal(res?.countdownEndsAt)
