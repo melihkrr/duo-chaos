@@ -7,7 +7,6 @@ import {
   BUMP_SLOW_MS,
   BUMP_SPEED_MULTIPLIER,
   COIN_RESPAWN_MS,
-  COIN_TYPES,
   COLLECT_RADIUS,
   COUNTDOWN_MS,
   MOVE_SEND_MS,
@@ -25,11 +24,16 @@ import { resolveMove } from './movement'
 import { playSound } from './sound'
 import type { Coin, Player, State } from './types'
 
-/** Rastgele bir coin türü (diamond hariç — o yalnızca jackpot ile gelir). */
-const randomCoinType = () => COIN_TYPES[Math.floor(Math.random() * COIN_TYPES.length)] ?? 'gold'
-
 /** Rakip interpolasyonunun "oturduğu" eşik (arena %). Altındaysa yazmayız. */
 const REMOTE_SETTLE = 0.25
+
+/**
+ * Görev tamamlandıktan sonra yeni görevin gelmesi için beklenen süre (ms).
+ * Oyuncunun "3/3 tamamlandı" durumunu görebilmesi için kısa bir kutlama
+ * penceresi bırakırız. Aksi halde görev, son coin toplanır toplanmaz anında
+ * değişiyordu ("görevi yapıyorum yeni görev sonra geliyor" şikâyeti).
+ */
+const OBJECTIVE_COMPLETE_HOLD_MS = 1_200
 
 /**
  * Bir broadcast konumunun "taze" sayıldığı süre (ms). Bu süreden eski bir
@@ -94,6 +98,16 @@ export const useGameLoop = (deps: LoopDeps) => {
   // ("donma + birden ilerleme" sorununun kökü buydu: döngü, commit edilmemiş
   // eski `state.players[0]`'dan hesapladığı için ilerleme kaybediyordu).
   const localPos = useRef<{ x: number; y: number } | null>(null)
+  // Yerel oyuncunun EKRANA basılan konumu. `Battle` bu ref'i doğrudan DOM
+  // transform'una yazar; böylece 60Hz hareket React render'ı TETİKLEMEZ.
+  // Bu, "hareket donuyor / birden ilerliyor" sorununun asıl çözümüdür:
+  // render döngüsü artık kare hızına bağlı değil.
+  const livePos = useRef<{ x: number; y: number }>({ x: 0, y: 0 })
+  // Rakibin ekrana basılan konumu. Aynı şekilde doğrudan DOM'a yazılır.
+  const liveRivalPos = useRef<{ x: number; y: number }>({ x: 0, y: 0 })
+  // Görev tamamlandığında yeni görevin verileceği zaman (epoch ms). 0 = bekleme
+  // yok. Oyuncunun "tamamlandı" durumunu görmesi için kısa bir pencere bırakır.
+  const objectiveHold = useRef(0)
   // Sanal joystick vektörü. `VirtualJoystick` `setJoystick` ile buraya yazar;
   // böylece her pointer hareketinde React render tetiklenmez (yalnızca RAF okur).
   const joystick = useRef<JoystickVector>({ x: 0, y: 0 })
@@ -168,10 +182,13 @@ export const useGameLoop = (deps: LoopDeps) => {
     const me = state.players[0]
     if (!me) return
 
-    // Yeni tur: konum ref'ini sıfırla ki oyuncu spawn noktasından başlasın.
+    // Yeni tur: konum ref'ini ve görev bekleme sayacını sıfırla.
     if (lastRound.current !== state.round) {
       lastRound.current = state.round
       localPos.current = { x: me.x, y: me.y }
+      livePos.current.x = me.x
+      livePos.current.y = me.y
+      objectiveHold.current = 0
     }
 
     // --- Girdi: klavye + sanal joystick birleşir. ---
@@ -208,6 +225,10 @@ export const useGameLoop = (deps: LoopDeps) => {
     }
     // Ref'i hemen güncelle — bir sonraki kare bu değerden devam eder.
     localPos.current = { x: nextX, y: nextY }
+    // Ekrana basılacak konumu da her karede güncelle. `Battle` bunu doğrudan
+    // DOM'a yazar; React render'ı beklemez → akıcı hareket.
+    livePos.current.x = nextX
+    livePos.current.y = nextY
 
     // --- Rakip interpolasyonu (yalnızca hedefe yaklaşırken yazarız). ---
     //
@@ -216,9 +237,6 @@ export const useGameLoop = (deps: LoopDeps) => {
     // odur; snapshot yalnızca broadcast kesildiğinde (yeniden bağlanma) devreye
     // girer. Her iki durumda da state'e yalnızca interpolasyon sonucu yazılır.
     const rivalTarget = state.players[1]
-    let rivalX = rivalTarget?.x ?? 0
-    let rivalY = rivalTarget?.y ?? 0
-    let rivalChanged = false
     if (rivalTarget) {
       const broadcast = remotePos.current?.get('rival') ?? remotePos.current?.get('p2')
       const fresh = broadcast && now - broadcast.at < REMOTE_POS_TTL
@@ -233,19 +251,21 @@ export const useGameLoop = (deps: LoopDeps) => {
           // Çok büyük fark: ışınlanma / yeniden bağlanma — anında hizala.
           remote.x = goalX
           remote.y = goalY
-          rivalChanged = true
         } else if (dist > REMOTE_SETTLE) {
           remote.x += (goalX - remote.x) * REMOTE_SMOOTHING
           remote.y += (goalY - remote.y) * REMOTE_SMOOTHING
-          rivalChanged = true
         } else if (dist > 0) {
-          // Hedefe çok yakın: otur ve bir daha yazma (render thrash'i biter).
+          // Hedefe çok yakın: otur.
           remote.x = goalX
           remote.y = goalY
-          rivalChanged = true
         }
-        rivalX = remote.x
-        rivalY = remote.y
+      }
+      // Rakip konumunu da doğrudan DOM'a yazarız (state'e değil) — böylece
+      // rakip hareketi de 60Hz render tetiklemez.
+      const settled = remoteTarget.current
+      if (settled) {
+        liveRivalPos.current.x = settled.x
+        liveRivalPos.current.y = settled.y
       }
     }
 
@@ -285,7 +305,9 @@ export const useGameLoop = (deps: LoopDeps) => {
     setState((prev) => {
       let changed = false
 
-      // Coinler: toplananları işaretle, süresi dolanları AYNI konumda canlandır.
+      // Coinler: toplananları işaretle, süresi dolanları AYNI konum ve AYNI
+      // renkte canlandır. Renk yuvaya (id'ye) bağlıdır; yalnızca yeni turda
+      // yeniden dağıtılır. Böylece coinler "kendi kendine renk değiştirmez".
       const nextCoins = prev.coins.map((coin) => {
         if (collectedSet.has(coin.id)) {
           changed = true
@@ -293,8 +315,8 @@ export const useGameLoop = (deps: LoopDeps) => {
         }
         if (coin.collectedBy && coin.respawnAt && now >= coin.respawnAt) {
           changed = true
-          // Konum sabit kalır; yalnızca renk (tür) rastgele değişir.
-          return { ...coin, type: randomCoinType(), collectedBy: undefined, respawnAt: undefined }
+          // Konum VE renk sabit kalır — yalnızca "toplanmış" işareti kalkar.
+          return { ...coin, collectedBy: undefined, respawnAt: undefined }
         }
         return coin
       })
@@ -302,10 +324,10 @@ export const useGameLoop = (deps: LoopDeps) => {
       const nextPlayers = prev.players.map((player, index) => {
         if (index === 0) {
           let next = player
-          if (nextX !== player.x || nextY !== player.y) {
-            changed = true
-            next = { ...next, x: nextX, y: nextY }
-          }
+          // NOT: Yerel oyuncunun x/y'sini burada state'e YAZMAYIZ. Konum her
+          // karede `livePos` ref'i üzerinden doğrudan DOM'a uygulanır; state'e
+          // yazmak 60Hz render tetikler ve hareketi bozar. State'teki x/y
+          // yalnızca tur başında (spawn) doğru olması yeterlidir.
           if (collectedIds.length > 0) {
             changed = true
             next = {
@@ -330,15 +352,32 @@ export const useGameLoop = (deps: LoopDeps) => {
               roundScore: (next.roundScore ?? 0) + 10,
             }
           }
-          // Görev tamamlandıysa: skoru artır ve yeni rastgele görev ver.
+          // Görev tamamlandıysa: skoru artır, kısa bir "tamamlandı" penceresi
+          // bırak, SONRA yeni görev ver. Aksi halde görev, son coin toplanır
+          // toplanmaz anında değişiyor ve oyuncu tamamlandığını göremiyordu.
           if (objectiveSatisfied(next)) {
             changed = true
             const done = (next.objectivesDone ?? 0) + 1
+            // Tamamlanma anını işaretle; yeni görev `holdUntil` sonrası gelir.
+            objectiveHold.current = now + OBJECTIVE_COMPLETE_HOLD_MS
             next = {
               ...next,
               objectivesDone: done,
               score: done,
               roundScore: done,
+              // Görev ŞİMDİLİK korunur (tamamlanmış haliyle gösterilir).
+              missionDone: true,
+            }
+          } else if (
+            next.missionDone &&
+            objectiveHold.current > 0 &&
+            now >= objectiveHold.current
+          ) {
+            // Bekleme penceresi doldu: yeni rastgele görev ver ve sayaçları sıfırla.
+            changed = true
+            objectiveHold.current = 0
+            next = {
+              ...next,
               objective: randomObjective(next.objective?.id),
               coins: 0,
               stolen: 0,
@@ -351,10 +390,9 @@ export const useGameLoop = (deps: LoopDeps) => {
 
         if (index === 1) {
           let next = player
-          if (rivalChanged && (rivalX !== player.x || rivalY !== player.y)) {
-            changed = true
-            next = { ...next, x: rivalX, y: rivalY }
-          }
+          // NOT: Rakibin x/y'sini de state'e YAZMAYIZ; konum `liveRivalPos`
+          // üzerinden doğrudan DOM'a uygulanır. State'teki x/y yalnızca tur
+          // başında (spawn) doğru olması yeterlidir.
           if (stealing) {
             changed = true
             next = { ...next, coins: Math.max(0, next.coins - 1), slowedUntil: now + BUMP_SLOW_MS }
@@ -413,7 +451,7 @@ export const useGameLoop = (deps: LoopDeps) => {
     }
   }, [deps.state.phase])
 
-  return { keys, setJoystick }
+  return { keys, setJoystick, livePos, liveRivalPos }
 }
 
 export { COUNTDOWN_MS, PHASE_TICK_MS }

@@ -83,11 +83,13 @@ export const useGameState = (): GameStateApi => {
   }, [])
 
   const resetRound = useCallback<GameStateApi['resetRound']>((round, seed) => {
-    const [first, second] = generateObjectivePair(seed ?? `round-${round}`)
+    const roundSeed = seed ?? `round-${round}`
+    const [first, second] = generateObjectivePair(roundSeed)
     setState((prev) => ({
       ...prev,
       round,
-      coins: spawnCoins(),
+      // Coin düzeni tur seed'ine bağlıdır: iki istemci aynı düzeni görür.
+      coins: spawnCoins(roundSeed),
       endsAt: 0,
       countdownEndsAt: 0,
       chaosEvent: undefined,

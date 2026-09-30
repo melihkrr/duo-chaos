@@ -245,6 +245,10 @@ export const useDuoChaos = () => {
   // çağırır; değer bir ref'te tutulduğu için pointer hareketi React render'ı
   // tetiklemez (yalnızca RAF okur).
   const onJoystick = loop.setJoystick
+  // Yerel oyuncunun ve rakibin ekrana basılan konumları. `Battle` bunları
+  // doğrudan DOM'a yazar; 60Hz hareket React render'ı tetiklemez.
+  const livePos = loop.livePos
+  const liveRivalPos = loop.liveRivalPos
 
   // Realtime olaylarını bağla.
   useEffect(() => {
@@ -760,6 +764,8 @@ export const useDuoChaos = () => {
     lobbyReady,
     serverPlayerCount,
     onJoystick,
+    livePos,
+    liveRivalPos,
     createRoom,
     joinRoom,
     restore,

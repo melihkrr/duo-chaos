@@ -123,19 +123,61 @@ export const getCoinValue = (type: CoinType, chaosEvent?: string, objective?: Ob
 // --- Coin ---
 export const COIN_COUNT = 14
 /**
- * Toplanan bir coin bu süre sonra AYNI konumda, rastgele bir renkte (türde)
- * yeniden doğar. Konum sabit kaldığı için arena düzeni bozulmaz; yalnızca
- * renk değişir.
+ * Toplanan bir coin bu süre sonra AYNI konumda yeniden doğar.
+ *
+ * ÖNEMLİ: Yeniden doğan coin'in RENGİ DEĞİŞMEZ. Renk, coin "yuvasına" (id'ye)
+ * bağlıdır ve yalnızca yeni tur başında yeniden dağıtılır. Aksi halde oyuncu
+ * aynı noktada sürekli renk değiştiren coinler görür ("renkleri değişiyor"
+ * şikâyeti tam olarak buydu).
  */
 export const COIN_RESPAWN_MS = 3_000
 
-export const spawnCoins = (): Coin[] =>
-  Array.from({ length: COIN_COUNT }, (_, i) => ({
-    id: i,
-    x: 8 + ((i * 31) % 84),
-    y: 12 + ((i * 47) % 76),
-    type: COIN_TYPES[i % COIN_TYPES.length],
-  }))
+/**
+ * Arena için deterministik coin düzeni üretir. Konumlar ve renkler `seed`e
+ * bağlıdır; iki istemci aynı turda AYNI düzeni görür. Bu, "noktalar saçma
+ * sapan çıkıyor" sorununu kökten çözer: düzen rastgele değil, tur başına
+ * sabittir.
+ */
+export const spawnCoins = (seed = 'round-1'): Coin[] => {
+  // Basit deterministik hash — aynı seed her zaman aynı diziyi verir.
+  const hash = (value: string) => {
+    let h = 2166136261
+    for (let i = 0; i < value.length; i += 1) {
+      h ^= value.charCodeAt(i)
+      h = Math.imul(h, 16777619)
+    }
+    return h >>> 0
+  }
+  let state = hash(seed) || 1
+  const next = () => {
+    // xorshift32 — hızlı, deterministik, tekrarsız.
+    state ^= state << 13
+    state ^= state >>> 17
+    state ^= state << 5
+    return (state >>> 0) / 4294967296
+  }
+  // Coinleri ızgara hücrelerine dağıt: üst üste binmezler, düzenli görünür.
+  const cols = 5
+  const rows = 3
+  const cells = Array.from({ length: cols * rows }, (_, i) => i)
+  // Fisher–Yates (deterministik) — hücreleri karıştır.
+  for (let i = cells.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(next() * (i + 1))
+    ;[cells[i], cells[j]] = [cells[j], cells[i]]
+  }
+  return Array.from({ length: COIN_COUNT }, (_, i) => {
+    const cell = cells[i % cells.length]
+    const col = cell % cols
+    const row = Math.floor(cell / cols)
+    return {
+      id: i,
+      // Izgara hücresinin merkezi + küçük deterministik sapma.
+      x: 12 + col * 19 + (next() * 6 - 3),
+      y: 16 + row * 30 + (next() * 8 - 4),
+      type: COIN_TYPES[Math.floor(next() * COIN_TYPES.length)] ?? 'gold',
+    }
+  })
+}
 
 export const spawnResourceWave = (round: number, wave: number): Coin[] => {
   const anchor = (round * 17 + wave * 23) % 76

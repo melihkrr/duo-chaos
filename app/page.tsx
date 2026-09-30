@@ -80,6 +80,8 @@ export default function Page() {
           level={progress.profile.level}
           secondsLeft={game.secondsLeft}
           onJoystick={game.onJoystick}
+          livePos={game.livePos}
+          liveRivalPos={game.liveRivalPos}
           onEmote={game.triggerEmote}
         />
       )}

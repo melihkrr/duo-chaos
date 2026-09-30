@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ChaosBanner } from './ChaosBanner'
 import { CosmeticsPicker } from './CosmeticsPicker'
 import { ScoutPanel } from './ScoutPanel'
@@ -21,6 +21,17 @@ type Props = {
   level: number
   secondsLeft: number
   onJoystick: (dx: number, dy: number) => void
+  /**
+   * Yerel oyuncunun ANLIK konumu (arena %). Oyun döngüsü her karede buraya
+   * yazar; `Battle` bunu doğrudan DOM'a uygular. Böylece 60Hz hareket React
+   * render'ı tetiklemez ve hareket akıcı kalır.
+   */
+  livePos: React.RefObject<{ x: number; y: number }>
+  /**
+   * Rakibin ANLIK konumu (arena %). Aynı şekilde doğrudan DOM'a uygulanır;
+   * rakip hareketi de React render'ı tetiklemez.
+   */
+  liveRivalPos: React.RefObject<{ x: number; y: number }>
   onEmote: () => void
 }
 
@@ -34,14 +45,44 @@ export function Battle({
   level,
   secondsLeft,
   onJoystick,
+  livePos,
+  liveRivalPos,
   onEmote,
 }: Props) {
   const [now, setNow] = useState(0)
+  // Yerel avatarın DOM düğümü. Konumu her karede doğrudan buna yazarız.
+  const meRef = useRef<HTMLDivElement | null>(null)
+  // Rakip avatarın DOM düğümü. Aynı şekilde doğrudan yazarız.
+  const rivalRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 200)
     return () => window.clearInterval(id)
   }, [])
+
+  // Yerel oyuncunun konumunu doğrudan DOM'a uygula (React render'ı olmadan).
+  // Bu, hareketin 60Hz'de akıcı kalmasını sağlar; `state` yalnızca skor/coin
+  // gibi anlamlı değişimlerde güncellenir.
+  useEffect(() => {
+    let raf = 0
+    const tick = () => {
+      const meNode = meRef.current
+      if (meNode) {
+        const { x, y } = livePos.current
+        meNode.style.left = `${x}%`
+        meNode.style.top = `${y}%`
+      }
+      const rivalNode = rivalRef.current
+      if (rivalNode) {
+        const { x, y } = liveRivalPos.current
+        rivalNode.style.left = `${x}%`
+        rivalNode.style.top = `${y}%`
+      }
+      raf = window.requestAnimationFrame(tick)
+    }
+    raf = window.requestAnimationFrame(tick)
+    return () => window.cancelAnimationFrame(raf)
+  }, [livePos, liveRivalPos])
 
   const me = state.players[0]
   const rival = state.players[1]
@@ -123,6 +164,7 @@ export function Battle({
           return (
             <div
               key={player.id}
+              ref={isMe ? meRef : rivalRef}
               className={['avatar', isMe ? 'me' : 'rival', (player.slowedUntil ?? 0) > now ? 'slowed' : ''].join(' ')}
               style={{ left: `${player.x}%`, top: `${player.y}%` }}
             >
