@@ -1,1 +1,21 @@
-{"name":"","short_name":"","icons":[{"src":"/android-chrome-192x192.png","sizes":"192x192","type":"image/png"},{"src":"/android-chrome-512x512.png","sizes":"512x512","type":"image/png"}],"theme_color":"#ffffff","background_color":"#ffffff","display":"standalone"}
+{
+  "name": "DUO CHAOS",
+  "short_name": "DUO CHAOS",
+  "description": "A fast, replayable two-player party game with secret objectives, shared resources, and chaos events.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fff7fb",
+  "theme_color": "#fff7fb",
+  "icons": [
+    {
+      "src": "/android-chrome-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/android-chrome-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

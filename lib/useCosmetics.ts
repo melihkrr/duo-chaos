@@ -31,6 +31,8 @@ export const useCosmetics = (
   initial: { emote?: EmoteId; trail?: TrailId },
   onPersist?: (input: { emote?: EmoteId; trail?: TrailId }) => void,
   onBroadcast?: (id: EmoteId) => void,
+  /** İz (trail) seçimi değiştiğinde rakibe yayınlamak için. */
+  onBroadcastTrail?: (id: TrailId) => void,
 ): CosmeticsApi => {
   const [emoteOverride, setEmoteState] = useState<EmoteId | null>(null)
   const [trailOverride, setTrailState] = useState<TrailId | null>(null)
@@ -70,8 +72,10 @@ export const useCosmetics = (
     (id: TrailId) => {
       setTrailState(id)
       onPersist?.({ trail: id })
+      // Rakibe de bildir; o da bizim izimizi görsün.
+      onBroadcastTrail?.(id)
     },
-    [onPersist],
+    [onBroadcastTrail, onPersist],
   )
 
   const triggerEmote = useCallback(

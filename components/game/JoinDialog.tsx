@@ -12,7 +12,17 @@ type Props = {
 }
 
 const CODE_LENGTH = 6
-const CODE_PATTERN = /^[A-Z0-9]{6}$/
+// Sunucudaki `duo_create_room` ile aynı alfabe: karışıklığa yol açan
+// I, O, 0 ve 1 hariç tutulur. Girişi buna göre doğrularız.
+const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+const CODE_PATTERN = new RegExp(`^[${CODE_ALPHABET}]{${CODE_LENGTH}}$`)
+const sanitize = (value: string) =>
+  value
+    .toUpperCase()
+    .split('')
+    .filter((char) => CODE_ALPHABET.includes(char))
+    .join('')
+    .slice(0, CODE_LENGTH)
 
 /**
  * In-app room-code entry dialog. Replaces the native `window.prompt` so the
@@ -70,11 +80,7 @@ export function JoinDialog({ open, onClose, onJoin, busy }: Props) {
             className={['code-input', showError ? 'invalid' : ''].filter(Boolean).join(' ')}
             value={code}
             onChange={(event) => {
-              const next = event.target.value
-                .toUpperCase()
-                .replace(/[^A-Z0-9]/g, '')
-                .slice(0, CODE_LENGTH)
-              setCode(next)
+              setCode(sanitize(event.target.value))
               setTouched(true)
             }}
             placeholder="ABC123"
@@ -89,7 +95,8 @@ export function JoinDialog({ open, onClose, onJoin, busy }: Props) {
         </label>
         {showError && (
           <p id="join-code-error" className="field-error">
-            Codes are {CODE_LENGTH} letters or numbers (e.g. ABC123).
+            Codes are {CODE_LENGTH} characters (letters/numbers, e.g. ABC234). Letters I, O and
+            digits 0, 1 are not used.
           </p>
         )}
       </form>

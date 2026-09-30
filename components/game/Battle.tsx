@@ -68,7 +68,16 @@ export function Battle({
   const [now, setNow] = useState(0)
   // Tam ekran modu. `true` iken arena tüm ekranı kaplar; HUD üstte kalır,
   // joystick sağ altta yarı şeffaf olur ve diğer kontroller gizlenir.
-  const [fullscreen, setFullscreen] = useState(false)
+  //
+  // İki kaynak birleşir:
+  //   - `nativeFs`: tarayıcının gerçek Fullscreen API'si (masaüstü/Android).
+  //   - `cssFs`: CSS tabanlı yedek mod. iOS Safari `requestFullscreen`'i
+  //     desteklemez (yalnızca <video> için); bu yüzden mobilde tam ekran
+  //     "çalışmıyordu". CSS modunda `.is-fullscreen` sınıfı uygulanır ve
+  //     arena viewport'u kaplar — API olmadan da tam ekran deneyimi verir.
+  const [nativeFs, setNativeFs] = useState(false)
+  const [cssFs, setCssFs] = useState(false)
+  const fullscreen = nativeFs || cssFs
   // Kutlama katmanının görünürlüğü. `celebrateRef` her tamamlanmada artan bir
   // zaman damgası taşır; değer değiştiğinde kutlamayı kısa süreliğine açarız.
   const [celebrate, setCelebrate] = useState(0)
@@ -88,7 +97,7 @@ export function Battle({
   // Esc ile çıkarsa `fullscreenchange` yakalanır ve yerel durum güncellenir.
   useEffect(() => {
     const onChange = () => {
-      setFullscreen(Boolean(document.fullscreenElement))
+      setNativeFs(Boolean(document.fullscreenElement))
     }
     document.addEventListener('fullscreenchange', onChange)
     return () => document.removeEventListener('fullscreenchange', onChange)
@@ -97,14 +106,28 @@ export function Battle({
   const toggleFullscreen = () => {
     const node = wrapRef.current
     if (!node) return
-    if (document.fullscreenElement) {
-      void document.exitFullscreen()
-    } else {
-      void node.requestFullscreen?.().catch(() => {
-        // Tarayıcı reddederse (ör. iframe izni yok) yine de yerel moda geç:
-        // arena tüm ekranı kaplar, joystick sağ altta şeffaf olur.
-        setFullscreen(true)
-      })
+    // Zaten (native veya CSS) tam ekrandaysak çık.
+    if (fullscreen) {
+      if (document.fullscreenElement) void document.exitFullscreen()
+      setCssFs(false)
+      setNativeFs(false)
+      return
+    }
+    // Fullscreen API yoksa (iOS Safari) doğrudan CSS yedeğine geç.
+    const request = node.requestFullscreen
+    if (typeof request !== 'function') {
+      setCssFs(true)
+      return
+    }
+    // API var: dene. Reddedilirse (iframe izni yok, kullanıcı jesti yok vb.)
+    // CSS yedeğine düş — böylece mobilde de tam ekran "çalışır".
+    try {
+      const result = request.call(node) as Promise<void> | undefined
+      if (result && typeof result.catch === 'function') {
+        void result.catch(() => setCssFs(true))
+      }
+    } catch {
+      setCssFs(true)
     }
   }
 
@@ -317,8 +340,13 @@ export function Battle({
           ))}
 
         {state.players.map((player, index) => {
-          const trail = trailById(player.trail)
           const isMe = index === 0
+          // Yerel oyuncunun izi, oyuncunun SEÇTİĞİ kozmetikten gelir
+          // (`cosmetics.trail`). `state.players[0].trail` yalnızca tur başında
+          // tohumlanır ve seçim değişince güncellenmez; bu yüzden iz
+          // "seçiyorum ama görünmüyor" oluyordu. Rakip için ise yayınlanan
+          // `player.trail` kullanılır.
+          const trail = trailById(isMe ? cosmetics.trail : player.trail)
           return (
             <div
               key={player.id}
@@ -347,9 +375,11 @@ export function Battle({
         )}
       </div>
 
-      {/* Normal düzende: diğer kontroller solda, joystick sağda.
-          Tam ekranda: kontroller gizlenir, joystick sağ altta yarı şeffaf
-          olarak arena'nın üzerine biner (CSS `.is-fullscreen`). */}
+      {/* Düzen:
+          - Masaüstü: kozmetik/emote/scout paneli SOLDA, joystick SAĞDA.
+          - Mobil: joystick EN ÜSTTE, panel onun altında (CSS `order`).
+          - Tam ekran: panel gizlenir, joystick sağ altta yarı şeffaf olarak
+            arena'nın üzerine biner (CSS `.is-fullscreen`). */}
       <footer className="battle-foot">
         <div className="battle-side">
           <ScoutPanel scout={scout} disabled={state.phase !== 'battle'} />
@@ -358,7 +388,9 @@ export function Battle({
           </Button>
           <CosmeticsPicker cosmetics={cosmetics} level={level} />
         </div>
-        <VirtualJoystick onChange={onJoystick} />
+        <div className="battle-joystick">
+          <VirtualJoystick onChange={onJoystick} />
+        </div>
       </footer>
 
       <span className="arena-bounds" data-minx={ARENA.minX} data-maxy={ARENA.maxY} hidden />

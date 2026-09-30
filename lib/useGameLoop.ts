@@ -138,7 +138,22 @@ export const useGameLoop = (deps: LoopDeps) => {
 
   // Klavye girdisi.
   useEffect(() => {
+    // Klavye kısayolları yalnızca oyun alanında geçerli olmalı. Bir metin
+    // alanına (ör. oda kodu girişi) yazarken `w/a/s/d` tuşlarını yutmamalıyız;
+    // aksi halde kullanıcı kod içine `S` gibi harfleri giremez.
+    const isTypingTarget = (target: EventTarget | null) => {
+      const el = target as HTMLElement | null
+      if (!el) return false
+      const tag = el.tagName
+      return (
+        tag === 'INPUT' ||
+        tag === 'TEXTAREA' ||
+        tag === 'SELECT' ||
+        el.isContentEditable
+      )
+    }
     const down = (event: KeyboardEvent) => {
+      if (isTypingTarget(event.target)) return
       const key = event.key.toLowerCase()
       if (key === 'w' || key === 'arrowup') keys.up = true
       else if (key === 's' || key === 'arrowdown') keys.down = true
@@ -148,6 +163,7 @@ export const useGameLoop = (deps: LoopDeps) => {
       event.preventDefault()
     }
     const up = (event: KeyboardEvent) => {
+      if (isTypingTarget(event.target)) return
       const key = event.key.toLowerCase()
       if (key === 'w' || key === 'arrowup') keys.up = false
       else if (key === 's' || key === 'arrowdown') keys.down = false
@@ -442,11 +458,16 @@ export const useGameLoop = (deps: LoopDeps) => {
       void call('duo_steal', { p_token: token }).catch(() => undefined)
     }
     // SKOR SENKRONU: `duo_tick` çağrılmadığı için sunucu skoru güncellemez.
-    // Bu yüzden skor değişimini rakibe doğrudan yayınlarız; rakip bunu kendi
-    // HUD'unda gösterir. Böylece "benim gördüğüm puanı karşı taraf görmüyor"
-    // sorunu ortadan kalkar.
+    // Bu yüzden skoru rakibe doğrudan yayınlarız.
+    //
+    // ÖNEMLİ: DELTA değil, MUTLAK skoru yayınlarız. Delta tabanlı senkron
+    // kayıpsızdır: tek bir broadcast kaçarsa (paket kaybı, sekme arka plana
+    // düşmesi) rakip sonsuza dek yanlış puan görür ve düzeltilemez. Mutlak
+    // değer gönderdiğimizde her yayın kendi kendini düzeltir; ayrıca snapshot
+    // yoklaması da aynı mutlak değeri periyodik olarak teyit eder.
     if (scoreDelta !== 0) {
-      broadcast('score', { by: 'p1', delta: scoreDelta })
+      const myScore = depsRef.current.state.players[0]?.score ?? 0
+      broadcast('score', { by: 'p1', score: myScore + scoreDelta })
     }
   }, [])
 

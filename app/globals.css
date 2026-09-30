@@ -1186,6 +1186,10 @@ h3 {
   display: grid;
   place-items: center;
   transition: left 0.06s linear, top 0.06s linear;
+  /* Kendi yığın bağlamını oluştur: iz (trail) negatif z-index ile arena
+     arka planının ARKASINA düşmesin. Aksi halde iz hiç görünmüyordu. */
+  z-index: 2;
+  isolation: isolate;
 }
 
 .avatar-body {
@@ -1253,11 +1257,24 @@ h3 {
 
 .avatar-trail {
   position: absolute;
-  inset: -7px;
+  inset: -9px;
   border-radius: 50%;
-  opacity: 0.4;
-  filter: blur(6px);
+  opacity: 0.85;
+  filter: blur(5px);
   z-index: -1;
+  animation: trail-pulse 1.1s var(--ease-soft) infinite alternate;
+}
+
+/* İz, karakterin arkasında yumuşak bir hale gibi nabız atar. */
+@keyframes trail-pulse {
+  from {
+    transform: scale(0.92);
+    opacity: 0.6;
+  }
+  to {
+    transform: scale(1.08);
+    opacity: 0.95;
+  }
 }
 
 .avatar-emote {
@@ -1284,7 +1301,7 @@ h3 {
   flex-wrap: wrap;
 }
 
-/* Normal düzende kontroller solda, joystick sağda. */
+/* Normal düzende kontroller SOLDA, joystick SAĞDA. */
 .battle-side {
   display: flex;
   flex-direction: column;
@@ -1292,6 +1309,15 @@ h3 {
   align-items: flex-start;
   flex: 1;
   min-width: 0;
+  /* Sol sütun: kozmetik/emote/scout paneli. */
+  order: 1;
+}
+
+/* Joystick sarmalayıcısı: masaüstünde sağda. */
+.battle-joystick {
+  display: flex;
+  flex: none;
+  order: 2;
 }
 
 /* --- Tam ekran modu ---
@@ -1333,6 +1359,13 @@ h3 {
 /* Diğer kontroller tam ekranda gizlenir. */
 .battle-wrap.is-fullscreen .battle-side {
   display: none;
+}
+
+/* Joystick sarmalayıcısı tam ekranda konumlanmayı devreder. */
+.battle-wrap.is-fullscreen .battle-joystick {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
 }
 
 /* Joystick sağ altta, yarı şeffaf. */
@@ -1434,7 +1467,8 @@ h3 {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  align-items: flex-end;
+  /* Panel SOLDA konumlandığı için içerik de sola hizalı. */
+  align-items: flex-start;
   width: 100%;
 }
 
@@ -1496,7 +1530,8 @@ h3 {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  align-items: flex-end;
+  /* Panel SOLDA konumlandığı için içerik de sola hizalı. */
+  align-items: flex-start;
   width: 100%;
 }
 
@@ -1504,7 +1539,7 @@ h3 {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  align-items: flex-end;
+  align-items: flex-start;
 }
 
 .cosmetics-label {
@@ -1519,7 +1554,7 @@ h3 {
   display: flex;
   gap: 7px;
   flex-wrap: wrap;
-  justify-content: flex-end;
+  justify-content: flex-start;
 }
 
 .chip {
@@ -1830,8 +1865,17 @@ h3 {
     align-items: stretch;
   }
 
+  /* MOBİL: joystick EN ÜSTTE olsun. Sütun düzeninde `order: -1` ile joystick
+     panelin üstüne taşınır; panel (scout/emote/kozmetik) altında kalır. */
+  .battle-joystick {
+    order: -1;
+    justify-content: center;
+    margin-bottom: 4px;
+  }
+
   .battle-side {
     align-items: stretch;
+    order: 1;
   }
 
   .scout,

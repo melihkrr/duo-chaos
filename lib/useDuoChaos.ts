@@ -19,7 +19,7 @@ import { useProgress } from './useProgress'
 import { useRoom, readToken, saveToken } from './useRoom'
 import { useScout } from './useScout'
 import { useToast } from './useToast'
-import type { Coin, EmoteId, Phase, Player, State } from './types'
+import type { Coin, EmoteId, Phase, Player, State, TrailId } from './types'
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 
@@ -170,6 +170,14 @@ export const useDuoChaos = () => {
 
   const { state, setState, setPhase, resetRound, resetMatch, updatePlayer } = game
 
+  // En güncel `state`'e interval/effect içinden erişmek için. Skor heartbeat'i
+  // gibi periyodik işler, effect'i her skor değişiminde yeniden kurmadan güncel
+  // skoru okumalıdır.
+  const stateRef = useRef(state)
+  useEffect(() => {
+    stateRef.current = state
+  }, [state])
+
   // Saat tiki (geri sayım / süre göstergesi).
   // Yalnızca aktif fazlarda çalışır; home/lobby/results'ta gereksiz render yok.
   useEffect(() => {
@@ -178,10 +186,28 @@ export const useDuoChaos = () => {
     return () => window.clearInterval(id)
   }, [state.phase])
 
+  // SKOR HEARTBEAT: Skorumuzu periyodik olarak MUTLAK değerle yeniden yayınlarız.
+  // Skor değişiminde zaten anlık yayın yapılır (bkz. useGameLoop); ancak tek bir
+  // paket kaybolursa rakip yanlış puan görür. Bu heartbeat her iki tarafın da
+  // skorunu birkaç saniye içinde yakınsar ("puanlar birbirinden farklı görünüyor"
+  // sorununun kalıcı çözümü). Yalnızca aktif fazlarda ve sekme görünürken çalışır.
+  useEffect(() => {
+    if (state.phase !== 'countdown' && state.phase !== 'battle') return
+    const id = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return
+      const myScore = stateRef.current.players[0]?.score ?? 0
+      room.broadcast('score', { by: room.playerId, score: myScore })
+    }, 2_000)
+    return () => window.clearInterval(id)
+  }, [room, state.phase])
+
   const cosmetics = useCosmetics(
     { emote: progress.progress.emote, trail: progress.progress.trail },
     (input) => void progress.setCosmetics(input),
     (id) => room.broadcast('emote', { by: room.playerId, id }),
+    // İz (trail) seçimi değişince rakibe bildir; rakip `state.players[1].trail`
+    // üzerinden bizim izimizi görsün.
+    (id) => room.broadcast('trail', { by: room.playerId, id }),
   )
 
   const publishMove = useCallback(
@@ -364,6 +390,18 @@ export const useDuoChaos = () => {
       }))
     })
 
+    // Rakip iz (trail) seçimini değiştirdiğinde anında yansıt.
+    const offTrail = room.on('trail', (payload) => {
+      const data = payload as { by?: string; id?: TrailId }
+      if (!data || data.by === room.playerId || !data.id) return
+      setState((prev) => ({
+        ...prev,
+        players: prev.players.map((player, index) =>
+          index === 1 ? { ...player, trail: data.id ?? 'none' } : player,
+        ),
+      }))
+    })
+
     // Rakip adını değiştirdiğinde anında yansıt.
     const offName = room.on('name', (payload) => {
       const data = payload as { by?: string; name?: string }
@@ -403,22 +441,28 @@ export const useDuoChaos = () => {
       }
     })
 
+    // SKOR SENKRONU: Rakip MUTLAK skorunu yayınlar; biz de rakibin (index 1)
+    // skorunu bu değere EŞİTLERİZ. Delta eklemek yerine eşitlemek, kaçan bir
+    // paketin kalıcı sapmaya yol açmasını engeller (her yayın kendini düzeltir).
+    // Geriye dönük uyumluluk için `delta` alanı da desteklenir.
     const offScore = room.on('score', (payload) => {
-      const data = payload as { by?: string; delta?: number }
+      const data = payload as { by?: string; score?: number; delta?: number }
       if (!data || data.by === room.playerId) return
+      const absolute = typeof data.score === 'number' ? data.score : null
       const delta = typeof data.delta === 'number' ? data.delta : 0
-      if (!delta) return
+      if (absolute === null && !delta) return
       setState((prev) => ({
         ...prev,
-        players: prev.players.map((player, index) =>
-          index === 1
-            ? {
-                ...player,
-                score: player.score + delta,
-                roundScore: (player.roundScore ?? 0) + delta,
-              }
-            : player,
-        ),
+        players: prev.players.map((player, index) => {
+          if (index !== 1) return player
+          const nextScore = absolute !== null ? absolute : player.score + delta
+          const diff = nextScore - player.score
+          return {
+            ...player,
+            score: nextScore,
+            roundScore: Math.max(0, (player.roundScore ?? 0) + diff),
+          }
+        }),
       }))
     })
 
@@ -428,6 +472,7 @@ export const useDuoChaos = () => {
       offCollect()
       offSteal()
       offEmote()
+      offTrail()
       offName()
       offLeave()
       offScore()
@@ -575,6 +620,67 @@ export const useDuoChaos = () => {
       document.removeEventListener('visibilitychange', onVisibility)
     }
   }, [chaos, noteServerNow, room.code, room.playerId, room.token, scout, setState, state.phase, toLocal])
+
+  // FAZ UZLAŞMASI (phase reconciliation).
+  //
+  // Kök sorun: oyun döngüsü yalnızca `countdown`/`battle` fazlarında çalışır ve
+  // süre dolduğunda `advancePhase` ile sunucuya haber verir. Ancak bu çağrı
+  // başarısız olursa (ağ hatası, `not_ready`, sekme arka plana düşmesi) istemci
+  // `battle`'da takılı kalır; sunucuya ulaşabilen rakip ise `results`'a geçer.
+  // Sonuç: "biri ready waiting for rival ekranındayken diğeri oyunda olabiliyor".
+  //
+  // Çözüm: `results`/`matchover` fazlarında (ve güvenlik ağı olarak aktif
+  // fazlarda) sunucunun OTORİTE fazını periyodik olarak çekeriz. Sunucu fazı
+  // yerelden ileriyse ona uyarız; böylece iki istemci de yakınsar.
+  useEffect(() => {
+    const code = room.code
+    if (!code) return
+    const phase = state.phase
+    const reconcilable =
+      phase === 'results' || phase === 'matchover' || phase === 'battle' || phase === 'countdown'
+    if (!reconcilable) return
+    const myToken = room.token ?? room.playerId
+    let cancelled = false
+    const pull = async () => {
+      let data: PublicSnapshot | null = null
+      try {
+        data = await callRef.current<PublicSnapshot>('duo_public_state', { p_token: myToken })
+      } catch {
+        return
+      }
+      if (cancelled || !data?.phase) return
+      noteServerNow(data.serverNow)
+      const localEndsAt = toLocal(data.endsAt)
+      const localCountdownEndsAt = toLocal(data.countdownEndsAt)
+      setState((prev) => {
+        const serverPhase = data.phase as Phase
+        // Faz yalnızca İLERİ gider: `home → lobby → countdown → battle →
+        // results → matchover`. Sunucu geriye dönük bir faz döndürürse
+        // (gecikmeli yanıt) yok sayarız; aksi halde oyun geriye zıplar.
+        const order: Phase[] = ['home', 'lobby', 'countdown', 'battle', 'results', 'matchover']
+        const rank = (p: Phase) => order.indexOf(p)
+        const nextPhase = rank(serverPhase) > rank(prev.phase) ? serverPhase : prev.phase
+        if (nextPhase === prev.phase && !data.winner) return prev
+        return {
+          ...prev,
+          phase: nextPhase,
+          winner: data.winner ?? prev.winner,
+          round: data.round ?? prev.round,
+          endsAt: localEndsAt > 0 ? localEndsAt : prev.endsAt,
+          countdownEndsAt: localCountdownEndsAt > 0 ? localCountdownEndsAt : prev.countdownEndsAt,
+        }
+      })
+    }
+    void pull()
+    const id = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return
+      void pull()
+    }, 1_500)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [noteServerNow, room.code, room.playerId, room.token, setState, state.phase, toLocal])
 
   // Skoru kalıcı hale getir. `duo_tick` çağrılmadığı için sunucu skoru
   // saklamaz; sayfa yenilendiğinde yerel skor sıfırlanıyordu. Burada skoru
@@ -882,6 +988,20 @@ export const useDuoChaos = () => {
       void beginNextRound()
     }
   }, [beginNextRound, rivalNextReady, room])
+
+  // NEXT-READY HEARTBEAT: Yerel oyuncu onayladıysa ama rakip hâlâ onaylamadıysa
+  // onayımızı periyodik olarak yeniden yayınlarız. Tek bir `next-ready` paketi
+  // kaybolursa host turu hiç başlatmaz ve bir oyuncu "waiting for rival"
+  // ekranında takılı kalırdı. Heartbeat bu el sıkışmayı yakınsar.
+  useEffect(() => {
+    if (!nextReady || rivalNextReady) return
+    if (state.phase !== 'results') return
+    const id = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return
+      room.broadcast('next-ready', { by: room.playerId })
+    }, 1_500)
+    return () => window.clearInterval(id)
+  }, [nextReady, rivalNextReady, room, state.phase])
 
   const rematch = useCallback(async () => {
     setBusy(true)
