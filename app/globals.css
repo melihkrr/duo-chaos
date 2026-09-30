@@ -399,7 +399,9 @@ h3 {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  z-index: 0;
+  /* Doodle'lar hero metninin (özellikle eyebrow rozetinin) ÜZERİNDE kalsın;
+     aksi halde rozetin opak arka planı emojiyi örtüyordu. */
+  z-index: 2;
 }
 
 .doodle {
