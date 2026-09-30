@@ -301,24 +301,44 @@ export const useDuoChaos = () => {
     }
   }, [chaos, room, scout, setState, state.phase])
 
-  // Lobi hazırlık yoklaması.
+  // Lobi yoklaması.
   //
   // Realtime presence rakibin kanalı bağlandığı anda `true` olur; ancak
   // `duo_join_room` satırı henüz commit edilmemiş olabilir. Bu yüzden lobide
-  // sunucudan gerçek oyuncu sayısını çekip "Start match" butonunu ona göre
-  // kilitleriz. Sadece lobide ve sekme görünürken çalışır (maliyet düşük).
+  // sunucudan gerçek oyuncu satırlarını çekeriz: hem `playerCount` (Start
+  // butonu kilidi) hem de oyuncu adları buradan gelir. Böylece rakip odaya
+  // katıldığında adı her iki tarafta da görünür. Sadece lobide ve sekme
+  // görünürken çalışır (maliyet düşük).
   useEffect(() => {
     if (!room.code || state.phase !== 'lobby') return
     let cancelled = false
     const pull = async () => {
+      let data: PublicSnapshot | null = null
       try {
-        const data = await room.call<PublicSnapshot>('duo_public_state', {
+        data = await room.call<PublicSnapshot>('duo_public_state', {
           p_token: room.token ?? room.playerId,
         })
-        if (cancelled || !data) return
-        if (typeof data.playerCount === 'number') setServerPlayerCount(data.playerCount)
       } catch {
         /* oda silinmiş olabilir — sessizce geç */
+        return
+      }
+      if (cancelled || !data) return
+      if (typeof data.playerCount === 'number') setServerPlayerCount(data.playerCount)
+      // Oyuncu adlarını (ve varsa diğer alanları) sunucudan uygula. Yerel
+      // oyuncunun adı boşsa mevcut adı koru; rakip adı geldiğinde göster.
+      if (data.players && data.players.length > 0) {
+        setState((prev) => {
+          const players = prev.players.map((player) => {
+            const server = data.players?.find(
+              (item) => mapPlayerId(String(item.id), room.playerId) === player.id,
+            )
+            if (!server) return player
+            const serverName =
+              typeof server.name === 'string' && server.name.trim() ? server.name : player.name
+            return { ...player, ...server, id: player.id, name: serverName } as Player
+          })
+          return { ...prev, players }
+        })
       }
     }
     void pull()
@@ -330,7 +350,7 @@ export const useDuoChaos = () => {
       cancelled = true
       window.clearInterval(id)
     }
-  }, [room, state.phase])
+  }, [room, setState, state.phase])
 
   // Maç sonunda XP ver.
   const awarded = useRef(false)
@@ -360,9 +380,12 @@ export const useDuoChaos = () => {
           p_name: displayName || null,
         })
         const token = data?.token ?? `t-${code}`
+        const myName = (data?.name ?? displayName).trim()
         saveToken(code, token)
-        await room.connect(code, 'p1', token, data?.name ?? displayName)
+        await room.connect(code, 'p1', token, myName)
         resetMatch()
+        // Kendi adımızı yerel duruma da yaz; lobide hemen görünsün.
+        if (myName) updatePlayer('p1', { name: myName })
         setPhase('lobby')
         // Adres çubuğunu paylaşılabilir davet linkiyle eşitle.
         syncUrl(`/play/${code}`)
@@ -373,7 +396,7 @@ export const useDuoChaos = () => {
         setBusy(false)
       }
     },
-    [resetMatch, room, setPhase],
+    [resetMatch, room, setPhase, updatePlayer],
   )
 
   const joinRoom = useCallback(
@@ -390,9 +413,12 @@ export const useDuoChaos = () => {
           p_name: displayName || null,
         })
         const token = data?.token ?? `t-${normalized}`
+        const myName = (data?.name ?? displayName).trim()
         saveToken(normalized, token)
-        await room.connect(normalized, 'p2', token, data?.name ?? displayName)
+        await room.connect(normalized, 'p2', token, myName)
         resetMatch()
+        // Kendi adımızı yerel duruma da yaz; lobide hemen görünsün.
+        if (myName) updatePlayer('p1', { name: myName })
         setPhase('lobby')
         // Adres çubuğunu paylaşılabilir davet linkiyle eşitle.
         syncUrl(`/play/${normalized}`)
@@ -403,7 +429,7 @@ export const useDuoChaos = () => {
         setBusy(false)
       }
     },
-    [resetMatch, room, setPhase],
+    [resetMatch, room, setPhase, updatePlayer],
   )
 
   const restore = useCallback(

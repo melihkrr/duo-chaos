@@ -150,6 +150,15 @@ export const useRoom = (): RoomApi => {
         void channel.subscribe((next) => {
           if (next === 'SUBSCRIBED') {
             void channel.track({ player: nextPlayer, at: Date.now() })
+            // Kendi adımızı hemen yayınla; rakip kanala bağlandığında adımızı
+            // görsün (yalnızca yeniden adlandırmayı beklemesin).
+            if (resolvedName) {
+              void channel.send({
+                type: 'broadcast',
+                event: 'name',
+                payload: { by: nextPlayer, name: resolvedName },
+              })
+            }
             setStatus('live')
             resolve()
           } else if (next === 'CHANNEL_ERROR' || next === 'TIMED_OUT') {
