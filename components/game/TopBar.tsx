@@ -33,13 +33,14 @@ export function TopBar({ code, status, online, onLeave }: Props) {
         {code && <span className="room-code">Room {code}</span>}
         <span className={`conn conn-${status}`}>{STATUS_LABEL[status]}</span>
         <span className={`conn ${online ? 'conn-live' : 'conn-idle'}`}>
-          {online ? 'Cloud' : 'Local'}
+          {online ? '☁️ Cloud' : '📴 Local'}
         </span>
       </div>
 
       <div className="topbar-actions">
         <Button
           variant="ghost"
+          className="icon-btn"
           onClick={() => {
             unlockAudio()
             setMuted(toggleMuted())

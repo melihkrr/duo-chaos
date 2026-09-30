@@ -19,8 +19,15 @@ export function Home({ progress, onCreate, onJoin, busy, error }: Props) {
 
   return (
     <main className="home">
+      <div className="home-doodles" aria-hidden>
+        <span className="doodle doodle-a">🎮</span>
+        <span className="doodle doodle-b">⭐</span>
+        <span className="doodle doodle-c">🍬</span>
+        <span className="doodle doodle-d">💎</span>
+      </div>
+
       <section className="hero">
-        <p className="eyebrow">2-player realtime party duel</p>
+        <p className="eyebrow">✨ 2-player realtime party duel</p>
         <h1>
           DUO <span>CHAOS</span>
         </h1>
@@ -29,7 +36,7 @@ export function Home({ progress, onCreate, onJoin, busy, error }: Props) {
         </p>
         <div className="hero-actions">
           <Button onClick={onCreate} disabled={busy}>
-            {busy ? 'Creating…' : 'Create a game'}
+            {busy ? 'Creating…' : '🎉 Create a game'}
           </Button>
           <Button
             variant="ghost"
@@ -39,7 +46,7 @@ export function Home({ progress, onCreate, onJoin, busy, error }: Props) {
             }}
             disabled={busy}
           >
-            Join with code
+            🔗 Join with code
           </Button>
         </div>
         {error && <p className="error">{error}</p>}

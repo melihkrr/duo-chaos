@@ -35,16 +35,29 @@ export function Results({ state, progress, isHost, onNextRound, onRematch, onLea
       }
       className="results"
     >
+      {isMatchOver && winner && (
+        <div className="results-celebrate" aria-hidden>
+          <span>{meWon ? '🏆' : '🎈'}</span>
+          <strong>{meWon ? 'Victory!' : 'Good game!'}</strong>
+        </div>
+      )}
+
       <div className="score-list">
         {state.players.map((player, index) => {
           const objective = objectiveOf(player)
           const roundScore = state.roundScores?.[player.id] ?? player.roundScore ?? 0
           const matchScore = state.matchScores?.[player.id] ?? player.totalScore ?? 0
+          const isWinner = winner === player.id
           return (
-            <div key={player.id} className={['score-row', winner === player.id ? 'winner' : ''].join(' ')}>
-              <div>
-                <strong>{player.name}</strong>
-                <small className="muted">{missionLabel(objective)}</small>
+            <div key={player.id} className={['score-row', isWinner ? 'winner' : ''].join(' ')}>
+              <div className="score-id">
+                <span className="score-avatar" aria-hidden>
+                  {isWinner ? '👑' : index === 0 ? '🐰' : '🐻'}
+                </span>
+                <div>
+                  <strong>{player.name}</strong>
+                  <small className="muted">{missionLabel(objective)}</small>
+                </div>
               </div>
               <div className="score-values">
                 <span>

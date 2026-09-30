@@ -55,7 +55,12 @@ export function Battle({
     <section className="battle-wrap">
       <header className="hud">
         <div className="hud-player">
-          <strong>{me?.name ?? 'You'}</strong>
+          <div className="hud-name">
+            <span className="hud-badge me" aria-hidden>
+              🐰
+            </span>
+            <strong>{me?.name ?? 'You'}</strong>
+          </div>
           <small>{missionLabel(myObjective)}</small>
           <div className="hud-bar">
             <span style={{ width: `${Math.round(myProgress * 100)}%` }} />
@@ -66,7 +71,12 @@ export function Battle({
           <span className="hud-clock">{Math.max(0, secondsLeft)}s</span>
         </div>
         <div className="hud-player rival">
-          <strong>{rival?.name ?? 'Rival'}</strong>
+          <div className="hud-name">
+            <strong>{rival?.name ?? 'Rival'}</strong>
+            <span className="hud-badge rival" aria-hidden>
+              🐻
+            </span>
+          </div>
           <small>{missionLabel(rivalObjective)}</small>
           <div className="hud-bar">
             <span style={{ width: `${Math.round(rivalProgress * 100)}%` }} />

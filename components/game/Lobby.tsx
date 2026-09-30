@@ -47,11 +47,14 @@ export function Lobby({
           const filled = Boolean(player && (index === 0 || opponentPresent))
           return (
             <div key={index} className={['seat', filled ? 'filled' : 'empty'].join(' ')}>
-              <span className="seat-dot" />
-              <div>
+              <span className="seat-avatar" aria-hidden>
+                {filled ? (index === 0 ? '🐰' : '🐻') : '❓'}
+              </span>
+              <div className="seat-info">
                 <strong>{filled ? player?.name ?? 'Player' : 'Waiting…'}</strong>
                 <small className="muted">{index === 0 ? 'You' : 'Rival'}</small>
               </div>
+              <span className="seat-dot" />
             </div>
           )
         })}
