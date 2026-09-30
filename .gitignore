@@ -13,3 +13,10 @@ __v0_jsx-dev-runtime.ts
 node_modules
 .next/
 .DS_Store
+
+# Build artifacts
+*.tsbuildinfo
+tsconfig.tsbuildinfo
+
+# npm lockfile (project uses pnpm)
+package-lock.json
