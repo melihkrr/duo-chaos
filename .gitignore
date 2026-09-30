@@ -21,3 +21,4 @@ tsconfig.tsbuildinfo
 
 # npm lockfile (project uses pnpm)
 package-lock.json.next-server.log
+package-lock.json
