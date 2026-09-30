@@ -12,6 +12,7 @@ import {
   MOVE_SEND_MS,
   MOVE_SPEED,
   PHASE_TICK_MS,
+  REMOTE_POS_TTL,
   REMOTE_SMOOTHING,
   REMOTE_SNAP_DISTANCE,
   STEAL_COOLDOWN_MS,
@@ -41,12 +42,6 @@ const OBJECTIVE_CELEBRATE_MS = 1_400
  * "görev sayısı" değil, toplanan coin + çalınan + görev bonuslarının toplamıdır.
  */
 const OBJECTIVE_BONUS = 25
-
-/**
- * Bir broadcast konumunun "taze" sayıldığı süre (ms). Bu süreden eski bir
- * broadcast hedefi yok sayılır ve sunucu snapshot'ı otorite kabul edilir.
- */
-const REMOTE_POS_TTL = 1_500
 
 type LoopDeps = {
   state: State
@@ -468,7 +463,13 @@ export const useGameLoop = (deps: LoopDeps) => {
     }
     if (collectedIds.length > 0) {
       broadcast('collect', { ids: collectedIds, by: playerId })
-      void call('duo_collect', { p_token: token, p_coin_id: collectedIds[0] }).catch(() => undefined)
+      // Sunucuya TOPLANAN HER coini bildir. Önceden yalnızca ilk coin
+      // (`collectedIds[0]`) gönderiliyordu; aynı karede birden fazla coin
+      // toplandığında sunucu yalnızca birini işliyor ve skor/görev ilerlemesi
+      // istemci ile sunucu arasında ayrışıyordu.
+      for (const coinId of collectedIds) {
+        void call('duo_collect', { p_token: token, p_coin_id: coinId }).catch(() => undefined)
+      }
     }
     if (stealing) {
       broadcast('steal', { by: playerId })

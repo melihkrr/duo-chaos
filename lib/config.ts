@@ -229,25 +229,31 @@ export const XP_PER_MISSION = 60
 
 export type ProfileProgress = { xp: number; level: number; title: string; nextAt: number; progress: number }
 
-const TITLES = [
-  'Rookie',
-  'Scout',
-  'Raider',
-  'Tactician',
-  'Veteran',
-  'Champion',
-  'Legend',
-  'Chaos Master',
+/**
+ * XP eşikleri — sunucudaki `duo_profile_for_xp` (0002_helpers.sql) ile BİREBİR
+ * aynı olmalıdır. Önceden istemci `sqrt(xp/100)` eğrisini, sunucu ise
+ * `floor(xp/250)+1` eğrisini kullanıyordu; bu yüzden aynı XP için istemci ve
+ * sunucu FARKLI seviye/ünvan gösteriyordu ("seviyem yanlış görünüyor").
+ */
+const XP_PER_LEVEL = 250
+
+/** Sunucu ile aynı ünvan eşikleri (xp >= eşik). */
+const TITLE_TIERS: Array<{ min: number; title: string }> = [
+  { min: 1500, title: 'Chaos Master' },
+  { min: 1000, title: 'Risk Taker' },
+  { min: 650, title: 'Coin Thief' },
+  { min: 300, title: 'Chaos Rookie' },
+  { min: 0, title: 'Rookie' },
 ]
 
 /** XP'den seviye/ünvan türetir. Sunucu ile aynı eğriyi kullanır. */
 export const profileForXp = (xp: number): ProfileProgress => {
   const safeXp = Math.max(0, Math.floor(xp || 0))
-  const level = Math.max(1, Math.floor(Math.sqrt(safeXp / 100)) + 1)
-  const floorXp = (level - 1) ** 2 * 100
-  const nextAt = level ** 2 * 100
+  const level = Math.max(1, Math.floor(safeXp / XP_PER_LEVEL) + 1)
+  const floorXp = (level - 1) * XP_PER_LEVEL
+  const nextAt = level * XP_PER_LEVEL
   const span = Math.max(1, nextAt - floorXp)
   const progress = Math.min(1, Math.max(0, (safeXp - floorXp) / span))
-  const title = TITLES[Math.min(TITLES.length - 1, level - 1)] ?? TITLES[0]
+  const title = TITLE_TIERS.find((tier) => safeXp >= tier.min)?.title ?? 'Rookie'
   return { xp: safeXp, level, title, nextAt, progress }
 }

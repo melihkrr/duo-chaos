@@ -414,8 +414,8 @@ h3 {
 .doodle-a {
   /* 🎮 hero metninin/eyebrow rozetinin üstüne binmesin diye sol-alt
      köşeye, içerikten uzak bir noktaya taşındı. */
-  bottom: 22%;
-  left: 4%;
+  top: 22%;
+  left: 16%;
   transform: rotate(-12deg);
   animation-delay: 0s;
 }

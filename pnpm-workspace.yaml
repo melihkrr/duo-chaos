@@ -1,3 +1,9 @@
+# Single-package workspace. The `packages` field is required by pnpm 10+;
+# without it `pnpm install`/`pnpm check` fail with
+# "ERROR packages field missing or empty".
+packages:
+  - '.'
+
 # Allowlist native/postinstall build scripts required by the toolchain.
 # unrs-resolver is a transitive dep of eslint-config-next and needs its
 # postinstall to fetch the correct native binary.
