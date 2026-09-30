@@ -33,6 +33,11 @@ type Props = {
    * rakip hareketi de React render'ı tetiklemez.
    */
   liveRivalPos: React.RefObject<{ x: number; y: number } | null>
+  /**
+   * Son görev tamamlanma anı (epoch ms). Değer değiştiğinde küçük bir kutlama
+   * animasyonu (konfeti + "+25") oynatılır. Yeni görev zaten ANINDA atanmıştır.
+   */
+  celebrateRef: React.RefObject<number>
   onEmote: () => void
 }
 
@@ -48,9 +53,13 @@ export function Battle({
   onJoystick,
   livePos,
   liveRivalPos,
+  celebrateRef,
   onEmote,
 }: Props) {
   const [now, setNow] = useState(0)
+  // Kutlama katmanının görünürlüğü. `celebrateRef` her tamamlanmada artan bir
+  // zaman damgası taşır; değer değiştiğinde kutlamayı kısa süreliğine açarız.
+  const [celebrate, setCelebrate] = useState(0)
   // Yerel avatarın DOM düğümü. Konumu her karede doğrudan buna yazarız.
   const meRef = useRef<HTMLDivElement | null>(null)
   // Rakip avatarın DOM düğümü. Aynı şekilde doğrudan yazarız.
@@ -60,6 +69,26 @@ export function Battle({
     const id = window.setInterval(() => setNow(Date.now()), 200)
     return () => window.clearInterval(id)
   }, [])
+
+  // Görev tamamlanma sinyalini izle. `celebrateRef` her tamamlanmada yeni bir
+  // zaman damgası alır; değer değiştiğinde kutlamayı ~1.4 sn gösteririz.
+  useEffect(() => {
+    let raf = 0
+    let last = celebrateRef.current
+    const watch = () => {
+      const value = celebrateRef.current
+      if (value !== last) {
+        last = value
+        setCelebrate(value)
+        window.setTimeout(() => {
+          setCelebrate((current) => (current === value ? 0 : current))
+        }, 1400)
+      }
+      raf = window.requestAnimationFrame(watch)
+    }
+    raf = window.requestAnimationFrame(watch)
+    return () => window.cancelAnimationFrame(raf)
+  }, [celebrateRef])
 
   // Yerel oyuncunun konumunu doğrudan DOM'a uygula (React render'ı olmadan).
   // Bu, hareketin 60Hz'de akıcı kalmasını sağlar; `state` yalnızca skor/coin
@@ -151,6 +180,16 @@ export function Battle({
               {countdownStep}
             </span>
             <span className="countdown-hint">Get ready!</span>
+          </div>
+        )}
+
+        {celebrate > 0 && (
+          <div className="celebrate-overlay" role="status" aria-live="polite">
+            <span className="celebrate-badge">Mission complete!</span>
+            <span className="celebrate-bonus">+25</span>
+            {Array.from({ length: 10 }, (_, i) => (
+              <span key={i} className={`confetti confetti-${i % 5}`} aria-hidden />
+            ))}
           </div>
         )}
 

@@ -82,6 +82,7 @@ export default function Page() {
           onJoystick={game.onJoystick}
           livePos={game.livePos}
           liveRivalPos={game.liveRivalPos}
+          celebrateRef={game.celebrateRef}
           onEmote={game.triggerEmote}
         />
       )}

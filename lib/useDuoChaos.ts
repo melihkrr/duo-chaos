@@ -249,6 +249,8 @@ export const useDuoChaos = () => {
   // doğrudan DOM'a yazar; 60Hz hareket React render'ı tetiklemez.
   const livePos = loop.livePos
   const liveRivalPos = loop.liveRivalPos
+  // Son görev tamamlanma anı. `Battle` bunu izleyip küçük kutlama gösterir.
+  const celebrateRef = loop.celebrateRef
 
   // Realtime olaylarını bağla.
   useEffect(() => {
@@ -781,6 +783,7 @@ export const useDuoChaos = () => {
     onJoystick,
     livePos,
     liveRivalPos,
+    celebrateRef,
     createRoom,
     joinRoom,
     restore,

@@ -28,12 +28,13 @@ import type { Coin, Player, State } from './types'
 const REMOTE_SETTLE = 0.25
 
 /**
- * Görev tamamlandıktan sonra yeni görevin gelmesi için beklenen süre (ms).
- * Oyuncunun "3/3 tamamlandı" durumunu görebilmesi için kısa bir kutlama
- * penceresi bırakırız. Aksi halde görev, son coin toplanır toplanmaz anında
- * değişiyordu ("görevi yapıyorum yeni görev sonra geliyor" şikâyeti).
+ * Görev tamamlandığında gösterilen kutlama penceresinin süresi (ms).
+ *
+ * ÖNEMLİ: Yeni görev ARTIK bu süre beklenmeden, tamamlanma anında HEMEN
+ * atanır. Bu süre yalnızca "Görev tamamlandı! +25" kutlama katmanının ne
+ * kadar görüneceğini belirler; oyun akışını bloklamaz.
  */
-const OBJECTIVE_COMPLETE_HOLD_MS = 1_200
+const OBJECTIVE_CELEBRATE_MS = 1_400
 
 /**
  * Bir görev tamamlandığında kümülatif skora eklenen bonus puan. Skor artık
@@ -115,9 +116,12 @@ export const useGameLoop = (deps: LoopDeps) => {
   const livePos = useRef<{ x: number; y: number } | null>(null)
   // Rakibin ekrana basılan konumu. Aynı şekilde doğrudan DOM'a yazılır.
   const liveRivalPos = useRef<{ x: number; y: number } | null>(null)
-  // Görev tamamlandığında yeni görevin verileceği zaman (epoch ms). 0 = bekleme
-  // yok. Oyuncunun "tamamlandı" durumunu görmesi için kısa bir pencere bırakır.
+  // Görev tamamlandığında kutlama katmanının görüneceği son zaman (epoch ms).
+  // 0 = kutlama yok. Yalnızca görseldir; yeni görev ANINDA atanır.
   const objectiveHold = useRef(0)
+  // Son görev tamamlanma anı (epoch ms). `Battle` bu değeri izleyerek küçük
+  // kutlama animasyonunu (konfeti + "+25") tetikler.
+  const celebrateRef = useRef(0)
   // Sanal joystick vektörü. `VirtualJoystick` `setJoystick` ile buraya yazar;
   // böylece her pointer hareketinde React render tetiklenmez (yalnızca RAF okur).
   const joystick = useRef<JoystickVector>({ x: 0, y: 0 })
@@ -361,10 +365,9 @@ export const useGameLoop = (deps: LoopDeps) => {
               roundScore: (next.roundScore ?? 0) + 10,
             }
           }
-          // Görev tamamlandıysa: tamamlanma sayacını artır, kısa bir
-          // "tamamlandı" penceresi bırak, SONRA yeni görev ver. Aksi halde
-          // görev, son coin toplanır toplanmaz anında değişiyor ve oyuncu
-          // tamamlandığını göremiyordu.
+          // Görev tamamlandıysa: tamamlanma sayacını artır, küçük bir kutlama
+          // tetikle ve YENİ GÖREVİ ANINDA ver. Yeni görev artık bekletilmez;
+          // oyuncu kutlamayı görürken bir yandan yeni göreve başlar.
           //
           // ÖNEMLİ: `score` KÜMÜLATİF'tir (toplanan coin + çalınan + görev
           // bonusu). Burada `score`'u görev sayısına EŞİTLEMEYİZ; aksi halde
@@ -373,33 +376,24 @@ export const useGameLoop = (deps: LoopDeps) => {
           // `objectivesDone` sayacını ve bir bonusu ekler.
           // ÖNEMLİ: `!next.missionDone` guard'ı şart. Görev tamamlandıktan
           // sonra `collectedTypes` yeni görev verilene kadar hedefi KARŞILAMAYA
-          // DEVAM EDER; guard olmadan bu dal her karede tekrar tetiklenir,
-          // `objectivesDone` sonsuz artar ve `else if` (yeni görev atama) dalı
-          // HİÇ çalışmaz → "sayaç artmadı / yeni görev gelmedi" hatası.
+          // DEVAM EDER; guard olmadan bu dal her karede tekrar tetiklenir ve
+          // `objectivesDone` sonsuz artar → "sayaç artmadı" hatası.
           if (!next.missionDone && objectiveSatisfied(next)) {
             changed = true
             const done = (next.objectivesDone ?? 0) + 1
-            // Tamamlanma anını işaretle; yeni görev `holdUntil` sonrası gelir.
-            objectiveHold.current = now + OBJECTIVE_COMPLETE_HOLD_MS
+            // Kutlama penceresini başlat (yalnızca görsel; akışı bloklamaz).
+            objectiveHold.current = now + OBJECTIVE_CELEBRATE_MS
+            // Kutlama sinyali: `Battle` bunu görünce konfeti/rozet gösterir.
+            celebrateRef.current = now
+            playSound('win')
             next = {
               ...next,
               objectivesDone: done,
               // Görev başına bonus puan (kümülatif skora eklenir).
               score: next.score + OBJECTIVE_BONUS,
               roundScore: (next.roundScore ?? 0) + OBJECTIVE_BONUS,
-              // Görev ŞİMDİLİK korunur (tamamlanmış haliyle gösterilir).
-              missionDone: true,
-            }
-          } else if (
-            next.missionDone &&
-            objectiveHold.current > 0 &&
-            now >= objectiveHold.current
-          ) {
-            // Bekleme penceresi doldu: yeni rastgele görev ver ve sayaçları sıfırla.
-            changed = true
-            objectiveHold.current = 0
-            next = {
-              ...next,
+              // YENİ GÖREV ANINDA: bekleme yok. Sayaçlar sıfırlanır ve
+              // rastgele yeni bir görev atanır.
               objective: randomObjective(next.objective?.id),
               coins: 0,
               stolen: 0,
@@ -473,7 +467,7 @@ export const useGameLoop = (deps: LoopDeps) => {
     }
   }, [deps.state.phase])
 
-  return { keys, setJoystick, livePos, liveRivalPos }
+  return { keys, setJoystick, livePos, liveRivalPos, celebrateRef }
 }
 
 export { COUNTDOWN_MS, PHASE_TICK_MS }
