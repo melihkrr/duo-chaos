@@ -20,4 +20,4 @@ server.log
 tsconfig.tsbuildinfo
 
 # npm lockfile (project uses pnpm)
-package-lock.json
+package-lock.json.next-server.log
