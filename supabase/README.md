@@ -15,16 +15,21 @@ Supabase CLI is not authenticated or Docker is unavailable.
 ```bash
 # Apply a single migration file (idempotent, wraps in a transaction).
 set SUPABASE_DB_PASSWORD=<db-password>
-pnpm db:apply supabase/migrations/0009_player_names.sql
+pnpm db:apply supabase/migrations/0010_lobby_readiness.sql
 
 # Rebuild the whole schema from scratch: drops every duo_* object and
-# replays migrations/0001..0009 in order. Use this when the live project
+# replays migrations/0001..0010 in order. Use this when the live project
 # was created from an older generation of SQL.
 set SUPABASE_DB_PASSWORD=<db-password>
 pnpm db:reset
+
+# Smoke-test every RPC the client calls (18 assertions, no password needed).
+pnpm db:test
 ```
 
-Both scripts send `notify pgrst, 'reload schema'` when they finish.
+Both migration scripts send `notify pgrst, 'reload schema'` when they finish.
+`pnpm db:test` drives a full match lifecycle over the REST API and asserts the
+responses, so it doubles as a regression check after any schema change.
 
 Environment variables (all optional except the password):
 
@@ -108,7 +113,7 @@ The client reads these variables (see [`.env.example`](../.env.example)):
 | `duo_set_name` | `p_code, p_token, p_name` | Change the caller's display name while in a room |
 | `duo_leave` | `p_code, p_token` | Leave; deletes the room when empty |
 | `duo_rematch` | `p_code, p_token` | Flag ready; resets to lobby when both ready |
-| `duo_public_state` | `p_code, p_token` | Authoritative snapshot (objectives redacted, both names exposed) |
+| `duo_public_state` | `p_code, p_token` | Authoritative snapshot (objectives redacted, both names exposed, `playerCount` for lobby readiness) |
 
 ### Gameplay
 | RPC | Args | Purpose |
@@ -116,7 +121,7 @@ The client reads these variables (see [`.env.example`](../.env.example)):
 | `duo_move` | `p_code, p_token, p_x, p_y` | Update position (countdown/battle only) |
 | `duo_collect` | `p_code, p_token, p_coin_id` | Claim a coin within range; scores it |
 | `duo_steal` | `p_code, p_token` | Steal from an adjacent opponent |
-| `duo_start_round` | `p_code, p_token` | Host starts countdown; assigns objectives |
+| `duo_start_round` | `p_code, p_token` | Host starts countdown; assigns objectives. Returns `{ok:false, reason}` (e.g. `not_ready`) instead of raising when the rival has not joined yet |
 | `duo_advance_phase` | `p_code, p_token` | countdown→battle→results/matchover |
 | `duo_tick` | `p_code, p_token` | World clock: chaos events, waves, magnet |
 

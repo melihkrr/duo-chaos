@@ -18,6 +18,16 @@ const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 const makeCode = () =>
   Array.from({ length: 6 }, () => CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)]).join('')
 
+/**
+ * Adres çubuğunu yeniden yüklemeden günceller. Oda oluşturma/katılma sonrası
+ * paylaşılabilir `/play/CODE` linkini, çıkışta ise kök `/` yolunu gösterir.
+ */
+const syncUrl = (path: string) => {
+  if (typeof window === 'undefined') return
+  if (window.location.pathname === path) return
+  window.history.pushState(null, '', path)
+}
+
 const mapPlayerId = (rawId: string, meId: string): string => {
   if (rawId === meId) return 'p1'
   if (rawId === 'p1' || rawId === 'p2') return rawId === 'p1' ? 'p2' : 'p1'
@@ -28,6 +38,8 @@ const mapPlayerId = (rawId: string, meId: string): string => {
 type PublicSnapshot = {
   phase?: Phase
   round?: number
+  /** Sunucudaki gerçek oyuncu satırı sayısı (presence değil). */
+  playerCount?: number
   endsAt?: number
   countdownEndsAt?: number
   winner?: string
@@ -50,6 +62,10 @@ export const useDuoChaos = () => {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [now, setNow] = useState(() => Date.now())
+  // Sunucudaki gerçek oyuncu satırı sayısı. Realtime presence'ın aksine bu
+  // değer `duo_join_room` commit edene kadar 1 kalır; bu yüzden "Start match"
+  // butonu presence yerine buna göre kilitlenir.
+  const [serverPlayerCount, setServerPlayerCount] = useState(0)
   const remotePos = useRef<Map<string, { x: number; y: number; at: number }>>(new Map())
 
   const { state, setState, setPhase, resetRound, resetMatch, updatePlayer } = game
@@ -285,6 +301,37 @@ export const useDuoChaos = () => {
     }
   }, [chaos, room, scout, setState, state.phase])
 
+  // Lobi hazırlık yoklaması.
+  //
+  // Realtime presence rakibin kanalı bağlandığı anda `true` olur; ancak
+  // `duo_join_room` satırı henüz commit edilmemiş olabilir. Bu yüzden lobide
+  // sunucudan gerçek oyuncu sayısını çekip "Start match" butonunu ona göre
+  // kilitleriz. Sadece lobide ve sekme görünürken çalışır (maliyet düşük).
+  useEffect(() => {
+    if (!room.code || state.phase !== 'lobby') return
+    let cancelled = false
+    const pull = async () => {
+      try {
+        const data = await room.call<PublicSnapshot>('duo_public_state', {
+          p_token: room.token ?? room.playerId,
+        })
+        if (cancelled || !data) return
+        if (typeof data.playerCount === 'number') setServerPlayerCount(data.playerCount)
+      } catch {
+        /* oda silinmiş olabilir — sessizce geç */
+      }
+    }
+    void pull()
+    const id = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return
+      void pull()
+    }, 1500)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [room, state.phase])
+
   // Maç sonunda XP ver.
   const awarded = useRef(false)
   useEffect(() => {
@@ -317,6 +364,8 @@ export const useDuoChaos = () => {
         await room.connect(code, 'p1', token, data?.name ?? displayName)
         resetMatch()
         setPhase('lobby')
+        // Adres çubuğunu paylaşılabilir davet linkiyle eşitle.
+        syncUrl(`/play/${code}`)
         playSound('join')
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Could not create room')
@@ -345,6 +394,8 @@ export const useDuoChaos = () => {
         await room.connect(normalized, 'p2', token, data?.name ?? displayName)
         resetMatch()
         setPhase('lobby')
+        // Adres çubuğunu paylaşılabilir davet linkiyle eşitle.
+        syncUrl(`/play/${normalized}`)
         playSound('join')
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Could not join room')
@@ -367,11 +418,28 @@ export const useDuoChaos = () => {
 
   const startGame = useCallback(async () => {
     setBusy(true)
+    setError(null)
     try {
-      await room.call('duo_start_round', { p_token: room.token ?? room.playerId })
+      const res = await room.call<{ ok?: boolean; reason?: string }>('duo_start_round', {
+        p_token: room.token ?? room.playerId,
+      })
+      // Sunucu artık hata fırlatmak yerine yumuşak sonuç döndürür. Rakip
+      // satırı henüz commit edilmediyse kullanıcıya anlaşılır bir mesaj ver.
+      if (res && res.ok === false) {
+        if (res.reason === 'not_ready') {
+          setError('Your rival is still connecting — try again in a moment.')
+        } else if (res.reason === 'not_host') {
+          setError('Only the host can start the match.')
+        } else {
+          setError('Could not start the match. Please try again.')
+        }
+        return
+      }
       resetRound(1, room.code ?? 'round-1')
       scout.reset()
       setPhase('countdown', { countdownEndsAt: Date.now() + COUNTDOWN_MS })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not start the match')
     } finally {
       setBusy(false)
     }
@@ -413,6 +481,9 @@ export const useDuoChaos = () => {
     await room.disconnect()
     resetMatch()
     setPhase('home')
+    // Adres çubuğunu kök yola döndür; aksi halde `/play/CODE` kalır ve
+    // sayfa yenilendiğinde eski odaya tekrar katılmaya çalışır.
+    syncUrl('/')
   }, [resetMatch, room, setPhase])
 
   const setName = useCallback(
@@ -445,6 +516,10 @@ export const useDuoChaos = () => {
 
   const secondsLeft = state.phase === 'battle' ? Math.max(0, Math.ceil((state.endsAt - now) / 1000)) : 0
 
+  // Lobi hazır mı? Sunucudaki gerçek oyuncu sayısı 2 ise evet. Presence'a
+  // güvenmek yanlış pozitif üretiyordu (rakip bağlı ama satırı yok).
+  const lobbyReady = serverPlayerCount >= 2
+
   return {
     state,
     room,
@@ -456,6 +531,8 @@ export const useDuoChaos = () => {
     busy,
     error,
     secondsLeft,
+    lobbyReady,
+    serverPlayerCount,
     createRoom,
     joinRoom,
     restore,

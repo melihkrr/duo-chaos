@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "check": "pnpm run typecheck && pnpm run lint",
     "db:reset": "node scripts/reset-and-migrate.mjs",
-    "db:apply": "node scripts/apply-migration.mjs"
+    "db:apply": "node scripts/apply-migration.mjs",
+    "db:test": "node scripts/test-endpoints.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.117.2",

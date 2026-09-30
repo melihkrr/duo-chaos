@@ -10,10 +10,13 @@ type Props = {
   players: Player[]
   isHost: boolean
   opponentPresent: boolean
+  /** Sunucudaki gerçek oyuncu sayısı 2 mi? Presence'a güvenmek yanlış pozitif üretiyordu. */
+  ready: boolean
   onCopy: () => void
   onStart: () => void
   onRename: (name: string) => void
   busy?: boolean
+  error?: string | null
 }
 
 const NAME_MAX = 16
@@ -23,10 +26,12 @@ export function Lobby({
   players,
   isHost,
   opponentPresent,
+  ready,
   onCopy,
   onStart,
   onRename,
   busy,
+  error,
 }: Props) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(players[0]?.name ?? '')
@@ -51,7 +56,9 @@ export function Lobby({
       <div className="seats">
         {[0, 1].map((index) => {
           const player = players[index]
-          const filled = Boolean(player && (index === 0 || opponentPresent))
+          // Rakip koltuğu yalnızca sunucuda gerçekten bir satır varsa dolu
+          // sayılır; presence tek başına yeterli değil.
+          const filled = Boolean(player && (index === 0 || ready))
           const isMe = index === 0
           return (
             <div key={index} className={['seat', filled ? 'filled' : 'empty'].join(' ')}>
@@ -100,12 +107,17 @@ export function Lobby({
 
       <div className="lobby-foot">
         {isHost ? (
-          <Button onClick={onStart} disabled={!opponentPresent || busy}>
-            {opponentPresent ? 'Start match' : 'Waiting for rival…'}
+          <Button onClick={onStart} disabled={!ready || busy}>
+            {ready ? 'Start match' : 'Waiting for rival…'}
           </Button>
         ) : (
           <p className="muted">Waiting for the host to start…</p>
         )}
+        {error ? (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        ) : null}
       </div>
     </Panel>
   )
