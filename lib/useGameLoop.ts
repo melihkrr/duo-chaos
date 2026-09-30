@@ -93,7 +93,10 @@ export const useGameLoop = (deps: LoopDeps) => {
     if (state.phase === 'countdown' && state.countdownEndsAt > 0 && now >= state.countdownEndsAt) {
       playSound('start')
       setState((prev) => ({ ...prev, phase: 'battle', endsAt: now + BATTLE_MS }))
-      void call('duo_advance_phase', { p_token: token })
+      // Sunucuya da bildir. `advancePhase` hata durumunda yeniden dener; böylece
+      // saat farkından dolayı erken tetiklenip `not_ready` alsak bile sunucu
+      // fazı eninde sonunda `battle`'a geçer.
+      void advancePhase('countdown')
       return
     }
     if (state.phase === 'battle' && state.endsAt > 0 && now >= state.endsAt) {
@@ -211,10 +214,13 @@ export const useGameLoop = (deps: LoopDeps) => {
     if (!loopActive) return
     let raf = 0
     let last = performance.now()
-    const tick = (now: number) => {
-      const dt = Math.min(0.05, (now - last) / 1000)
-      last = now
-      step(now, dt)
+    const tick = (perfNow: number) => {
+      const dt = Math.min(0.05, (perfNow - last) / 1000)
+      last = perfNow
+      // `step` içindeki faz karşılaştırmaları (countdownEndsAt / endsAt) mutlak
+      // epoch-ms değerleridir; bu yüzden `performance.now()` yerine `Date.now()`
+      // geçiririz. `dt` ise monotonik `performance.now()` farkından gelir.
+      step(Date.now(), dt)
       raf = window.requestAnimationFrame(tick)
     }
     raf = window.requestAnimationFrame(tick)

@@ -19,6 +19,16 @@ const makeCode = () =>
   Array.from({ length: 6 }, () => CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)]).join('')
 
 /**
+ * Oyuncuya özel benzersiz token. İki oyuncu aynı token'ı kullanırsa
+ * `duo_join_room` ikinci oyuncuyu "yeniden bağlanan host" sanıp slot 1'e
+ * oturtur; bu yüzden her istemci kendi rastgele token'ını üretir.
+ */
+const makeToken = () => {
+  const rand = () => Math.random().toString(36).slice(2, 10)
+  return `t-${rand()}${rand()}`
+}
+
+/**
  * Adres çubuğunu yeniden yüklemeden günceller. Oda oluşturma/katılma sonrası
  * paylaşılabilir `/play/CODE` linkini, çıkışta ise kök `/` yolunu gösterir.
  */
@@ -40,6 +50,8 @@ type PublicSnapshot = {
   round?: number
   /** Sunucudaki gerçek oyuncu satırı sayısı (presence değil). */
   playerCount?: number
+  /** Sunucunun yanıt anındaki saati (epoch ms) — saat farkını düzeltmek için. */
+  serverNow?: number
   endsAt?: number
   countdownEndsAt?: number
   winner?: string
@@ -67,6 +79,36 @@ export const useDuoChaos = () => {
   // butonu presence yerine buna göre kilitlenir.
   const [serverPlayerCount, setServerPlayerCount] = useState(0)
   const remotePos = useRef<Map<string, { x: number; y: number; at: number }>>(new Map())
+  // `room` her render'da yeni bir nesne kimliği taşır (useRoom dönüşü
+  // memoize edilmemiş). Bu yüzden yoklama effect'lerinin bağımlılığı olarak
+  // `room` kullanmak, effect'in her render'da yeniden kurulup interval'i
+  // sıfırlamasına ve hiç ateşlenmemesine yol açıyordu. Çağrı fonksiyonunu
+  // ref'te tutup effect'leri kararlı ilkel değerlere bağlarız.
+  const callRef = useRef(room.call)
+  useEffect(() => {
+    callRef.current = room.call
+  }, [room.call])
+
+  // Sunucu saati ile yerel saat arasındaki fark (ms). Sunucu deadline'ları
+  // (countdown_ends_at / ends_at) mutlak epoch-ms olarak döner; ancak sunucu
+  // saati istemciden farklı olabilir (bulut VM'lerde yaygın). Bu farkı
+  // hesaplayıp sunucu deadline'larını yerel saate çeviririz; aksi halde faz
+  // geçişi ya anında tetiklenir ya da hiç tetiklenmez.
+  const serverOffsetRef = useRef(0)
+  // `advancePhase` kendi kendini yeniden denemek zorunda (sunucu `not_ready`
+  // döndüğünde). Fonksiyonun kendi kimliğine erişmesi için ref'te tutarız.
+  const retryRef = useRef(0)
+  const advancePhaseRef = useRef<((from: Phase) => Promise<void>) | null>(null)
+  const noteServerNow = useCallback((serverNow?: number) => {
+    if (typeof serverNow === 'number' && serverNow > 0) {
+      serverOffsetRef.current = serverNow - Date.now()
+    }
+  }, [])
+  /** Sunucu deadline'ını yerel saat eksenine çevirir. */
+  const toLocal = useCallback((serverTs?: number) => {
+    if (typeof serverTs !== 'number' || serverTs <= 0) return 0
+    return serverTs - serverOffsetRef.current
+  }, [])
 
   const { state, setState, setPhase, resetRound, resetMatch, updatePlayer } = game
 
@@ -94,18 +136,49 @@ export const useDuoChaos = () => {
 
   const advancePhase = useCallback(
     async (from: Phase) => {
-      const data = await room.call<{ phase?: Phase; winner?: string; roundScores?: Record<string, number>; matchScores?: Record<string, number> }>(
-        'duo_advance_phase',
-        { p_token: room.token ?? room.playerId },
-      )
+      let data: {
+        phase?: Phase
+        winner?: string
+        roundScores?: Record<string, number>
+        matchScores?: Record<string, number>
+        serverNow?: number
+        endsAt?: number
+      } | null = null
+      try {
+        data = await room.call<{
+          phase?: Phase
+          winner?: string
+          roundScores?: Record<string, number>
+          matchScores?: Record<string, number>
+          serverNow?: number
+          endsAt?: number
+        }>('duo_advance_phase', { p_token: room.token ?? room.playerId })
+      } catch {
+        // Sunucu `not_ready` fırlattı (istemci saati sunucudan ileride olabilir).
+        // Aşağıdaki `from === 'countdown'` dalı yeniden dener.
+        data = null
+      }
       if (data?.phase) {
+        noteServerNow(data.serverNow)
+        const localEndsAt = toLocal(data.endsAt)
         setState((prev) => ({
           ...prev,
           phase: data.phase as Phase,
           winner: data.winner ?? prev.winner,
           roundScores: data.roundScores ?? prev.roundScores,
           matchScores: data.matchScores ?? prev.matchScores,
+          endsAt: localEndsAt > 0 ? localEndsAt : prev.endsAt,
         }))
+      } else if (from === 'countdown') {
+        // Sunucu henüz `not_ready` döndürdü (istemci saati sunucudan ileride
+        // olabilir). Yerel fazı ilerletmeyiz; kısa aralıklarla yeniden deneriz
+        // ki sunucu da `battle`'a geçsin. `useGameLoop` bu fonksiyonu her
+        // karede çağırmaz, bu yüzden burada kendi zamanlayıcımızı kurarız.
+        if (retryRef.current) window.clearTimeout(retryRef.current)
+        retryRef.current = window.setTimeout(() => {
+          retryRef.current = 0
+          void advancePhaseRef.current?.('countdown')
+        }, 400)
       } else {
         // Offline: yerel geçiş.
         setState((prev) => {
@@ -129,8 +202,18 @@ export const useDuoChaos = () => {
         })
       }
     },
-    [room, setState],
+    [noteServerNow, room, setState, toLocal],
   )
+
+  // `advancePhase`'in kendi kendini yeniden deneyebilmesi için güncel kimliği
+  // ref'te tutarız; ayrıca bileşen sökülürken bekleyen zamanlayıcıyı temizleriz.
+  useEffect(() => {
+    advancePhaseRef.current = advancePhase
+    return () => {
+      if (retryRef.current) window.clearTimeout(retryRef.current)
+      retryRef.current = 0
+    }
+  }, [advancePhase])
 
   useGameLoop({
     state,
@@ -227,40 +310,53 @@ export const useDuoChaos = () => {
   // atılmaz — bu fazlardaki değişimler zaten realtime broadcast ile gelir.
   // Aralık `POLL_MS` haritasından seçilir (battle'da 1s, countdown'da 0.5s).
   useEffect(() => {
-    if (!room.code) return
+    const code = room.code
+    if (!code) return
     const active = state.phase === 'countdown' || state.phase === 'battle'
     if (!active) return
+    const myId = room.playerId
+    const myToken = room.token ?? room.playerId
     let cancelled = false
     const pull = async () => {
       let data: PublicSnapshot | null = null
       try {
-        data = await room.call<PublicSnapshot>('duo_public_state', { p_token: room.token ?? room.playerId })
+        data = await callRef.current<PublicSnapshot>('duo_public_state', { p_token: myToken })
       } catch {
         // Oda silinmiş olabilir (rakip çıktı / leave). Sessizce dur; UI'yi bozma.
         return
       }
       if (cancelled || !data) return
+      // Sunucu saat farkını güncelle, sonra deadline'ları yerel saate çevir.
+      noteServerNow(data.serverNow)
+      const localEndsAt = toLocal(data.endsAt)
+      const localCountdownEndsAt = toLocal(data.countdownEndsAt)
       setState((prev) => {
         const players = prev.players.map((player) => {
-          const server = data.players?.find((item) => mapPlayerId(String(item.id), room.playerId) === player.id)
+          const server = data.players?.find((item) => mapPlayerId(String(item.id), myId) === player.id)
           if (!server) return player
           // Sunucudan gelen adı koru; boşsa mevcut adı bırak.
           const serverName = typeof server.name === 'string' && server.name.trim() ? server.name : player.name
           return { ...player, ...server, id: player.id, name: serverName } as Player
         })
+        // Faz tek yönlü ilerler: yerel olarak `battle`'a geçtiysek sunucu
+        // henüz `countdown` döndürüyor olsa bile geri düşürmeyiz. Aksi halde
+        // `duo_advance_phase` commit edene kadar faz ileri-geri zıplar.
+        const serverPhase = data.phase ?? prev.phase
+        const phase =
+          prev.phase === 'battle' && serverPhase === 'countdown' ? prev.phase : serverPhase
         return {
           ...prev,
-          phase: data.phase ?? prev.phase,
+          phase,
           round: data.round ?? prev.round,
-          endsAt: data.endsAt ?? prev.endsAt,
-          countdownEndsAt: data.countdownEndsAt ?? prev.countdownEndsAt,
+          endsAt: localEndsAt > 0 ? localEndsAt : prev.endsAt,
+          countdownEndsAt: localCountdownEndsAt > 0 ? localCountdownEndsAt : prev.countdownEndsAt,
           winner: data.winner ?? prev.winner,
           coins: data.coins && data.coins.length > 0 ? data.coins : prev.coins,
           players,
         }
       })
       if (data.chaos) chaos.sync(data.chaos)
-      const me = data.players?.find((item) => mapPlayerId(String(item.id), room.playerId) === 'p1')
+      const me = data.players?.find((item) => mapPlayerId(String(item.id), myId) === 'p1')
       if (me) {
         scout.sync({
           charges: me.scoutCharges,
@@ -299,7 +395,7 @@ export const useDuoChaos = () => {
       window.clearTimeout(timer)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [chaos, room, scout, setState, state.phase])
+  }, [chaos, noteServerNow, room.code, room.playerId, room.token, scout, setState, state.phase, toLocal])
 
   // Lobi yoklaması.
   //
@@ -309,37 +405,59 @@ export const useDuoChaos = () => {
   // butonu kilidi) hem de oyuncu adları buradan gelir. Böylece rakip odaya
   // katıldığında adı her iki tarafta da görünür. Sadece lobide ve sekme
   // görünürken çalışır (maliyet düşük).
+  //
+  // ÖNEMLİ: Host `duo_start_round` çağırdığında sunucu fazı `countdown`'a
+  // çeker. Misafir oyuncu bunu yalnızca bu yoklama ile öğrenir; bu yüzden
+  // `phase` (ve ilgili zaman alanları) da burada senkronlanır. Aksi halde
+  // misafir lobide takılı kalır.
   useEffect(() => {
-    if (!room.code || state.phase !== 'lobby') return
+    const code = room.code
+    if (!code || state.phase !== 'lobby') return
+    const myId = room.playerId
+    const myToken = room.token ?? room.playerId
     let cancelled = false
     const pull = async () => {
       let data: PublicSnapshot | null = null
       try {
-        data = await room.call<PublicSnapshot>('duo_public_state', {
-          p_token: room.token ?? room.playerId,
-        })
+        data = await callRef.current<PublicSnapshot>('duo_public_state', { p_token: myToken })
       } catch {
         /* oda silinmiş olabilir — sessizce geç */
         return
       }
       if (cancelled || !data) return
       if (typeof data.playerCount === 'number') setServerPlayerCount(data.playerCount)
+      // Sunucu saat farkını güncelle, sonra deadline'ları yerel saate çevir.
+      noteServerNow(data.serverNow)
+      const localEndsAt = toLocal(data.endsAt)
+      const localCountdownEndsAt = toLocal(data.countdownEndsAt)
       // Oyuncu adlarını (ve varsa diğer alanları) sunucudan uygula. Yerel
       // oyuncunun adı boşsa mevcut adı koru; rakip adı geldiğinde göster.
-      if (data.players && data.players.length > 0) {
-        setState((prev) => {
-          const players = prev.players.map((player) => {
-            const server = data.players?.find(
-              (item) => mapPlayerId(String(item.id), room.playerId) === player.id,
-            )
-            if (!server) return player
-            const serverName =
-              typeof server.name === 'string' && server.name.trim() ? server.name : player.name
-            return { ...player, ...server, id: player.id, name: serverName } as Player
-          })
-          return { ...prev, players }
-        })
-      }
+      // Ayrıca host oyunu başlattıysa fazı da burada ilerlet.
+      setState((prev) => {
+        const players =
+          data.players && data.players.length > 0
+            ? prev.players.map((player) => {
+                const server = data.players?.find(
+                  (item) => mapPlayerId(String(item.id), myId) === player.id,
+                )
+                if (!server) return player
+                const serverName =
+                  typeof server.name === 'string' && server.name.trim() ? server.name : player.name
+                return { ...player, ...server, id: player.id, name: serverName } as Player
+              })
+            : prev.players
+        // Sunucu fazı lobiden çıktıysa (host başlattı) yerel fazı da ilerlet.
+        const nextPhase = data.phase && data.phase !== 'lobby' ? data.phase : prev.phase
+        return {
+          ...prev,
+          phase: nextPhase,
+          round: data.round ?? prev.round,
+          endsAt: localEndsAt > 0 ? localEndsAt : prev.endsAt,
+          countdownEndsAt: localCountdownEndsAt > 0 ? localCountdownEndsAt : prev.countdownEndsAt,
+          winner: data.winner ?? prev.winner,
+          players,
+        }
+      })
     }
     void pull()
     const id = window.setInterval(() => {
@@ -350,7 +468,7 @@ export const useDuoChaos = () => {
       cancelled = true
       window.clearInterval(id)
     }
-  }, [room, setState, state.phase])
+  }, [noteServerNow, room.code, room.playerId, room.token, setState, state.phase, toLocal])
 
   // Maç sonunda XP ver.
   const awarded = useRef(false)
@@ -374,12 +492,16 @@ export const useDuoChaos = () => {
       try {
         const code = makeCode()
         const displayName = (name ?? room.name ?? '').trim()
+        // Her oyuncu BENZERSİZ bir token kullanmalı. Aksi halde iki taraf da
+        // `t-${code}` gönderir ve `duo_join_room` token eşleşmesinden dolayı
+        // ikinci oyuncuyu "yeniden bağlanan host" sanıp slot 1'e oturtur.
+        const myToken = makeToken()
         const data = await room.call<{ token?: string; name?: string }>('duo_create_room', {
           p_code: code,
-          p_token: `t-${code}`,
+          p_token: myToken,
           p_name: displayName || null,
         })
-        const token = data?.token ?? `t-${code}`
+        const token = data?.token ?? myToken
         const myName = (data?.name ?? displayName).trim()
         saveToken(code, token)
         await room.connect(code, 'p1', token, myName)
@@ -407,12 +529,14 @@ export const useDuoChaos = () => {
       const normalized = code.trim().toUpperCase()
       try {
         const displayName = (name ?? room.name ?? '').trim()
+        // Benzersiz token: host ile çakışmamalı, yoksa slot 1'e düşeriz.
+        const myToken = makeToken()
         const data = await room.call<{ token?: string; name?: string }>('duo_join_room', {
           p_code: normalized,
-          p_token: `t-${normalized}`,
+          p_token: myToken,
           p_name: displayName || null,
         })
-        const token = data?.token ?? `t-${normalized}`
+        const token = data?.token ?? myToken
         const myName = (data?.name ?? displayName).trim()
         saveToken(normalized, token)
         await room.connect(normalized, 'p2', token, myName)
@@ -446,9 +570,13 @@ export const useDuoChaos = () => {
     setBusy(true)
     setError(null)
     try {
-      const res = await room.call<{ ok?: boolean; reason?: string }>('duo_start_round', {
-        p_token: room.token ?? room.playerId,
-      })
+      const res = await room.call<{
+        ok?: boolean
+        reason?: string
+        serverNow?: number
+        countdownEndsAt?: number
+        endsAt?: number
+      }>('duo_start_round', { p_token: room.token ?? room.playerId })
       // Sunucu artık hata fırlatmak yerine yumuşak sonuç döndürür. Rakip
       // satırı henüz commit edilmediyse kullanıcıya anlaşılır bir mesaj ver.
       if (res && res.ok === false) {
@@ -463,26 +591,38 @@ export const useDuoChaos = () => {
       }
       resetRound(1, room.code ?? 'round-1')
       scout.reset()
-      setPhase('countdown', { countdownEndsAt: Date.now() + COUNTDOWN_MS })
+      // Sunucu deadline'larını yerel saate çevir (saat farkı düzeltmesi).
+      noteServerNow(res?.serverNow)
+      const localCountdown = toLocal(res?.countdownEndsAt)
+      setPhase('countdown', {
+        countdownEndsAt: localCountdown > 0 ? localCountdown : Date.now() + COUNTDOWN_MS,
+      })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not start the match')
     } finally {
       setBusy(false)
     }
-  }, [resetRound, room, scout, setPhase])
+  }, [noteServerNow, resetRound, room, scout, setPhase, toLocal])
 
   const startNextRound = useCallback(async () => {
     setBusy(true)
     try {
       const nextRound = state.round + 1
-      await room.call('duo_start_round', { p_token: room.token ?? room.playerId })
+      const res = await room.call<{ serverNow?: number; countdownEndsAt?: number }>(
+        'duo_start_round',
+        { p_token: room.token ?? room.playerId },
+      )
       resetRound(nextRound, room.code ?? `round-${nextRound}`)
       scout.reset()
-      setPhase('countdown', { countdownEndsAt: Date.now() + COUNTDOWN_MS })
+      noteServerNow(res?.serverNow)
+      const localCountdown = toLocal(res?.countdownEndsAt)
+      setPhase('countdown', {
+        countdownEndsAt: localCountdown > 0 ? localCountdown : Date.now() + COUNTDOWN_MS,
+      })
     } finally {
       setBusy(false)
     }
-  }, [resetRound, room, scout, setPhase, state.round])
+  }, [noteServerNow, resetRound, room, scout, setPhase, state.round, toLocal])
 
   const rematch = useCallback(async () => {
     setBusy(true)

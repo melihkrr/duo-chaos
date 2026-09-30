@@ -84,8 +84,10 @@ export const useProgress = (): ProgressApi => {
         xp: typeof data.xp === 'number' ? data.xp : prev.xp,
         level: typeof data.level === 'number' ? data.level : prev.level,
         title: typeof data.title === 'string' ? data.title : prev.title,
-        emote: (data.emote as EmoteId) ?? prev.emote,
-        trail: (data.trail as TrailId) ?? prev.trail,
+        // Sunucu, seçim yapılmamışsa boş string döndürür; bunu "ayarlanmamış"
+        // sayıp mevcut (varsayılan) değeri koruruz.
+        emote: typeof data.emote === 'string' && data.emote ? (data.emote as EmoteId) : prev.emote,
+        trail: typeof data.trail === 'string' && data.trail ? (data.trail as TrailId) : prev.trail,
         wins: typeof data.wins === 'number' ? data.wins : prev.wins,
         matches: typeof data.matches === 'number' ? data.matches : prev.matches,
       }

@@ -38,8 +38,11 @@ export const useCosmetics = (
   const timer = useRef<number | null>(null)
 
   // Sunucudan gelen kozmetikler varsayılan; yerel seçim onu geçersiz kılar.
-  const emote = emoteOverride ?? initial.emote ?? 'wave'
-  const trail = trailOverride ?? initial.trail ?? 'spark'
+  // Sunucu, seçim yapılmamışsa boş string ('') döndürür; bunu "ayarlanmamış"
+  // sayıp varsayılana düşeriz (aksi halde `emoteById('')` null döner ve
+  // emote glifi hiç görünmez).
+  const emote = emoteOverride || initial.emote || 'wave'
+  const trail = trailOverride || initial.trail || 'spark'
 
   useEffect(
     () => () => {
