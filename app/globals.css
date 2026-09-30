@@ -721,6 +721,22 @@ h3 {
   background: var(--mint-soft);
 }
 
+/* Tamamlanan görev sayısı = oyuncunun skoru. */
+.hud-score {
+  flex: none;
+  min-width: 26px;
+  padding: 1px 8px;
+  border: 2px solid var(--ink);
+  border-radius: var(--r-pill);
+  background: var(--card);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.5;
+  text-align: center;
+  box-shadow: 0 2px 0 rgba(43, 36, 64, 0.18);
+}
+
 .hud-player strong {
   display: block;
   font-size: 14px;

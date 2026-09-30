@@ -6,7 +6,8 @@ export const COUNTDOWN_MS = 3_000
 export const MATCH_ROUNDS = 3
 
 // --- Ağ / döngü aralıkları ---
-export const MOVE_SEND_MS = 40
+// 16ms ≈ 60Hz: pozisyon yayını kare hızıyla eşleşir, rakip akıcı görünür.
+export const MOVE_SEND_MS = 16
 export const ACTION_MS = 90
 export const STEAL_COOLDOWN_MS = 700
 export const BUMP_SLOW_MS = 400
@@ -20,10 +21,19 @@ export const REMOTE_POS_TTL = 5000
 export const POLL_MS = { lobby: 700, countdown: 500, battle: RECONCILE_MS, other: 1500 }
 
 // --- Hareket / çarpışma ---
-export const MOVE_SPEED = 34
+// Hız %/s cinsindendir. 34 → 52: karakter belirgin şekilde daha çevik.
+export const MOVE_SPEED = 52
 export const COLLECT_RADIUS = 9
 export const STEAL_RADIUS = 10
 export const PLAYER_HIT_R = 4.2
+/**
+ * Rakip pozisyonunu yumuşatma katsayısı (0-1). Her karede hedefe doğru
+ * bu oran kadar yaklaşılır. 1 = yumuşatma yok (anlık zıplama), düşük değer =
+ * daha yumuşak ama daha gecikmeli. 0.35 akıcı ve tepkisel bir denge verir.
+ */
+export const REMOTE_SMOOTHING = 0.35
+/** Yumuşatma sırasında bu mesafeden (arena %) büyük farklar anında atlanır. */
+export const REMOTE_SNAP_DISTANCE = 18
 export const ARENA = { minX: 5, maxX: 95, minY: 7, maxY: 93 }
 export const SPAWN = { p1: { x: 18, y: 50 }, p2: { x: 82, y: 50 } }
 
@@ -60,6 +70,18 @@ export const CHAOS_EVENTS: ChaosEvent[] = [
 export const defaultObjectiveForPlayer = (id: string): Objective => {
   const index = id === 'p2' ? 1 : 0
   return OBJECTIVE_POOL[index % OBJECTIVE_POOL.length]
+}
+
+/**
+ * Tamamlanan bir görevin yerine rastgele YENİ bir görev seçer.
+ * `excludeId` verilirse aynı görev tekrar gelmez (mümkünse).
+ */
+export const randomObjective = (excludeId?: string): Objective => {
+  const candidates = excludeId
+    ? OBJECTIVE_POOL.filter((item) => item.id !== excludeId)
+    : OBJECTIVE_POOL
+  const pool = candidates.length > 0 ? candidates : OBJECTIVE_POOL
+  return pool[Math.floor(Math.random() * pool.length)] ?? OBJECTIVE_POOL[0]
 }
 
 export const generateObjectivePair = (seed?: string): [Objective, Objective] => {
@@ -100,6 +122,13 @@ export const getCoinValue = (type: CoinType, chaosEvent?: string, objective?: Ob
 
 // --- Coin ---
 export const COIN_COUNT = 14
+/**
+ * Toplanan bir coin bu süre sonra rastgele bir konumda ve rastgele bir
+ * renkte (türde) yeniden doğar. Oyun böylece kaynak açısından canlı kalır.
+ */
+export const COIN_RESPAWN_MS = 4_000
+/** Yeniden doğan coinin merkeze çok yakın olmaması için kenar payı (arena %). */
+export const COIN_RESPAWN_MARGIN = 8
 
 export const spawnCoins = (): Coin[] =>
   Array.from({ length: COIN_COUNT }, (_, i) => ({

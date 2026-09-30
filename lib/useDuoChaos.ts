@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { BATTLE_MS, COUNTDOWN_MS, MATCH_ROUNDS, POLL_MS } from './config'
+import { BATTLE_MS, COUNTDOWN_MS, MATCH_ROUNDS, POLL_MS, REMOTE_POS_TTL } from './config'
 import { playSound, unlockAudio } from './sound'
 import { useChaos } from './useChaos'
 import { useCosmetics } from './useCosmetics'
@@ -336,7 +336,19 @@ export const useDuoChaos = () => {
           if (!server) return player
           // Sunucudan gelen adı koru; boşsa mevcut adı bırak.
           const serverName = typeof server.name === 'string' && server.name.trim() ? server.name : player.name
-          return { ...player, ...server, id: player.id, name: serverName } as Player
+          const merged = { ...player, ...server, id: player.id, name: serverName } as Player
+          // Rakip pozisyonu: yakın zamanda bir `move` broadcast'i geldiyse
+          // sunucunun (gecikmeli) x/y'si ile ezme — aksi halde rakip her
+          // yoklamada geriye zıplar. Broadcast taze değilse sunucu değeri
+          // otoritedir (yeniden bağlanma / ışınlanma).
+          if (player.id === 'p2') {
+            const remote = remotePos.current.get('rival') ?? remotePos.current.get('p2')
+            if (remote && Date.now() - remote.at < REMOTE_POS_TTL) {
+              merged.x = player.x
+              merged.y = player.y
+            }
+          }
+          return merged
         })
         // Faz tek yönlü ilerler: yerel olarak `battle`'a geçtiysek sunucu
         // henüz `countdown` döndürüyor olsa bile geri düşürmeyiz. Aksi halde

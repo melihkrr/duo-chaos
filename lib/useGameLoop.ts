@@ -6,18 +6,34 @@ import {
   BATTLE_MS,
   BUMP_SLOW_MS,
   BUMP_SPEED_MULTIPLIER,
+  COIN_RESPAWN_MARGIN,
+  COIN_RESPAWN_MS,
+  COIN_TYPES,
   COLLECT_RADIUS,
   COUNTDOWN_MS,
   MOVE_SEND_MS,
   MOVE_SPEED,
   PHASE_TICK_MS,
+  REMOTE_SMOOTHING,
+  REMOTE_SNAP_DISTANCE,
   STEAL_COOLDOWN_MS,
   STEAL_RADIUS,
   getCoinValue,
+  randomObjective,
 } from './config'
+import { objectiveSatisfied } from './display'
 import { resolveMove } from './movement'
 import { playSound } from './sound'
 import type { Coin, Player, State } from './types'
+
+/** Rastgele bir arena konumu üretir (kenar payı bırakarak). */
+const randomCoinSpot = () => ({
+  x: COIN_RESPAWN_MARGIN + Math.random() * (100 - COIN_RESPAWN_MARGIN * 2),
+  y: COIN_RESPAWN_MARGIN + Math.random() * (100 - COIN_RESPAWN_MARGIN * 2),
+})
+
+/** Rastgele bir coin türü (diamond hariç — o yalnızca jackpot ile gelir). */
+const randomCoinType = () => COIN_TYPES[Math.floor(Math.random() * COIN_TYPES.length)] ?? 'gold'
 
 type LoopDeps = {
   state: State
@@ -54,6 +70,9 @@ export const useGameLoop = (deps: LoopDeps) => {
   const lastAction = useRef(0)
   const lastSteal = useRef(0)
   const lastPhase = useRef<State['phase']>('home')
+  // Rakip için yumuşatılmış (interpolasyonlu) konum. Broadcast hedefi ile
+  // bu değer arasında her karede yumuşak geçiş yapılır.
+  const remoteTarget = useRef<{ x: number; y: number } | null>(null)
 
   // Klavye girdisi.
   useEffect(() => {
@@ -136,6 +155,40 @@ export const useGameLoop = (deps: LoopDeps) => {
       }
     }
 
+    // Rakip yumuşatma (interpolasyon).
+    //
+    // Broadcast pozisyonları 60Hz'de gelir ama ağ jitter'ı yüzünden aralar
+    // düzensizdir. Rakip konumunu her karede hedefe doğru `REMOTE_SMOOTHING`
+    // oranında yaklaştırarak akıcı hale getiririz. Çok büyük farklar (ışınlanma,
+    // yeniden bağlanma) anında atlanır ki rakip "kaymasın".
+    const rivalTarget = state.players[1]
+    if (rivalTarget) {
+      const remote = remoteTarget.current
+      if (!remote) {
+        remoteTarget.current = { x: rivalTarget.x, y: rivalTarget.y }
+      } else {
+        const dist = Math.hypot(remote.x - rivalTarget.x, remote.y - rivalTarget.y)
+        if (dist > REMOTE_SNAP_DISTANCE) {
+          // Çok büyük fark: ışınlanma / yeniden bağlanma — anında hizala.
+          remote.x = rivalTarget.x
+          remote.y = rivalTarget.y
+        } else if (dist > 0.05) {
+          remote.x += (rivalTarget.x - remote.x) * REMOTE_SMOOTHING
+          remote.y += (rivalTarget.y - remote.y) * REMOTE_SMOOTHING
+        }
+        const smoothX = remote.x
+        const smoothY = remote.y
+        if (Math.abs(smoothX - rivalTarget.x) > 0.01 || Math.abs(smoothY - rivalTarget.y) > 0.01) {
+          setState((prev) => ({
+            ...prev,
+            players: prev.players.map((player, index) =>
+              index === 1 ? { ...player, x: smoothX, y: smoothY } : player,
+            ),
+          }))
+        }
+      }
+    }
+
     // Toplama.
     if (now - lastAction.current >= ACTION_MS) {
       lastAction.current = now
@@ -153,8 +206,12 @@ export const useGameLoop = (deps: LoopDeps) => {
         playSound('collect')
         setState((prev) => ({
           ...prev,
+          // Toplanan coinler `respawnAt` ile işaretlenir; süre dolunca
+          // rastgele konum + rastgele renkle yeniden doğarlar.
           coins: prev.coins.map((coin) =>
-            ids.has(coin.id) ? { ...coin, collectedBy: 'p1' } : coin,
+            ids.has(coin.id)
+              ? { ...coin, collectedBy: 'p1', respawnAt: now + COIN_RESPAWN_MS }
+              : coin,
           ),
           players: prev.players.map((player, index) =>
             index === 0
@@ -203,6 +260,52 @@ export const useGameLoop = (deps: LoopDeps) => {
       broadcast('steal', { by: 'p1' })
       void call('duo_steal', { p_token: token })
     }
+
+    // Görev tamamlama + yeniden doğma (tek bir setState'te toplanır).
+    setState((prev) => {
+      let changed = false
+      const nextCoins = prev.coins.map((coin) => {
+        if (coin.collectedBy && coin.respawnAt && now >= coin.respawnAt) {
+          changed = true
+          const spot = randomCoinSpot()
+          return {
+            ...coin,
+            x: spot.x,
+            y: spot.y,
+            type: randomCoinType(),
+            collectedBy: undefined,
+            respawnAt: undefined,
+          }
+        }
+        return coin
+      })
+
+      const nextPlayers = prev.players.map((player) => {
+        // Yalnızca yerel oyuncunun görevini biz yönetiriz; rakip kendi
+        // tarafında yönetir ve sunucu otoritesidir.
+        if (player.id !== 'p1') return player
+        if (!objectiveSatisfied(player)) return player
+        changed = true
+        const done = (player.objectivesDone ?? 0) + 1
+        // Görev tamamlandı: yerine rastgele yeni bir görev ver.
+        return {
+          ...player,
+          objectivesDone: done,
+          // Skor = tamamlanan görev sayısı.
+          score: done,
+          roundScore: done,
+          objective: randomObjective(player.objective?.id),
+          // Yeni görev için ilerleme sayaçlarını sıfırla.
+          coins: 0,
+          stolen: 0,
+          collectedTypes: {},
+          missionDone: false,
+        }
+      })
+
+      if (!changed) return prev
+      return { ...prev, coins: nextCoins, players: nextPlayers }
+    })
   }, [])
 
   // Ana döngü yalnızca aktif fazlarda (countdown/battle) çalışır.

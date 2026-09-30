@@ -44,8 +44,11 @@ export function Results({ state, progress, isHost, onNextRound, onRematch, busy 
       <div className="score-list">
         {state.players.map((player, index) => {
           const objective = objectiveOf(player)
-          const roundScore = state.roundScores?.[player.id] ?? player.roundScore ?? 0
-          const matchScore = state.matchScores?.[player.id] ?? player.totalScore ?? 0
+          // Skor = tamamlanan görev sayısı. Sunucu `objectivesDone` gönderir;
+          // yoksa (offline) yerel sayaç kullanılır.
+          const done = player.objectivesDone ?? 0
+          const roundScore = state.roundScores?.[player.id] ?? player.roundScore ?? done
+          const matchScore = state.matchScores?.[player.id] ?? player.totalScore ?? done
           const isWinner = winner === player.id
           return (
             <div key={player.id} className={['score-row', isWinner ? 'winner' : ''].join(' ')}>
@@ -59,6 +62,10 @@ export function Results({ state, progress, isHost, onNextRound, onRematch, busy 
                 </div>
               </div>
               <div className="score-values">
+                <span>
+                  <small>Objectives</small>
+                  {done}
+                </span>
                 <span>
                   <small>Round</small>
                   {roundScore}

@@ -52,6 +52,11 @@ export type Player = {
   score: number
   roundScore?: number
   totalScore?: number
+  /**
+   * Tamamlanan görev sayısı. Kullanıcının SKORU budur: her görev
+   * tamamlandığında 1 artar ve yerine rastgele yeni bir görev verilir.
+   */
+  objectivesDone?: number
   xp?: number
   slowedUntil?: number
   objective: Objective | null
@@ -74,7 +79,19 @@ export type Player = {
   title?: string
 }
 
-export type Coin = { id: number; x: number; y: number; type: CoinType; collectedBy?: string }
+export type Coin = {
+  id: number
+  x: number
+  y: number
+  type: CoinType
+  collectedBy?: string
+  /**
+   * Toplandıktan sonra yeniden doğacağı zaman (epoch ms). 0/undefined ise
+   * yeniden doğma beklenmiyor. Süre dolunca coin yeni konum + yeni renkle
+   * tekrar oynanabilir hale gelir.
+   */
+  respawnAt?: number
+}
 
 export type State = {
   phase: Phase

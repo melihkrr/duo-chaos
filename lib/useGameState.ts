@@ -22,6 +22,7 @@ export const blankPlayer = (id: 'p1' | 'p2'): Player => ({
   score: 0,
   roundScore: 0,
   totalScore: 0,
+  objectivesDone: 0,
   objective: null,
   rematch: false,
   scoutCharges: 2,

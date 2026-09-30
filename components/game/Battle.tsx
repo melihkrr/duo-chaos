@@ -60,6 +60,9 @@ export function Battle({
               🐰
             </span>
             <strong>{me?.name ?? 'You'}</strong>
+            <span className="hud-score" title="Completed objectives">
+              {me?.objectivesDone ?? 0}
+            </span>
           </div>
           <small>{missionLabel(myObjective)}</small>
           <div className="hud-bar">
@@ -73,6 +76,9 @@ export function Battle({
         <div className="hud-player rival">
           <div className="hud-name">
             <strong>{rival?.name ?? 'Rival'}</strong>
+            <span className="hud-score" title="Completed objectives">
+              {rival?.objectivesDone ?? 0}
+            </span>
             <span className="hud-badge rival" aria-hidden>
               🐻
             </span>
