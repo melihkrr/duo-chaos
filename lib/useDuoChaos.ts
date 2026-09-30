@@ -15,7 +15,7 @@ import type { Coin, EmoteId, Phase, Player, State } from './types'
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 
 const makeCode = () =>
-  Array.from({ length: 5 }, () => CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)]).join('')
+  Array.from({ length: 6 }, () => CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)]).join('')
 
 const mapPlayerId = (rawId: string, meId: string): string => {
   if (rawId === meId) return 'p1'
