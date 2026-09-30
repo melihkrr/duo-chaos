@@ -7,7 +7,7 @@ import { ScoutPanel } from './ScoutPanel'
 import { VirtualJoystick } from './VirtualJoystick'
 import { Button } from '../ui/Button'
 import { ARENA, OBSTACLES, trailById } from '../../lib/config'
-import { missionLabel, objectiveOf, progressOf } from '../../lib/display'
+import { missionLabel, objectiveOf, progressOf, targetOf } from '../../lib/display'
 import type { ChaosApi } from '../../lib/useChaos'
 import type { CosmeticsApi } from '../../lib/useCosmetics'
 import type { ScoutApi } from '../../lib/useScout'
@@ -129,10 +129,24 @@ export function Battle({
   const me = state.players[0]
   const rival = state.players[1]
   const myObjective = objectiveOf(me)
-  const myProgress = me ? progressOf(me) : 0
   const rivalObjective = objectiveOf(rival)
-  const rivalProgress = rival ? progressOf(rival) : 0
   const myTrail = trailById(me?.trail)
+
+  // Görev ilerlemesi: `progressOf` HAM sayıyı döner (örn. 3 toplamadan 1 tane
+  // toplandıysa 1). Bunu doğrudan yüzde olarak kullanmak hataydı: 1 coin
+  // toplayınca çubuk %100 doluyordu ("3 istiyor ama 1'de tam dolu görünüyor").
+  // Doğrusu: ilerleme / hedef oranı. Böylece 1/3 → %33 dolar.
+  const ratio = (value: number, target?: number) => {
+    const goal = target && target > 0 ? target : 1
+    return Math.max(0, Math.min(1, value / goal))
+  }
+  const myTarget = targetOf(myObjective)
+  const rivalTarget = targetOf(rivalObjective)
+  const myProgress = me ? ratio(progressOf(me), myTarget) : 0
+  const rivalProgress = rival ? ratio(progressOf(rival), rivalTarget) : 0
+  // Görev sayacı: "1/3" biçiminde gösterilir.
+  const myCount = me ? progressOf(me) : 0
+  const rivalCount = rival ? progressOf(rival) : 0
 
   // Geri sayım: `countdown` fazında kalan süreyi 3-2-1 olarak gösteririz.
   // `countdownEndsAt` sunucu saatinden yerel saate çevrilmiş bir deadline'dır.
@@ -157,9 +171,9 @@ export function Battle({
           </div>
           <small>
             {missionLabel(myObjective)}
-            <span className="hud-missions" title="Missions completed">
+            <span className="hud-missions" title="Mission progress">
               {' '}
-              · {me?.objectivesDone ?? 0} ✓
+              · {myCount}/{myTarget}
             </span>
           </small>
           <div className="hud-bar">
@@ -183,9 +197,9 @@ export function Battle({
           </div>
           <small>
             {missionLabel(rivalObjective)}
-            <span className="hud-missions" title="Missions completed">
+            <span className="hud-missions" title="Mission progress">
               {' '}
-              · {rival?.objectivesDone ?? 0} ✓
+              · {rivalCount}/{rivalTarget}
             </span>
           </small>
           <div className="hud-bar">

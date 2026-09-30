@@ -315,6 +315,9 @@ export const useGameLoop = (deps: LoopDeps) => {
 
     // --- Tek `setState`: hareket + rakip + toplama + çalma + yeniden doğma. ---
     // Kare başına tek render hedefi; bu, hareketin akıcı kalmasını sağlar.
+    // Skor değişimini bu blok içinde yakalarız; sonra rakip HUD'unu beslemek
+    // için `score` broadcast'i yayınlarız (aşağıda).
+    let scoreDelta = 0
     setState((prev) => {
       let changed = false
 
@@ -343,6 +346,7 @@ export const useGameLoop = (deps: LoopDeps) => {
           // yalnızca tur başında (spawn) doğru olması yeterlidir.
           if (collectedIds.length > 0) {
             changed = true
+            scoreDelta += gained
             next = {
               ...next,
               coins: next.coins + collectedIds.length,
@@ -358,6 +362,7 @@ export const useGameLoop = (deps: LoopDeps) => {
           }
           if (stealing) {
             changed = true
+            scoreDelta += 10
             next = {
               ...next,
               stolen: next.stolen + 1,
@@ -380,6 +385,7 @@ export const useGameLoop = (deps: LoopDeps) => {
           // `objectivesDone` sonsuz artar → "sayaç artmadı" hatası.
           if (!next.missionDone && objectiveSatisfied(next)) {
             changed = true
+            scoreDelta += OBJECTIVE_BONUS
             const done = (next.objectivesDone ?? 0) + 1
             // Kutlama penceresini başlat (yalnızca görsel; akışı bloklamaz).
             objectiveHold.current = now + OBJECTIVE_CELEBRATE_MS
@@ -434,6 +440,13 @@ export const useGameLoop = (deps: LoopDeps) => {
     if (stealing) {
       broadcast('steal', { by: 'p1' })
       void call('duo_steal', { p_token: token }).catch(() => undefined)
+    }
+    // SKOR SENKRONU: `duo_tick` çağrılmadığı için sunucu skoru güncellemez.
+    // Bu yüzden skor değişimini rakibe doğrudan yayınlarız; rakip bunu kendi
+    // HUD'unda gösterir. Böylece "benim gördüğüm puanı karşı taraf görmüyor"
+    // sorunu ortadan kalkar.
+    if (scoreDelta !== 0) {
+      broadcast('score', { by: 'p1', delta: scoreDelta })
     }
   }, [])
 

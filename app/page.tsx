@@ -103,7 +103,6 @@ export default function Page() {
       {(state.phase === 'results' || state.phase === 'matchover') && (
         <Results
           state={state}
-          progress={progress}
           isHost={isHost}
           onNextRound={() => void game.startNextRound()}
           onRematch={() => void game.rematch()}

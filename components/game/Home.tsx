@@ -16,7 +16,12 @@ type Props = {
   initialName?: string
 }
 
-const STEPS = ['Create a game', 'Send the link', 'Get a secret mission', 'Beat them']
+const STEPS = [
+  { icon: '🎮', title: 'Create a room', text: 'One tap and your private arena is ready.' },
+  { icon: '🔗', title: 'Send the link', text: 'Your rival joins from any device instantly.' },
+  { icon: '🎯', title: 'Chase the mission', text: 'Grab the right coins before they do.' },
+  { icon: '🏆', title: 'Score the most', text: 'Highest score after 3 rounds wins.' },
+]
 const NAME_MAX = 16
 
 export function Home({ progress, onCreate, onJoin, busy, error, initialName = '' }: Props) {
@@ -36,72 +41,83 @@ export function Home({ progress, onCreate, onJoin, busy, error, initialName = ''
         <span className="doodle doodle-d">💎</span>
       </div>
 
-      <section className="hero">
-        <p className="eyebrow">✨ 2-player realtime party duel</p>
-        <h1>
-          DUO <span>CHAOS</span>
-        </h1>
-        <p className="lede">
-          See. Guess. Grab the resource. Break their plan. Finish your secret mission — then rematch.
-        </p>
+      <div className="home-grid">
+        <section className="hero">
+          <p className="eyebrow">✨ 2-player realtime party duel</p>
+          <h1>
+            DUO <span>CHAOS</span>
+          </h1>
+          <p className="lede">
+            Two players. One arena. Grab the coins your mission asks for, steal from your rival, and
+            finish with the highest score. Fast, chaotic, and best played with a friend.
+          </p>
 
-        <label className="field name-field">
-          <span className="field-label">Your name</span>
-          <input
-            className="name-input"
-            value={name}
-            onChange={(event) => setName(event.target.value.slice(0, NAME_MAX))}
-            placeholder="e.g. Melih"
-            maxLength={NAME_MAX}
-            autoComplete="nickname"
-            spellCheck={false}
-            aria-label="Your display name"
-          />
-          <small className="muted">Your rival will see this name.</small>
-        </label>
+          <label className="field name-field">
+            <span className="field-label">Your name</span>
+            <input
+              className="name-input"
+              value={name}
+              onChange={(event) => setName(event.target.value.slice(0, NAME_MAX))}
+              placeholder="e.g. Melih"
+              maxLength={NAME_MAX}
+              autoComplete="nickname"
+              spellCheck={false}
+              aria-label="Your display name"
+            />
+            <small className="muted">Your rival will see this name.</small>
+          </label>
 
-        <div className="hero-actions">
-          <Button onClick={() => onCreate(trimmed)} disabled={busy || !nameValid}>
-            {busy ? 'Creating…' : '🎉 Create a game'}
-          </Button>
-          <Button variant="ghost" onClick={() => setJoinOpen(true)} disabled={busy || !nameValid}>
-            🔗 Join with code
-          </Button>
-        </div>
-        {!nameValid && <p className="muted">Pick a name (at least 2 characters) to start.</p>}
-        {error && <p className="error">{error}</p>}
-      </section>
-
-      <Panel
-        title="Your profile"
-        subtitle={online ? 'Synced with server' : 'Offline — progress saved locally'}
-        className="profile-card"
-      >
-        <div className="profile-row">
-          <div className="profile-level">
-            <strong>{profile.level}</strong>
-            <small>Level</small>
+          <div className="hero-actions">
+            <Button onClick={() => onCreate(trimmed)} disabled={busy || !nameValid}>
+              {busy ? 'Creating…' : '🎉 Create a game'}
+            </Button>
+            <Button variant="ghost" onClick={() => setJoinOpen(true)} disabled={busy || !nameValid}>
+              🔗 Join with code
+            </Button>
           </div>
-          <div className="profile-meta">
-            <p className="profile-title">{profile.title}</p>
-            <div className="xp-bar" aria-label="XP progress">
-              <span style={{ width: `${Math.round(profile.progress * 100)}%` }} />
+          {!nameValid && <p className="muted">Pick a name (at least 2 characters) to start.</p>}
+          {error && <p className="error">{error}</p>}
+        </section>
+
+        <aside className="home-side">
+          <Panel
+            title="Your profile"
+            subtitle={online ? 'Synced with server' : 'Offline — progress saved locally'}
+            className="profile-card"
+          >
+            <div className="profile-row">
+              <div className="profile-level">
+                <strong>{profile.level}</strong>
+                <small>Level</small>
+              </div>
+              <div className="profile-meta">
+                <p className="profile-title">{profile.title}</p>
+                <div className="xp-bar" aria-label="XP progress">
+                  <span style={{ width: `${Math.round(profile.progress * 100)}%` }} />
+                </div>
+                <small className="muted">
+                  {raw.xp} XP · {raw.wins}W / {raw.matches}M
+                </small>
+              </div>
             </div>
-            <small className="muted">
-              {raw.xp} XP · {raw.wins}W / {raw.matches}M
-            </small>
-          </div>
-        </div>
-      </Panel>
+          </Panel>
 
-      <ol className="steps">
-        {STEPS.map((step, index) => (
-          <li key={step}>
-            <span>{index + 1}</span>
-            {step}
-          </li>
-        ))}
-      </ol>
+          <ol className="steps">
+            {STEPS.map((step, index) => (
+              <li key={step.title}>
+                <span className="step-icon" aria-hidden>
+                  {step.icon}
+                </span>
+                <div className="step-text">
+                  <strong>{step.title}</strong>
+                  <small>{step.text}</small>
+                </div>
+                <span className="step-num">{index + 1}</span>
+              </li>
+            ))}
+          </ol>
+        </aside>
+      </div>
 
       <JoinDialog
         key={joinOpen ? 'join-open' : 'join-closed'}

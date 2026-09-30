@@ -52,6 +52,43 @@ const mapPlayerId = (rawId: string, meId: string): string => {
   return rawId === 'p2' ? 'p1' : 'p2'
 }
 
+/**
+ * Skor kalıcılığı. `duo_tick` çağrılmadığı için sunucu skoru saklamaz; sayfa
+ * yenilendiğinde yerel skor sıfırlanıyordu ("yenileyince puanım sıfırlanıyor").
+ * Skoru oda bazında localStorage'da tutarız; `restore` sırasında geri yükleriz.
+ */
+const scoreKey = (code: string) => `duo-chaos:score:${code}`
+
+const readScores = (code: string): { p1: number; p2: number } | null => {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(scoreKey(code))
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { p1?: number; p2?: number }
+    return { p1: Number(parsed.p1) || 0, p2: Number(parsed.p2) || 0 }
+  } catch {
+    return null
+  }
+}
+
+const writeScores = (code: string, scores: { p1: number; p2: number }) => {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(scoreKey(code), JSON.stringify(scores))
+  } catch {
+    // Kota dolu / gizli mod — sessizce yoksay.
+  }
+}
+
+const clearScores = (code: string) => {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.removeItem(scoreKey(code))
+  } catch {
+    // yoksay
+  }
+}
+
 /** `duo_public_state` RPC'sinin döndürdüğü anlık görüntü. */
 type PublicSnapshot = {
   phase?: Phase
@@ -339,6 +376,28 @@ export const useDuoChaos = () => {
       playSound('lose')
     })
 
+    // SKOR SENKRONU: `duo_tick` çağrılmadığı için sunucu skoru güncellemez.
+    // Rakip, kendi skor değişimini `score` olayıyla yayınlar; burada onu
+    // rakibin (index 1) skoruna ekleriz. Böylece iki taraf da aynı puanı görür.
+    const offScore = room.on('score', (payload) => {
+      const data = payload as { by?: string; delta?: number }
+      if (!data || data.by === room.playerId) return
+      const delta = typeof data.delta === 'number' ? data.delta : 0
+      if (!delta) return
+      setState((prev) => ({
+        ...prev,
+        players: prev.players.map((player, index) =>
+          index === 1
+            ? {
+                ...player,
+                score: player.score + delta,
+                roundScore: (player.roundScore ?? 0) + delta,
+              }
+            : player,
+        ),
+      }))
+    })
+
     return () => {
       offMove()
       offCollect()
@@ -346,6 +405,7 @@ export const useDuoChaos = () => {
       offEmote()
       offName()
       offLeave()
+      offScore()
     }
   }, [cosmetics, room, setState])
 
@@ -490,6 +550,19 @@ export const useDuoChaos = () => {
       document.removeEventListener('visibilitychange', onVisibility)
     }
   }, [chaos, noteServerNow, room.code, room.playerId, room.token, scout, setState, state.phase, toLocal])
+
+  // Skoru kalıcı hale getir. `duo_tick` çağrılmadığı için sunucu skoru
+  // saklamaz; sayfa yenilendiğinde yerel skor sıfırlanıyordu. Burada skoru
+  // oda bazında localStorage'a yazarız; `restore` bunu geri yükler.
+  // Yalnızca aktif oyun fazlarında yazarız (home/lobby'de gereksiz yazma yok).
+  useEffect(() => {
+    const code = room.code
+    if (!code) return
+    if (state.phase !== 'countdown' && state.phase !== 'battle' && state.phase !== 'results' && state.phase !== 'matchover') {
+      return
+    }
+    writeScores(code, { p1: state.players[0]?.score ?? 0, p2: state.players[1]?.score ?? 0 })
+  }, [room.code, state.phase, state.players])
 
   // Lobi yoklaması.
   //
@@ -679,6 +752,12 @@ export const useDuoChaos = () => {
         await room.connect(normalized, slot, token, data?.name ?? room.name)
         resetMatch()
         if (data?.name) updatePlayer('p1', { name: data.name })
+        // Skoru geri yükle: sayfa yenilendiğinde puan sıfırlanmasın.
+        const saved = readScores(normalized)
+        if (saved) {
+          updatePlayer('p1', { score: saved.p1, roundScore: saved.p1 })
+          updatePlayer('p2', { score: saved.p2, roundScore: saved.p2 })
+        }
         setPhase('lobby')
         syncUrl(`/play/${normalized}`)
         return true
@@ -765,6 +844,8 @@ export const useDuoChaos = () => {
     } catch {
       /* yoksay — yerel çıkış yine de gerçekleşmeli */
     }
+    // Odadan ayrılınca kayıtlı skoru temizle; yeni oyun sıfırdan başlasın.
+    if (room.code) clearScores(room.code)
     await room.disconnect()
     resetMatch()
     setRivalLeft(false)

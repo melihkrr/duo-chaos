@@ -361,9 +361,38 @@ h3 {
   justify-content: center;
   gap: 26px;
   width: 100%;
-  max-width: 1080px;
+  max-width: 1320px;
   margin: 0 auto;
   padding: clamp(8px, 3vw, 28px) 0;
+}
+
+/*
+ * Geniş ekran düzeni: eskiden tek sütun "uzun ince" bir şeritti. Büyük
+ * ekranlarda içeriği iki sütuna yayarız — solda başlık + aksiyonlar, sağda
+ * profil kartı + adımlar. Dar ekranlarda tek sütuna düşer.
+ */
+.home-grid {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: clamp(20px, 3vw, 40px);
+  align-items: center;
+  width: 100%;
+}
+
+@media (min-width: 960px) {
+  .home-grid {
+    grid-template-columns: 1.15fr 0.85fr;
+    align-items: start;
+  }
+}
+
+.home-side {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
 }
 
 .home-doodles {
@@ -407,9 +436,31 @@ h3 {
 .hero {
   position: relative;
   z-index: 1;
-  width: min(620px, 100%);
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto;
   text-align: center;
   animation: rise 0.5s var(--ease-soft) both;
+}
+
+@media (min-width: 960px) {
+  .hero {
+    margin: 0;
+    text-align: left;
+  }
+
+  .hero .eyebrow {
+    margin-left: 0;
+  }
+
+  .hero .lede {
+    margin-left: 0;
+    margin-right: 0;
+  }
+
+  .hero-actions {
+    margin: 0;
+  }
 }
 
 .eyebrow {
@@ -463,8 +514,8 @@ h3 {
 }
 
 .profile-card {
-  width: min(460px, 100%);
-  margin: 0 auto;
+  width: 100%;
+  margin: 0;
 }
 
 .profile-row {
@@ -527,24 +578,22 @@ h3 {
 .steps {
   list-style: none;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: 1fr;
   gap: 10px;
-  width: min(720px, 100%);
+  width: 100%;
   margin: 0;
   padding: 0;
 }
 
 .steps li {
+  position: relative;
   display: flex;
-  flex-direction: column;
-  gap: 7px;
-  padding: 13px 12px;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 14px;
   border: 2px solid var(--line);
   border-radius: var(--r-md);
   background: rgba(255, 255, 255, 0.8);
-  font-size: 11px;
-  font-weight: 800;
-  line-height: 1.25;
   text-align: left;
   transition: transform 0.2s var(--ease-bounce);
 }
@@ -553,7 +602,40 @@ h3 {
   transform: translateY(-3px);
 }
 
-.steps li span {
+.step-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 38px;
+  height: 38px;
+  border: 2px solid var(--ink);
+  border-radius: var(--r-md);
+  background: var(--pink-soft);
+  font-size: 19px;
+}
+
+.step-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.step-text strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.step-text small {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--muted);
+}
+
+.step-num {
+  flex: none;
   display: grid;
   place-items: center;
   width: 24px;
@@ -1549,6 +1631,13 @@ h3 {
   letter-spacing: 0.08em;
   color: var(--muted);
   text-transform: uppercase;
+}
+
+/* Sonuç ekranı: yalnızca puan gösterilir — büyük ve okunur. */
+.score-big {
+  font-size: 34px;
+  line-height: 1;
+  color: var(--ink);
 }
 
 .results-actions {
