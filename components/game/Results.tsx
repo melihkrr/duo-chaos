@@ -7,12 +7,25 @@ import type { State } from '../../lib/types'
 type Props = {
   state: State
   isHost: boolean
-  onNextRound: () => void
+  /** Yerel oyuncu "sonraki tur" için onay verdi mi? */
+  nextReady: boolean
+  /** Rakip "sonraki tur" için onay verdi mi? */
+  rivalNextReady: boolean
+  /** Onay ver — tur ancak iki oyuncu da onaylayınca başlar. */
+  onApproveNextRound: () => void
   onRematch: () => void
   busy?: boolean
 }
 
-export function Results({ state, isHost, onNextRound, onRematch, busy }: Props) {
+export function Results({
+  state,
+  isHost,
+  nextReady,
+  rivalNextReady,
+  onApproveNextRound,
+  onRematch,
+  busy,
+}: Props) {
   const isMatchOver = state.phase === 'matchover'
   const winner = state.winner
   const meWon = winner === 'p1'
@@ -76,9 +89,22 @@ export function Results({ state, isHost, onNextRound, onRematch, busy }: Props) 
             <p className="muted">Waiting for host to rematch…</p>
           )
         ) : (
-          <Button onClick={onNextRound} disabled={busy}>
-            Next round
-          </Button>
+          <>
+            {/* Tur, İKİ oyuncunun da onayıyla başlar. Onay vermeden önce
+                buton "Ready for next round"; verdikten sonra rakip beklenir. */}
+            <Button onClick={onApproveNextRound} disabled={busy || nextReady}>
+              {nextReady ? '✅ Ready — waiting for rival' : 'Ready for next round'}
+            </Button>
+            <p className="muted next-ready-status" aria-live="polite">
+              {nextReady && rivalNextReady
+                ? 'Both ready — starting…'
+                : nextReady
+                  ? 'Waiting for your rival to accept…'
+                  : rivalNextReady
+                    ? 'Your rival is ready. Your turn!'
+                    : 'Both players must accept to start the next round.'}
+            </p>
+          </>
         )}
       </div>
     </Panel>

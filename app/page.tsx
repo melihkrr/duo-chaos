@@ -104,7 +104,9 @@ export default function Page() {
         <Results
           state={state}
           isHost={isHost}
-          onNextRound={() => void game.startNextRound()}
+          nextReady={game.nextReady}
+          rivalNextReady={game.rivalNextReady}
+          onApproveNextRound={game.approveNextRound}
           onRematch={() => void game.rematch()}
           busy={game.busy}
         />

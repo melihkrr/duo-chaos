@@ -126,6 +126,11 @@ export const useDuoChaos = () => {
   // Rakip oyundan ayrıldığında (broadcast 'leave' veya presence düşüşü) true
   // olur. Oyun duraklatılır ve kullanıcıya "bekle / ayrıl" seçeneği sunulur.
   const [rivalLeft, setRivalLeft] = useState(false)
+  // Sonraki tur onayı: yerel oyuncu onayladı mı, rakip onayladı mı?
+  // İki oyuncu da onaylayınca tur başlar ("next round iki oyuncunun da
+  // onayıyla başlamalı"). Host tek başına turu başlatamaz.
+  const [nextReady, setNextReady] = useState(false)
+  const [rivalNextReady, setRivalNextReady] = useState(false)
   const remotePos = useRef<Map<string, { x: number; y: number; at: number }>>(new Map())
   // `room` her render'da yeni bir nesne kimliği taşır (useRoom dönüşü
   // memoize edilmemiş). Bu yüzden yoklama effect'lerinin bağımlılığı olarak
@@ -147,6 +152,11 @@ export const useDuoChaos = () => {
   // döndüğünde). Fonksiyonun kendi kimliğine erişmesi için ref'te tutarız.
   const retryRef = useRef(0)
   const advancePhaseRef = useRef<((from: Phase) => Promise<void>) | null>(null)
+  // Realtime işleyicileri (broadcast callback'leri) güncel `nextReady` ve
+  // `beginNextRound` değerlerine ihtiyaç duyar; ancak bu callback'ler effect
+  // kurulumunda bir kez bağlanır. Güncel değerleri ref'lerde tutarız.
+  const nextReadyRef = useRef(false)
+  const beginNextRoundRef = useRef<(() => Promise<void>) | null>(null)
   const noteServerNow = useCallback((serverNow?: number) => {
     if (typeof serverNow === 'number' && serverNow > 0) {
       serverOffsetRef.current = serverNow - Date.now()
@@ -379,6 +389,20 @@ export const useDuoChaos = () => {
     // SKOR SENKRONU: `duo_tick` çağrılmadığı için sunucu skoru güncellemez.
     // Rakip, kendi skor değişimini `score` olayıyla yayınlar; burada onu
     // rakibin (index 1) skoruna ekleriz. Böylece iki taraf da aynı puanı görür.
+    // Rakip "sonraki tur" için onay verdi mi? İki oyuncu da onaylayınca tur
+    // başlar. Bu, "next round iki oyuncunun da onayıyla başlamalı" isteğini
+    // karşılar: host tek başına turu başlatamaz.
+    const offNextReady = room.on('next-ready', (payload) => {
+      const data = payload as { by?: string }
+      if (!data || data.by === room.playerId) return
+      setRivalNextReady(true)
+      // Host, rakibin onayını alınca ve kendisi de onaylamışsa turu başlatır.
+      // (Effect yerine olay işleyicisinde başlatırız; lint kuralı gereği.)
+      if (nextReadyRef.current && room.playerId === 'p1') {
+        void beginNextRoundRef.current?.()
+      }
+    })
+
     const offScore = room.on('score', (payload) => {
       const data = payload as { by?: string; delta?: number }
       if (!data || data.by === room.playerId) return
@@ -399,6 +423,7 @@ export const useDuoChaos = () => {
     })
 
     return () => {
+      offNextReady()
       offMove()
       offCollect()
       offSteal()
@@ -801,7 +826,11 @@ export const useDuoChaos = () => {
     }
   }, [noteServerNow, resetRound, room, scout, setPhase, toLocal])
 
-  const startNextRound = useCallback(async () => {
+  /**
+   * Sonraki turu GERÇEKTEN başlatır. Yalnızca iki oyuncu da onayladığında
+   * (aşağıdaki effect) çağrılır. Host'un tek başına başlatması engellenir.
+   */
+  const beginNextRound = useCallback(async () => {
     setBusy(true)
     try {
       const nextRound = state.round + 1
@@ -813,6 +842,10 @@ export const useDuoChaos = () => {
       scout.reset()
       noteServerNow(res?.serverNow)
       const localCountdown = toLocal(res?.countdownEndsAt)
+      // Yeni tur başlarken onay bayraklarını sıfırla; bir sonraki sonuç
+      // ekranı temiz başlasın.
+      setNextReady(false)
+      setRivalNextReady(false)
       setPhase('countdown', {
         countdownEndsAt: localCountdown > 0 ? localCountdown : Date.now() + COUNTDOWN_MS,
       })
@@ -820,6 +853,35 @@ export const useDuoChaos = () => {
       setBusy(false)
     }
   }, [noteServerNow, resetRound, room, scout, setPhase, state.round, toLocal])
+
+  // Realtime işleyicilerinin güncel fonksiyona/değere erişebilmesi için
+  // ref'leri senkronla.
+  useEffect(() => {
+    beginNextRoundRef.current = beginNextRound
+  }, [beginNextRound])
+
+  useEffect(() => {
+    nextReadyRef.current = nextReady
+  }, [nextReady])
+
+  /**
+   * "Next round" butonu: yalnızca YEREL onayı kaydeder ve rakibe bildirir.
+   * Tur, iki taraf da onaylayınca başlar. Böylece bir oyuncu hazır olmadan
+   * diğeri turu zorla başlatamaz.
+   *
+   * NOT: Tur başlatma bir effect İÇİNDE yapılmaz — `react-hooks/set-state-in-effect`
+   * kuralı effect gövdesinde senkron `setState` çağrısını yasaklar. Bunun
+   * yerine onay bir olay işleyicisinden (buton tıklaması / rakip broadcast'i)
+   * verilir ve iki onay da hazır olduğunda tur burada başlatılır.
+   */
+  const approveNextRound = useCallback(() => {
+    setNextReady(true)
+    room.broadcast('next-ready', { by: room.playerId })
+    // Rakip zaten onaylamışsa ve host bizsek turu hemen başlat.
+    if (rivalNextReady && room.playerId === 'p1') {
+      void beginNextRound()
+    }
+  }, [beginNextRound, rivalNextReady, room])
 
   const rematch = useCallback(async () => {
     setBusy(true)
@@ -927,7 +989,9 @@ export const useDuoChaos = () => {
     joinRoom,
     restore,
     startGame,
-    startNextRound,
+    approveNextRound,
+    nextReady,
+    rivalNextReady,
     rematch,
     leaveGame,
     waitForRival,

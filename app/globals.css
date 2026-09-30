@@ -1284,13 +1284,111 @@ h3 {
   flex-wrap: wrap;
 }
 
+/* Normal düzende kontroller solda, joystick sağda. */
 .battle-side {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  align-items: flex-end;
+  align-items: flex-start;
   flex: 1;
   min-width: 0;
+}
+
+/* --- Tam ekran modu ---
+   Arena tüm ekranı kaplar; HUD üstte sabit kalır, joystick sağ altta yarı
+   şeffaf olarak arena'nın üzerine biner, diğer kontroller gizlenir. */
+.battle-wrap.is-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  max-width: none;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  margin: 0;
+  padding: 10px;
+  gap: 10px;
+  background: linear-gradient(160deg, var(--purple-soft), var(--pink-soft));
+  overflow: hidden;
+}
+
+.battle-wrap.is-fullscreen .hud {
+  flex: none;
+}
+
+.battle-wrap.is-fullscreen .arena {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+}
+
+.battle-wrap.is-fullscreen .battle-foot {
+  position: absolute;
+  inset: 0;
+  display: block;
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* Diğer kontroller tam ekranda gizlenir. */
+.battle-wrap.is-fullscreen .battle-side {
+  display: none;
+}
+
+/* Joystick sağ altta, yarı şeffaf. */
+.battle-wrap.is-fullscreen .joystick {
+  position: absolute;
+  right: 22px;
+  bottom: 22px;
+  opacity: 0.42;
+  background: rgba(255, 255, 255, 0.28);
+  border-color: rgba(43, 36, 64, 0.45);
+  box-shadow: 0 4px 0 rgba(43, 36, 64, 0.12);
+  pointer-events: auto;
+  transition: opacity 0.2s var(--ease-soft);
+}
+
+.battle-wrap.is-fullscreen .joystick:active,
+.battle-wrap.is-fullscreen .joystick:focus-within {
+  opacity: 0.85;
+}
+
+.battle-wrap.is-fullscreen .joystick-knob {
+  border-color: rgba(43, 36, 64, 0.6);
+  box-shadow: 0 3px 0 rgba(43, 36, 64, 0.16);
+}
+
+/* Tam ekran düğmesi (HUD ortasında). */
+.fs-toggle {
+  margin-top: 6px;
+  padding: 3px 10px;
+  border: 2px solid var(--ink);
+  border-radius: var(--r-pill);
+  background: var(--card);
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  box-shadow: 0 2px 0 rgba(43, 36, 64, 0.18);
+  transition: transform 0.15s var(--ease-soft);
+}
+
+.fs-toggle:hover {
+  transform: translateY(-1px);
+}
+
+.fs-toggle:active {
+  transform: translateY(1px);
+  box-shadow: none;
+}
+
+/* Sonuç ekranı: "iki oyuncu da onaylamalı" durum metni. */
+.next-ready-status {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .emote-btn {

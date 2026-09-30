@@ -66,9 +66,14 @@ export function Battle({
   onEmote,
 }: Props) {
   const [now, setNow] = useState(0)
+  // Tam ekran modu. `true` iken arena tüm ekranı kaplar; HUD üstte kalır,
+  // joystick sağ altta yarı şeffaf olur ve diğer kontroller gizlenir.
+  const [fullscreen, setFullscreen] = useState(false)
   // Kutlama katmanının görünürlüğü. `celebrateRef` her tamamlanmada artan bir
   // zaman damgası taşır; değer değiştiğinde kutlamayı kısa süreliğine açarız.
   const [celebrate, setCelebrate] = useState(0)
+  // Tam ekrana alınacak sarmalayıcı düğüm (`.battle-wrap`).
+  const wrapRef = useRef<HTMLElement | null>(null)
   // Yerel avatarın DOM düğümü. Konumu her karede doğrudan buna yazarız.
   const meRef = useRef<HTMLDivElement | null>(null)
   // Rakip avatarın DOM düğümü. Aynı şekilde doğrudan yazarız.
@@ -78,6 +83,30 @@ export function Battle({
     const id = window.setInterval(() => setNow(Date.now()), 200)
     return () => window.clearInterval(id)
   }, [])
+
+  // Tam ekran modunu tarayıcının Fullscreen API'siyle senkronla. Kullanıcı
+  // Esc ile çıkarsa `fullscreenchange` yakalanır ve yerel durum güncellenir.
+  useEffect(() => {
+    const onChange = () => {
+      setFullscreen(Boolean(document.fullscreenElement))
+    }
+    document.addEventListener('fullscreenchange', onChange)
+    return () => document.removeEventListener('fullscreenchange', onChange)
+  }, [])
+
+  const toggleFullscreen = () => {
+    const node = wrapRef.current
+    if (!node) return
+    if (document.fullscreenElement) {
+      void document.exitFullscreen()
+    } else {
+      void node.requestFullscreen?.().catch(() => {
+        // Tarayıcı reddederse (ör. iframe izni yok) yine de yerel moda geç:
+        // arena tüm ekranı kaplar, joystick sağ altta şeffaf olur.
+        setFullscreen(true)
+      })
+    }
+  }
 
   // Görev tamamlanma sinyalini izle. `celebrateRef` her tamamlanmada yeni bir
   // zaman damgası alır; değer değiştiğinde kutlamayı ~1.4 sn gösteririz.
@@ -156,7 +185,10 @@ export function Battle({
     state.phase === 'countdown' && countdownLeft > 0 && countdownStep >= 1 && countdownStep <= 3
 
   return (
-    <section className="battle-wrap">
+    <section
+      ref={wrapRef}
+      className={['battle-wrap', fullscreen ? 'is-fullscreen' : ''].join(' ')}
+    >
       <header className="hud">
         <div className="hud-player">
           <div className="hud-name">
@@ -183,6 +215,15 @@ export function Battle({
         <div className="hud-center">
           <span className="hud-round">Round {state.round}</span>
           <span className="hud-clock">{Math.max(0, secondsLeft)}s</span>
+          <button
+            type="button"
+            className="fs-toggle"
+            onClick={toggleFullscreen}
+            aria-pressed={fullscreen}
+            title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+          >
+            {fullscreen ? '⤡ Exit' : '⛶ Fullscreen'}
+          </button>
         </div>
         <div className="hud-player rival">
           <div className="hud-name">
@@ -306,8 +347,10 @@ export function Battle({
         )}
       </div>
 
+      {/* Normal düzende: diğer kontroller solda, joystick sağda.
+          Tam ekranda: kontroller gizlenir, joystick sağ altta yarı şeffaf
+          olarak arena'nın üzerine biner (CSS `.is-fullscreen`). */}
       <footer className="battle-foot">
-        <VirtualJoystick onChange={onJoystick} />
         <div className="battle-side">
           <ScoutPanel scout={scout} disabled={state.phase !== 'battle'} />
           <Button variant="ghost" onClick={onEmote} className="emote-btn">
@@ -315,6 +358,7 @@ export function Battle({
           </Button>
           <CosmeticsPicker cosmetics={cosmetics} level={level} />
         </div>
+        <VirtualJoystick onChange={onJoystick} />
       </footer>
 
       <span className="arena-bounds" data-minx={ARENA.minX} data-maxy={ARENA.maxY} hidden />
