@@ -46,11 +46,16 @@ const syncUrl = (path: string) => {
   window.history.pushState(null, '', path)
 }
 
-const mapPlayerId = (rawId: string, meId: string): string => {
-  if (rawId === meId) return 'p1'
-  if (rawId === 'p1' || rawId === 'p2') return rawId === 'p1' ? 'p2' : 'p1'
-  return rawId === 'p2' ? 'p1' : 'p2'
-}
+/**
+ * Sunucudaki `player_id` (`'p1'`/`'p2'`) değerini YEREL slota çevirir:
+ * yerel slot 0 her zaman "ben", slot 1 her zaman "rakip".
+ *
+ * Önceki sürüm hatalıydı: host için (`meId === 'p1'`) sunucunun `p2` satırı da
+ * `'p1'`'e eşleniyordu. Böylece `duo_public_state` birleştirmesinde rakip
+ * bulunamıyor, rakip verisi hiç güncellenmiyor ve rakip skoru 0'da kalıyordu
+ * ("kendimi 130, rakibim beni 0 görüyor" hatası).
+ */
+const mapPlayerId = (rawId: string, meId: string): string => (rawId === meId ? 'p1' : 'p2')
 
 /**
  * Skor kalıcılığı. `duo_tick` çağrılmadığı için sunucu skoru saklamaz; sayfa
@@ -310,6 +315,10 @@ export const useDuoChaos = () => {
     state,
     setState,
     token: room.token,
+    // Yerel oyuncunun sunucu slotu. Yayınlanan `collect`/`steal`/`score`
+    // olaylarında `by` alanına yazılır; böylece karşı taraf kendi yayınını
+    // doğru şekilde ayırt edebilir.
+    playerId: room.playerId,
     publishMove,
     broadcast: room.broadcast,
     call: room.call,
@@ -541,10 +550,23 @@ export const useDuoChaos = () => {
             merged.score = player.score
             merged.roundScore = player.roundScore
           }
-          // Rakip (p2) konumu: taze bir `move` broadcast'i varsa sunucunun
-          // gecikmeli x/y'si ile ezme; broadcast yoksa sunucu değeri otoritedir
-          // (yeniden bağlanma / ışınlanma).
+          // Rakip (p2) verisi: sunucu `duo_tick` çağrılmadığı için skoru,
+          // kozmetikleri ve adı GÜNCELLEMEZ (hep 0/boş döner). Bu alanları
+          // sunucudan uygularsak rakip skoru her yoklamada 0'a düşer ve
+          // "rakibim beni 0 görüyor" hatası oluşur. Bu yüzden rakip için de
+          // client-authoritative alanları (broadcast ile gelen) koruruz.
           if (player.id === 'p2') {
+            merged.score = player.score
+            merged.roundScore = player.roundScore
+            merged.totalScore = player.totalScore
+            merged.trail = player.trail
+            merged.emote = player.emote
+            merged.name = player.name
+            merged.objectivesDone = player.objectivesDone
+            merged.missionDone = player.missionDone
+            // Rakip konumu: taze bir `move` broadcast'i varsa sunucunun
+            // gecikmeli x/y'si ile ezme; broadcast yoksa sunucu değeri
+            // otoritedir (yeniden bağlanma / ışınlanma).
             const remote = remotePos.current.get('rival') ?? remotePos.current.get('p2')
             if (remote && Date.now() - remote.at < REMOTE_POS_TTL) {
               merged.x = player.x
@@ -741,7 +763,17 @@ export const useDuoChaos = () => {
                 if (!server) return player
                 const serverName =
                   typeof server.name === 'string' && server.name.trim() ? server.name : player.name
-                return { ...player, ...server, id: player.id, name: serverName } as Player
+                const merged = { ...player, ...server, id: player.id, name: serverName } as Player
+                // Sunucu `duo_tick` çağrılmadığı için skoru/kozmetikleri
+                // güncellemez (hep 0/boş döner). Lobide de bu alanları
+                // client'tan koruruz; aksi halde geri yüklenen skor ve seçilen
+                // iz her yoklamada sıfırlanır.
+                merged.score = player.score
+                merged.roundScore = player.roundScore
+                merged.totalScore = player.totalScore
+                merged.trail = player.trail
+                merged.emote = player.emote
+                return merged
               })
             : prev.players
         // Sunucu fazı lobiden çıktıysa (host başlattı) yerel fazı da ilerlet.

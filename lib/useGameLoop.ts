@@ -51,6 +51,13 @@ const REMOTE_POS_TTL = 1_500
 type LoopDeps = {
   state: State
   setState: React.Dispatch<React.SetStateAction<State>>
+  /**
+   * Yerel oyuncunun sunucu slotu (`'p1'`/`'p2'`). Yayınlanan `collect`/`steal`/
+   * `score` olaylarında `by` alanına yazılır. Önceden `'p1'` sabit kodluydu;
+   * misafir oyuncu (`p2`) kendi yayınını "rakipten geldi" sanıp kendi skorunu
+   * rakip slotuna yazıyordu.
+   */
+  playerId: 'p1' | 'p2'
   /** Oyuncunun sunucu token'ı (RPC kimlik doğrulaması). */
   token: string | null
   /** Yerel oyuncunun pozisyonunu yayınlar. */
@@ -184,8 +191,18 @@ export const useGameLoop = (deps: LoopDeps) => {
   }, [])
 
   const step = useCallback((now: number, dt: number) => {
-    const { state, setState, token, publishMove, broadcast, call, syncChaos, advancePhase, remotePos } =
-      depsRef.current
+    const {
+      state,
+      setState,
+      token,
+      playerId,
+      publishMove,
+      broadcast,
+      call,
+      syncChaos,
+      advancePhase,
+      remotePos,
+    } = depsRef.current
 
     // Faz geçişleri.
     if (state.phase === 'countdown' && state.countdownEndsAt > 0 && now >= state.countdownEndsAt) {
@@ -450,11 +467,11 @@ export const useGameLoop = (deps: LoopDeps) => {
       publishMove(nextX, nextY)
     }
     if (collectedIds.length > 0) {
-      broadcast('collect', { ids: collectedIds, by: 'p1' })
+      broadcast('collect', { ids: collectedIds, by: playerId })
       void call('duo_collect', { p_token: token, p_coin_id: collectedIds[0] }).catch(() => undefined)
     }
     if (stealing) {
-      broadcast('steal', { by: 'p1' })
+      broadcast('steal', { by: playerId })
       void call('duo_steal', { p_token: token }).catch(() => undefined)
     }
     // SKOR SENKRONU: `duo_tick` çağrılmadığı için sunucu skoru güncellemez.
@@ -467,7 +484,10 @@ export const useGameLoop = (deps: LoopDeps) => {
     // yoklaması da aynı mutlak değeri periyodik olarak teyit eder.
     if (scoreDelta !== 0) {
       const myScore = depsRef.current.state.players[0]?.score ?? 0
-      broadcast('score', { by: 'p1', score: myScore + scoreDelta })
+      // `by` alanı YEREL oyuncunun sunucu slotu olmalı. Sabit `'p1'` yazarsak
+      // misafir (`p2`) kendi skor yayınını "rakipten geldi" sanıp kendi
+      // skorunu rakip slotuna yazar (skorların karşılıklı yanlış görünmesi).
+      broadcast('score', { by: playerId, score: myScore + scoreDelta })
     }
   }, [])
 
