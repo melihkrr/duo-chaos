@@ -18,10 +18,20 @@ export default function Page() {
   // URL'de oda kodu varsa otomatik katıl. Tarayıcı geri/ileri tuşları için
   // `popstate` de dinlenir; böylece adres çubuğu ile uygulama durumu senkron
   // kalır (ör. geri tuşuyla `/play/CODE` → `/`).
+  //
+  // ÖNEMLİ: Önce `restore` denenir. Bu odaya daha önce katıldıysak kayıtlı
+  // token ile YENİDEN BAĞLANIRIZ; aksi halde her girişte yeni token üretilip
+  // "room full" hatası alınırdı (kullanıcının şikâyeti). Token yoksa/geçersizse
+  // normal `joinRoom` akışına düşülür.
   useEffect(() => {
     const sync = () => {
       const match = window.location.pathname.match(/\/play\/([A-Za-z0-9]+)/)
-      if (match?.[1]) void game.joinRoom(match[1])
+      if (!match?.[1]) return
+      const code = match[1]
+      void (async () => {
+        const restored = await game.restore(code)
+        if (!restored) await game.joinRoom(code)
+      })()
     }
     sync()
     window.addEventListener('popstate', sync)
@@ -83,6 +93,9 @@ export default function Page() {
           livePos={game.livePos}
           liveRivalPos={game.liveRivalPos}
           celebrateRef={game.celebrateRef}
+          rivalLeft={game.rivalLeft}
+          onWaitForRival={game.waitForRival}
+          onLeaveRoom={() => setConfirmLeave(true)}
           onEmote={game.triggerEmote}
         />
       )}

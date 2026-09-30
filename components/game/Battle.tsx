@@ -38,6 +38,12 @@ type Props = {
    * animasyonu (konfeti + "+25") oynatılır. Yeni görev zaten ANINDA atanmıştır.
    */
   celebrateRef: React.RefObject<number>
+  /** Rakip oyundan ayrıldı mı? True iken oyun duraklar ve bir uyarı gösterilir. */
+  rivalLeft: boolean
+  /** "Bekle" — rakibin geri dönmesini bekler (duraklatılmış halde). */
+  onWaitForRival: () => void
+  /** "Odadan ayrıl" — oyuncu odayı terk eder. */
+  onLeaveRoom: () => void
   onEmote: () => void
 }
 
@@ -54,6 +60,9 @@ export function Battle({
   livePos,
   liveRivalPos,
   celebrateRef,
+  rivalLeft,
+  onWaitForRival,
+  onLeaveRoom,
   onEmote,
 }: Props) {
   const [now, setNow] = useState(0)
@@ -141,11 +150,18 @@ export function Battle({
               🐰
             </span>
             <strong>{me?.name ?? 'You'}</strong>
-            <span className="hud-score" title="Completed objectives">
-              {me?.objectivesDone ?? 0}
+            {/* Skor = kümülatif puan (coin + çalma + görev bonusları). */}
+            <span className="hud-score" title="Total score">
+              {me?.score ?? 0}
             </span>
           </div>
-          <small>{missionLabel(myObjective)}</small>
+          <small>
+            {missionLabel(myObjective)}
+            <span className="hud-missions" title="Missions completed">
+              {' '}
+              · {me?.objectivesDone ?? 0} ✓
+            </span>
+          </small>
           <div className="hud-bar">
             <span style={{ width: `${Math.round(myProgress * 100)}%` }} />
           </div>
@@ -157,14 +173,21 @@ export function Battle({
         <div className="hud-player rival">
           <div className="hud-name">
             <strong>{rival?.name ?? 'Rival'}</strong>
-            <span className="hud-score" title="Completed objectives">
-              {rival?.objectivesDone ?? 0}
+            {/* Skor = kümülatif puan. */}
+            <span className="hud-score" title="Total score">
+              {rival?.score ?? 0}
             </span>
             <span className="hud-badge rival" aria-hidden>
               🐻
             </span>
           </div>
-          <small>{missionLabel(rivalObjective)}</small>
+          <small>
+            {missionLabel(rivalObjective)}
+            <span className="hud-missions" title="Missions completed">
+              {' '}
+              · {rival?.objectivesDone ?? 0} ✓
+            </span>
+          </small>
           <div className="hud-bar">
             <span style={{ width: `${Math.round(rivalProgress * 100)}%` }} />
           </div>
@@ -190,6 +213,27 @@ export function Battle({
             {Array.from({ length: 10 }, (_, i) => (
               <span key={i} className={`confetti confetti-${i % 5}`} aria-hidden />
             ))}
+          </div>
+        )}
+
+        {rivalLeft && (
+          <div className="rival-left-overlay" role="alertdialog" aria-live="assertive">
+            <div className="rival-left-card">
+              <span className="rival-left-emoji" aria-hidden>
+                🐻💨
+              </span>
+              <h2>Your rival left the game</h2>
+              <p>
+                {rival?.name ?? 'Your rival'} disconnected. The match is paused — you can wait for
+                them to come back, or leave the room.
+              </p>
+              <div className="rival-left-actions">
+                <Button onClick={onWaitForRival}>⏳ Wait for rival</Button>
+                <Button variant="ghost" onClick={onLeaveRoom}>
+                  🚪 Leave room
+                </Button>
+              </div>
+            </div>
           </div>
         )}
 

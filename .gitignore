@@ -14,11 +14,11 @@ node_modules
 .next/
 .DS_Store
 server.log
+.next-server.log
 
 # Build artifacts
 *.tsbuildinfo
 tsconfig.tsbuildinfo
 
 # npm lockfile (project uses pnpm)
-package-lock.json.next-server.log
 package-lock.json

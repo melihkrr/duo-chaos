@@ -996,6 +996,66 @@ h3 {
   }
 }
 
+/* --- HUD: tamamlanan görev sayısı rozeti --- */
+.hud-missions {
+  color: var(--mint);
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+/* --- Rakip ayrıldı: duraklatma katmanı --- */
+.rival-left-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(43, 36, 64, 0.55);
+  backdrop-filter: blur(3px);
+  animation: fade-in 0.2s var(--ease-soft);
+}
+
+.rival-left-card {
+  width: min(360px, 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 22px 20px;
+  text-align: center;
+  border: 3px solid var(--ink);
+  border-radius: var(--r-lg, 22px);
+  background: #fff;
+  box-shadow: 0 8px 0 rgba(43, 36, 64, 0.22);
+  animation: pop-in 0.25s var(--ease-soft);
+}
+
+.rival-left-emoji {
+  font-size: 2.4rem;
+  line-height: 1;
+}
+
+.rival-left-card h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  color: var(--ink);
+}
+
+.rival-left-card p {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #6b6480;
+}
+
+.rival-left-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 6px;
+}
+
 .obstacle {
   position: absolute;
   border: 3px solid var(--ink);

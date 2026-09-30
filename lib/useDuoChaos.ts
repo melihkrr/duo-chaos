@@ -9,6 +9,7 @@ import {
   POLL_MS,
   REMOTE_POS_TTL,
 } from './config'
+import { friendlyError } from './errors'
 import { playSound, unlockAudio } from './sound'
 import { useChaos } from './useChaos'
 import { useCosmetics } from './useCosmetics'
@@ -85,6 +86,9 @@ export const useDuoChaos = () => {
   // değer `duo_join_room` commit edene kadar 1 kalır; bu yüzden "Start match"
   // butonu presence yerine buna göre kilitlenir.
   const [serverPlayerCount, setServerPlayerCount] = useState(0)
+  // Rakip oyundan ayrıldığında (broadcast 'leave' veya presence düşüşü) true
+  // olur. Oyun duraklatılır ve kullanıcıya "bekle / ayrıl" seçeneği sunulur.
+  const [rivalLeft, setRivalLeft] = useState(false)
   const remotePos = useRef<Map<string, { x: number; y: number; at: number }>>(new Map())
   // `room` her render'da yeni bir nesne kimliği taşır (useRoom dönüşü
   // memoize edilmemiş). Bu yüzden yoklama effect'lerinin bağımlılığı olarak
@@ -327,12 +331,21 @@ export const useDuoChaos = () => {
       }))
     })
 
+    // Rakip oyundan ayrıldığında oyunu duraklat ve kullanıcıyı bilgilendir.
+    const offLeave = room.on('leave', (payload) => {
+      const data = payload as { by?: string }
+      if (!data || data.by === room.playerId) return
+      setRivalLeft(true)
+      playSound('lose')
+    })
+
     return () => {
       offMove()
       offCollect()
       offSteal()
       offEmote()
       offName()
+      offLeave()
     }
   }, [cosmetics, room, setState])
 
@@ -594,7 +607,7 @@ export const useDuoChaos = () => {
         syncUrl(`/play/${code}`)
         playSound('join')
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Could not create room')
+        setError(friendlyError(err, 'We could not create the game. Please try again.'))
       } finally {
         setBusy(false)
       }
@@ -610,17 +623,26 @@ export const useDuoChaos = () => {
       const normalized = code.trim().toUpperCase()
       try {
         const displayName = (name ?? room.name ?? '').trim()
-        // Benzersiz token: host ile çakışmamalı, yoksa slot 1'e düşeriz.
-        const myToken = makeToken()
-        const data = await room.call<{ token?: string; name?: string }>('duo_join_room', {
-          p_code: normalized,
-          p_token: myToken,
-          p_name: displayName || null,
-        })
+        // ÖNEMLİ: Bu odaya daha önce katıldıysak KAYITLI token'ı kullanırız.
+        // Aksi halde her yeniden girişte yeni bir token üretilir; oyuncunun
+        // eski satırı hâlâ duruyorsa `duo_join_room` "room_full" fırlatır
+        // (kullanıcının "linke tekrar girdiğimde room full diyor" şikâyeti).
+        const saved = readToken(normalized)
+        const myToken = saved ?? makeToken()
+        const data = await room.call<{ token?: string; name?: string; player_id?: string }>(
+          'duo_join_room',
+          {
+            p_code: normalized,
+            p_token: myToken,
+            p_name: displayName || null,
+          },
+        )
         const token = data?.token ?? myToken
         const myName = (data?.name ?? displayName).trim()
+        // Sunucu bize hangi slotu verdiyse onu kullan (reconnect'te p1 olabilir).
+        const slot: 'p1' | 'p2' = data?.player_id === 'p1' ? 'p1' : 'p2'
         saveToken(normalized, token)
-        await room.connect(normalized, 'p2', token, myName)
+        await room.connect(normalized, slot, token, myName)
         resetMatch()
         // Kendi adımızı yerel duruma da yaz; lobide hemen görünsün.
         if (myName) updatePlayer('p1', { name: myName })
@@ -629,7 +651,7 @@ export const useDuoChaos = () => {
         syncUrl(`/play/${normalized}`)
         playSound('join')
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Could not join room')
+        setError(friendlyError(err, 'We could not join that game. Please try again.'))
       } finally {
         setBusy(false)
       }
@@ -637,14 +659,35 @@ export const useDuoChaos = () => {
     [resetMatch, room, setPhase, updatePlayer],
   )
 
+  /**
+   * Kayıtlı token ile odaya yeniden bağlanır (sayfa yenilendiğinde / linke
+   * tekrar girildiğinde). Token yoksa `false` döner ve çağıran taraf normal
+   * `joinRoom` akışına düşer.
+   */
   const restore = useCallback(
-    async (code: string) => {
-      const token = readToken(code)
-      if (!token) return
-      await room.connect(code, 'p1', token)
-      setPhase('lobby')
+    async (code: string): Promise<boolean> => {
+      const normalized = code.trim().toUpperCase()
+      const token = readToken(normalized)
+      if (!token) return false
+      try {
+        // Sunucudan hangi slotta olduğumuzu öğren (p1 mi p2 mi?).
+        const data = await room.call<{ player_id?: string; name?: string }>('duo_join_room', {
+          p_code: normalized,
+          p_token: token,
+        })
+        const slot: 'p1' | 'p2' = data?.player_id === 'p1' ? 'p1' : 'p2'
+        await room.connect(normalized, slot, token, data?.name ?? room.name)
+        resetMatch()
+        if (data?.name) updatePlayer('p1', { name: data.name })
+        setPhase('lobby')
+        syncUrl(`/play/${normalized}`)
+        return true
+      } catch {
+        // Token geçersiz (oda silinmiş / oyuncu atılmış) → normal katılmaya düş.
+        return false
+      }
     },
-    [room, setPhase],
+    [resetMatch, room, setPhase, updatePlayer],
   )
 
   const startGame = useCallback(async () => {
@@ -661,13 +704,7 @@ export const useDuoChaos = () => {
       // Sunucu artık hata fırlatmak yerine yumuşak sonuç döndürür. Rakip
       // satırı henüz commit edilmediyse kullanıcıya anlaşılır bir mesaj ver.
       if (res && res.ok === false) {
-        if (res.reason === 'not_ready') {
-          setError('Your rival is still connecting — try again in a moment.')
-        } else if (res.reason === 'not_host') {
-          setError('Only the host can start the match.')
-        } else {
-          setError('Could not start the match. Please try again.')
-        }
+        setError(friendlyError(res.reason, 'We could not start the match. Please try again.'))
         return
       }
       resetRound(1, room.code ?? 'round-1')
@@ -679,7 +716,7 @@ export const useDuoChaos = () => {
         countdownEndsAt: localCountdown > 0 ? localCountdown : Date.now() + COUNTDOWN_MS,
       })
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not start the match')
+      setError(friendlyError(err, 'We could not start the match. Please try again.'))
     } finally {
       setBusy(false)
     }
@@ -718,6 +755,9 @@ export const useDuoChaos = () => {
   }, [resetMatch, room, scout, setPhase])
 
   const leaveGame = useCallback(async () => {
+    // Rakibe "ayrıldım" sinyali yayınla; oyunu duraklatıp bilgilendirsin.
+    // (Broadcast best-effort; kanal kapanmadan hemen önce gönderilir.)
+    room.broadcast('leave', { by: room.playerId })
     // Önce sunucudan ayrılmayı dene (best-effort). Hata olsa bile yerel
     // durumu mutlaka temizle, aksi halde kullanıcı odada takılı kalır.
     try {
@@ -727,11 +767,21 @@ export const useDuoChaos = () => {
     }
     await room.disconnect()
     resetMatch()
+    setRivalLeft(false)
     setPhase('home')
     // Adres çubuğunu kök yola döndür; aksi halde `/play/CODE` kalır ve
     // sayfa yenilendiğinde eski odaya tekrar katılmaya çalışır.
     syncUrl('/')
   }, [resetMatch, room, setPhase])
+
+  /**
+   * Rakip ayrıldıktan sonra "Bekle" seçeneği: uyarıyı kapatır ve oyunu
+   * duraklatılmış halde bırakır. Rakip geri gelirse (presence yeniden
+   * görünürse) oyun kaldığı yerden devam eder.
+   */
+  const waitForRival = useCallback(() => {
+    setRivalLeft(false)
+  }, [])
 
   const setName = useCallback(
     (next: string) => {
@@ -767,6 +817,13 @@ export const useDuoChaos = () => {
   // güvenmek yanlış pozitif üretiyordu (rakip bağlı ama satırı yok).
   const lobbyReady = serverPlayerCount >= 2
 
+  // Rakip ayrıldı mı? İki sinyalden biri yeterli:
+  //   1. `rivalLeft` — rakip 'leave' broadcast'i gönderdi (temiz çıkış).
+  //   2. Presence düştü — rakip sekmesini kapatıp broadcast gönderemeden
+  //      düştü. Yalnızca aktif bir maç sırasında dikkate alınır.
+  const inActiveMatch = state.phase === 'countdown' || state.phase === 'battle'
+  const rivalGone = rivalLeft || (inActiveMatch && Boolean(room.code) && !room.opponentPresent)
+
   return {
     state,
     room,
@@ -780,6 +837,7 @@ export const useDuoChaos = () => {
     secondsLeft,
     lobbyReady,
     serverPlayerCount,
+    rivalLeft: rivalGone,
     onJoystick,
     livePos,
     liveRivalPos,
@@ -791,6 +849,7 @@ export const useDuoChaos = () => {
     startNextRound,
     rematch,
     leaveGame,
+    waitForRival,
     setName,
     copyInvite,
     triggerEmote: () => cosmetics.triggerEmote(),
