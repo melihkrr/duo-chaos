@@ -1,4 +1,8 @@
-pmOnFail: ignore
+# Allowlist native/postinstall build scripts required by the toolchain.
+# unrs-resolver is a transitive dep of eslint-config-next and needs its
+# postinstall to fetch the correct native binary.
+allowBuilds:
+  unrs-resolver: true
 
 minimumReleaseAgeExclude:
   - '@next/*'
