@@ -23,14 +23,12 @@ export function JoinDialog({ open, onClose, onJoin, busy }: Props) {
   const [touched, setTouched] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  // Reset state each time the dialog opens.
+  // Focus the input when the dialog opens. State is reset by remounting the
+  // dialog (see the `key` in Home), so no setState-in-effect is needed.
   useEffect(() => {
-    if (open) {
-      setCode('')
-      setTouched(false)
-      const raf = window.requestAnimationFrame(() => inputRef.current?.focus())
-      return () => window.cancelAnimationFrame(raf)
-    }
+    if (!open) return
+    const raf = window.requestAnimationFrame(() => inputRef.current?.focus())
+    return () => window.cancelAnimationFrame(raf)
   }, [open])
 
   const normalized = code.trim().toUpperCase()

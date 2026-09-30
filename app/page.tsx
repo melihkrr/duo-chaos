@@ -6,11 +6,12 @@ import { Home } from '../components/game/Home'
 import { Lobby } from '../components/game/Lobby'
 import { Results } from '../components/game/Results'
 import { TopBar } from '../components/game/TopBar'
+import { ToastStack } from '../components/ui/Toast'
 import { useDuoChaos } from '../lib/useDuoChaos'
 
 export default function Page() {
   const game = useDuoChaos()
-  const { state, room, progress, chaos, scout, cosmetics } = game
+  const { state, room, progress, chaos, scout, cosmetics, toast } = game
 
   // URL'de oda kodu varsa otomatik katıl.
   useEffect(() => {
@@ -79,6 +80,8 @@ export default function Page() {
           busy={game.busy}
         />
       )}
+
+      <ToastStack toasts={toast.toasts} onDismiss={toast.dismiss} />
     </main>
   )
 }

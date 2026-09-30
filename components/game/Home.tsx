@@ -1,7 +1,9 @@
 'use client'
 
+import { useState } from 'react'
 import { Button } from '../ui/Button'
 import { Panel } from '../ui/Panel'
+import { JoinDialog } from './JoinDialog'
 import type { ProgressApi } from '../../lib/useProgress'
 
 type Props = {
@@ -16,6 +18,7 @@ const STEPS = ['Create a game', 'Send the link', 'Get a secret mission', 'Beat t
 
 export function Home({ progress, onCreate, onJoin, busy, error }: Props) {
   const { profile, progress: raw, online } = progress
+  const [joinOpen, setJoinOpen] = useState(false)
 
   return (
     <main className="home">
@@ -38,14 +41,7 @@ export function Home({ progress, onCreate, onJoin, busy, error }: Props) {
           <Button onClick={onCreate} disabled={busy}>
             {busy ? 'Creating…' : '🎉 Create a game'}
           </Button>
-          <Button
-            variant="ghost"
-            onClick={() => {
-              const code = window.prompt('Enter room code')
-              if (code) onJoin(code)
-            }}
-            disabled={busy}
-          >
+          <Button variant="ghost" onClick={() => setJoinOpen(true)} disabled={busy}>
             🔗 Join with code
           </Button>
         </div>
@@ -82,6 +78,17 @@ export function Home({ progress, onCreate, onJoin, busy, error }: Props) {
           </li>
         ))}
       </ol>
+
+      <JoinDialog
+        key={joinOpen ? 'join-open' : 'join-closed'}
+        open={joinOpen}
+        onClose={() => setJoinOpen(false)}
+        onJoin={(code) => {
+          setJoinOpen(false)
+          onJoin(code)
+        }}
+        busy={busy}
+      />
     </main>
   )
 }

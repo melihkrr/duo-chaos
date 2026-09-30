@@ -10,6 +10,7 @@ import { useGameState } from './useGameState'
 import { useProgress } from './useProgress'
 import { useRoom, readToken, saveToken } from './useRoom'
 import { useScout } from './useScout'
+import { useToast } from './useToast'
 import type { Coin, EmoteId, Phase, Player, State } from './types'
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
@@ -33,6 +34,7 @@ export const useDuoChaos = () => {
   const progress = useProgress()
   const chaos = useChaos()
   const scout = useScout(room.code, room.playerId, room.token)
+  const toast = useToast()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [now, setNow] = useState(() => Date.now())
@@ -343,10 +345,13 @@ export const useDuoChaos = () => {
     const url = `${window.location.origin}/play/${room.code}`
     try {
       await navigator.clipboard.writeText(url)
+      toast.push('Invite link copied to clipboard.', 'success')
     } catch {
-      window.prompt('Copy this link', url)
+      // Clipboard API can be blocked (insecure context / permissions).
+      // Fall back to an in-app toast instead of a native prompt.
+      toast.push(`Copy this link: ${url}`, 'info')
     }
-  }, [room.code])
+  }, [room.code, toast])
 
   const secondsLeft = state.phase === 'battle' ? Math.max(0, Math.ceil((state.endsAt - now) / 1000)) : 0
 
@@ -357,6 +362,7 @@ export const useDuoChaos = () => {
     chaos,
     scout,
     cosmetics,
+    toast,
     busy,
     error,
     secondsLeft,
