@@ -24,14 +24,15 @@ type Props = {
   /**
    * Yerel oyuncunun ANLIK konumu (arena %). Oyun döngüsü her karede buraya
    * yazar; `Battle` bunu doğrudan DOM'a uygular. Böylece 60Hz hareket React
-   * render'ı tetiklemez ve hareket akıcı kalır.
+   * render'ı tetiklemez ve hareket akıcı kalır. `null` iken (döngü henüz
+   * tohumlamadı) DOM'a YAZILMAZ — ilk karede (0,0) ışınlanmasını engeller.
    */
-  livePos: React.RefObject<{ x: number; y: number }>
+  livePos: React.RefObject<{ x: number; y: number } | null>
   /**
    * Rakibin ANLIK konumu (arena %). Aynı şekilde doğrudan DOM'a uygulanır;
    * rakip hareketi de React render'ı tetiklemez.
    */
-  liveRivalPos: React.RefObject<{ x: number; y: number }>
+  liveRivalPos: React.RefObject<{ x: number; y: number } | null>
   onEmote: () => void
 }
 
@@ -67,16 +68,19 @@ export function Battle({
     let raf = 0
     const tick = () => {
       const meNode = meRef.current
-      if (meNode) {
-        const { x, y } = livePos.current
-        meNode.style.left = `${x}%`
-        meNode.style.top = `${y}%`
+      const mePos = livePos.current
+      // `null` iken yazmayız: döngü henüz spawn konumunu tohumlamadı. Aksi
+      // halde ilk karede avatar (0,0) köşesine ışınlanıp sonra spawn'a
+      // zıplıyordu ("ilk girdiğimizde garip hareket" şikâyeti).
+      if (meNode && mePos) {
+        meNode.style.left = `${mePos.x}%`
+        meNode.style.top = `${mePos.y}%`
       }
       const rivalNode = rivalRef.current
-      if (rivalNode) {
-        const { x, y } = liveRivalPos.current
-        rivalNode.style.left = `${x}%`
-        rivalNode.style.top = `${y}%`
+      const rivalPos = liveRivalPos.current
+      if (rivalNode && rivalPos) {
+        rivalNode.style.left = `${rivalPos.x}%`
+        rivalNode.style.top = `${rivalPos.y}%`
       }
       raf = window.requestAnimationFrame(tick)
     }

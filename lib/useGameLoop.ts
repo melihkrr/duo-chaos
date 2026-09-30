@@ -36,6 +36,12 @@ const REMOTE_SETTLE = 0.25
 const OBJECTIVE_COMPLETE_HOLD_MS = 1_200
 
 /**
+ * Bir görev tamamlandığında kümülatif skora eklenen bonus puan. Skor artık
+ * "görev sayısı" değil, toplanan coin + çalınan + görev bonuslarının toplamıdır.
+ */
+const OBJECTIVE_BONUS = 25
+
+/**
  * Bir broadcast konumunun "taze" sayıldığı süre (ms). Bu süreden eski bir
  * broadcast hedefi yok sayılır ve sunucu snapshot'ı otorite kabul edilir.
  */
@@ -102,9 +108,13 @@ export const useGameLoop = (deps: LoopDeps) => {
   // transform'una yazar; böylece 60Hz hareket React render'ı TETİKLEMEZ.
   // Bu, "hareket donuyor / birden ilerliyor" sorununun asıl çözümüdür:
   // render döngüsü artık kare hızına bağlı değil.
-  const livePos = useRef<{ x: number; y: number }>({ x: 0, y: 0 })
+  // NOT: Başlangıçta `null`. `Battle` bu değer `null` iken DOM'a YAZMAZ; aksi
+  // halde ilk karede avatar (0,0) köşesine ışınlanıp sonra spawn'a zıplıyordu
+  // ("ilk girdiğimizde garip hareket ediyoruz" şikâyeti). Değer, döngünün ilk
+  // `step`'inde gerçek spawn konumundan tohumlanır.
+  const livePos = useRef<{ x: number; y: number } | null>(null)
   // Rakibin ekrana basılan konumu. Aynı şekilde doğrudan DOM'a yazılır.
-  const liveRivalPos = useRef<{ x: number; y: number }>({ x: 0, y: 0 })
+  const liveRivalPos = useRef<{ x: number; y: number } | null>(null)
   // Görev tamamlandığında yeni görevin verileceği zaman (epoch ms). 0 = bekleme
   // yok. Oyuncunun "tamamlandı" durumunu görmesi için kısa bir pencere bırakır.
   const objectiveHold = useRef(0)
@@ -186,8 +196,9 @@ export const useGameLoop = (deps: LoopDeps) => {
     if (lastRound.current !== state.round) {
       lastRound.current = state.round
       localPos.current = { x: me.x, y: me.y }
-      livePos.current.x = me.x
-      livePos.current.y = me.y
+      // Ekrana basılacak konumu da spawn'dan tohumla (ilk karede (0,0)
+      // görünmesini engeller).
+      livePos.current = { x: me.x, y: me.y }
       objectiveHold.current = 0
     }
 
@@ -227,8 +238,7 @@ export const useGameLoop = (deps: LoopDeps) => {
     localPos.current = { x: nextX, y: nextY }
     // Ekrana basılacak konumu da her karede güncelle. `Battle` bunu doğrudan
     // DOM'a yazar; React render'ı beklemez → akıcı hareket.
-    livePos.current.x = nextX
-    livePos.current.y = nextY
+    livePos.current = { x: nextX, y: nextY }
 
     // --- Rakip interpolasyonu (yalnızca hedefe yaklaşırken yazarız). ---
     //
@@ -264,8 +274,7 @@ export const useGameLoop = (deps: LoopDeps) => {
       // rakip hareketi de 60Hz render tetiklemez.
       const settled = remoteTarget.current
       if (settled) {
-        liveRivalPos.current.x = settled.x
-        liveRivalPos.current.y = settled.y
+        liveRivalPos.current = { x: settled.x, y: settled.y }
       }
     }
 
@@ -352,9 +361,16 @@ export const useGameLoop = (deps: LoopDeps) => {
               roundScore: (next.roundScore ?? 0) + 10,
             }
           }
-          // Görev tamamlandıysa: skoru artır, kısa bir "tamamlandı" penceresi
-          // bırak, SONRA yeni görev ver. Aksi halde görev, son coin toplanır
-          // toplanmaz anında değişiyor ve oyuncu tamamlandığını göremiyordu.
+          // Görev tamamlandıysa: tamamlanma sayacını artır, kısa bir
+          // "tamamlandı" penceresi bırak, SONRA yeni görev ver. Aksi halde
+          // görev, son coin toplanır toplanmaz anında değişiyor ve oyuncu
+          // tamamlandığını göremiyordu.
+          //
+          // ÖNEMLİ: `score` KÜMÜLATİF'tir (toplanan coin + çalınan + görev
+          // bonusu). Burada `score`'u görev sayısına EŞİTLEMEYİZ; aksi halde
+          // oyuncunun topladığı puan silinir ("görev tamamlanınca 1 skor
+          // kazanıyor" şikâyeti tam olarak buydu). Görev tamamlama yalnızca
+          // `objectivesDone` sayacını ve bir bonusu ekler.
           if (objectiveSatisfied(next)) {
             changed = true
             const done = (next.objectivesDone ?? 0) + 1
@@ -363,8 +379,9 @@ export const useGameLoop = (deps: LoopDeps) => {
             next = {
               ...next,
               objectivesDone: done,
-              score: done,
-              roundScore: done,
+              // Görev başına bonus puan (kümülatif skora eklenir).
+              score: next.score + OBJECTIVE_BONUS,
+              roundScore: (next.roundScore ?? 0) + OBJECTIVE_BONUS,
               // Görev ŞİMDİLİK korunur (tamamlanmış haliyle gösterilir).
               missionDone: true,
             }
