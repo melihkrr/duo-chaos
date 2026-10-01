@@ -20,7 +20,6 @@ import { useGameLoop } from './useGameLoop'
 import { blankPlayer, useGameState } from './useGameState'
 import { useProgress } from './useProgress'
 import { useRoom, readToken, saveToken } from './useRoom'
-import { useScout } from './useScout'
 import { useToast } from './useToast'
 import type { Coin, EmoteId, Phase, Player, State, TrailId } from './types'
 
@@ -214,7 +213,6 @@ export const useDuoChaos = () => {
   const room = useRoom()
   const progress = useProgress()
   const chaos = useChaos()
-  const scout = useScout(room.code, room.playerId, room.token)
   const toast = useToast()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -919,14 +917,6 @@ export const useDuoChaos = () => {
       } else {
         chaos.clear()
       }
-      const me = data.players?.find((item) => mapPlayerId(String(item.id), myId) === 'p1')
-      if (me) {
-        scout.sync({
-          charges: me.scoutCharges,
-          usedAt: me.scoutUsedAt,
-          hint: me.revealedHint ?? null,
-        })
-      }
     }
 
     const intervalMs = state.phase === 'countdown' ? POLL_MS.countdown : POLL_MS.battle
@@ -958,7 +948,7 @@ export const useDuoChaos = () => {
       window.clearTimeout(timer)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [chaos, noteServerNow, room.code, room.playerId, room.token, scout, setState, state.phase, toLocal])
+  }, [chaos, noteServerNow, room.code, room.playerId, room.token, setState, state.phase, toLocal])
 
   // FAZ UZLAŞMASI (phase reconciliation).
   //
@@ -1076,7 +1066,6 @@ export const useDuoChaos = () => {
     if (state.round > syncedRoundRef.current) {
       syncedRoundRef.current = state.round
       resetRound(state.round, roundSeedFor(room.code, state.round))
-      scout.reset()
       setNextReady(false)
       setRivalNextReady(false)
       // Yeni turda rakibin ESKİ broadcast konumunu bırak. Aksi halde rakip
@@ -1099,7 +1088,7 @@ export const useDuoChaos = () => {
         }))
       }
     }
-  }, [resetRound, room.code, scout, setState, state.phase, state.round])
+  }, [resetRound, room.code, setState, state.phase, state.round])
 
   // Skoru kalıcı hale getir. `duo_tick` çağrılmadığı için sunucu skoru
   // saklamaz; sayfa yenilendiğinde yerel skor sıfırlanıyordu. Burada skoru
@@ -1129,11 +1118,15 @@ export const useDuoChaos = () => {
   // misafir lobide takılı kalır.
   useEffect(() => {
     const code = room.code
-    if (!code || state.phase !== 'lobby') return
+    if (!code) return
     const myId = room.playerId
     const myToken = room.token ?? room.playerId
     let cancelled = false
     const pull = async () => {
+      // Yalnızca lobide ağ isteği yap. Effect oda boyunca bağlı kalır (faz
+      // değişiminde sökülmez), ama countdown/battle'da bu yoklama gereksizdir;
+      // o fazların kendi uzlaşma effect'i vardır.
+      if (stateRef.current.phase !== 'lobby') return
       let data: PublicSnapshot | null = null
       try {
         data = await callRef.current<PublicSnapshot>('duo_public_state', { p_token: myToken })
@@ -1152,10 +1145,13 @@ export const useDuoChaos = () => {
       // Ayrıca host oyunu başlattıysa fazı da burada ilerlet.
       // Faz geçişini GÜNCELLEYİCİ DIŞINDA tespit et. `setState` güncelleyicisi
       // SAF olmalıdır; broadcast/ref yazımı gibi yan etkiler orada yapılamaz.
-      // Bu effect yalnızca `state.phase === 'lobby'` iken çalıştığı için
-      // "lobiden çıktık" koşulu doğrudan closure'daki `state.phase` ile
-      // belirlenebilir.
-      const leavingLobby = state.phase === 'lobby' && Boolean(data.phase) && data.phase !== 'lobby'
+      // Fazı `stateRef` üzerinden oku: bu effect YALNIZCA oda/token değişince
+      // yeniden kurulur. `state.phase`'i bağımlılığa koyarsak her faz
+      // değişiminde (ve her `setState` render'ında) effect sökülüp yeniden
+      // kurulur; bu da uçuştaki `pull()` isteğini `cancelled` ile iptal eder ve
+      // `playerCount` hiç uygulanmaz → misafir ~10 sn "rakip yok" görür.
+      const currentPhase = stateRef.current.phase
+      const leavingLobby = currentPhase === 'lobby' && Boolean(data.phase) && data.phase !== 'lobby'
       if (leavingLobby) {
         // Misafir lobiden çıkıp maça katıldığını rakibe HEMEN bildirsin.
         // Host, misafirin presence'ı geçiş sırasında dalgalandığı için
@@ -1165,7 +1161,6 @@ export const useDuoChaos = () => {
         broadcastRef.current('hello', { by: room.playerId })
         // Maç başlangıç damgasını misafir tarafında da kur (grace penceresi).
         setMatchStartAt(Date.now())
-        scout.reset()
         remotePos.current.clear()
         rivalBroadcastSeenRef.current = false
       }
@@ -1275,7 +1270,10 @@ export const useDuoChaos = () => {
       cancelled = true
       window.clearInterval(id)
     }
-  }, [noteServerNow, room.code, room.playerId, room.token, scout, setState, state.phase, toLocal])
+    // DİKKAT: `state.phase` bilinçli olarak bağımlılıkta DEĞİL. Fazı
+    // `stateRef` üzerinden okuruz; aksi halde her faz/render değişiminde effect
+    // yeniden kurulur ve uçuştaki istek iptal edilir (senkron gecikmesi).
+  }, [noteServerNow, room.code, room.playerId, room.token, setState, toLocal])
 
   // Maç sonunda XP ver.
   const awarded = useRef(false)
@@ -1434,7 +1432,6 @@ export const useDuoChaos = () => {
         return
       }
       resetRound(1, roundSeedFor(room.code, 1))
-      scout.reset()
       // Yeni maçta rakibin eski broadcast konumunu bırak.
       remotePos.current.clear()
       rivalBroadcastSeenRef.current = false
@@ -1456,7 +1453,7 @@ export const useDuoChaos = () => {
     } finally {
       setBusy(false)
     }
-  }, [noteServerNow, resetRound, room, scout, setPhase, toLocal])
+  }, [noteServerNow, resetRound, room, setPhase, toLocal])
 
   /**
    * Sonraki turu GERÇEKTEN başlatır. Yalnızca iki oyuncu da onayladığında
@@ -1471,7 +1468,6 @@ export const useDuoChaos = () => {
         { p_token: room.token ?? room.playerId },
       )
       resetRound(nextRound, roundSeedFor(room.code, nextRound))
-      scout.reset()
       noteServerNow(res?.serverNow)
       const localCountdown = toLocal(res?.countdownEndsAt)
       // Yeni turda rakibin eski broadcast konumunu bırak (iki oyuncu aynı
@@ -1494,7 +1490,7 @@ export const useDuoChaos = () => {
     } finally {
       setBusy(false)
     }
-  }, [noteServerNow, resetRound, room, scout, setPhase, state.round, toLocal])
+  }, [noteServerNow, resetRound, room, setPhase, state.round, toLocal])
 
   // Realtime işleyicilerinin güncel fonksiyona/değere erişebilmesi için
   // ref'leri senkronla.
@@ -1582,7 +1578,7 @@ export const useDuoChaos = () => {
    *
    * Çözüm: Yerel onayı kaydedip rakibe `rematch-ready` yayınlarız. Sunucu
    * iki onayı da görünce odayı `lobby`'ye çeker; istemci faz uzlaşmasıyla
-   * oraya geçer ve `resetMatch`/`scout.reset` bu geçişte uygulanır.
+   * oraya geçer ve `resetMatch` bu geçişte uygulanır.
    */
   const rematch = useCallback(async () => {
     setBusy(true)
@@ -1626,8 +1622,8 @@ export const useDuoChaos = () => {
   // maç durumunu sıfırlarız. Böylece iki oyuncu da AYNI anda lobiye döner.
   //
   // NOT: `setState`-in-effect lint kuralına takılmamak için bayrak sıfırlama
-  // yerine yalnızca `resetMatch`/`scout.reset` (harici sistem güncellemesi)
-  // yapılır; onay bayrakları bir sonraki `matchover` girişinde sıfırlanır.
+  // yerine yalnızca `resetMatch` (harici sistem güncellemesi) yapılır; onay
+  // bayrakları bir sonraki `matchover` girişinde sıfırlanır.
   const rematchAppliedRef = useRef(false)
   useEffect(() => {
     if (state.phase !== 'lobby') {
@@ -1640,8 +1636,7 @@ export const useDuoChaos = () => {
     if (!rematchReady && !rivalRematchReady) return
     rematchAppliedRef.current = true
     resetMatch()
-    scout.reset()
-  }, [resetMatch, rivalRematchReady, rematchReady, scout, state.phase])
+  }, [resetMatch, rivalRematchReady, rematchReady, state.phase])
 
   const leaveGame = useCallback(async () => {
     // Rakibe "ayrıldım" sinyali yayınla; oyunu duraklatıp bilgilendirsin.
