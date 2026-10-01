@@ -7,7 +7,7 @@ import { VirtualJoystick } from './VirtualJoystick'
 import { Button } from '../ui/Button'
 import { ARENA, OBSTACLES, trailById } from '../../lib/config'
 import { SCORE_POP_MS } from '../../lib/useGameLoop'
-import { missionLabel, objectiveHidden, objectiveOf, progressOf, targetOf } from '../../lib/display'
+import { missionLabel, objectiveOf, progressOf, targetOf } from '../../lib/display'
 import type { ChaosApi } from '../../lib/useChaos'
 import type { CosmeticsApi } from '../../lib/useCosmetics'
 import type { State } from '../../lib/types'
@@ -341,11 +341,9 @@ export function Battle({
   const meWon = state.winner === 'p1'
   const myObjective = objectiveOf(me)
   const rivalObjective = objectiveOf(rival)
-  // Rakibin görevi sunucu tarafından GİZLENMİŞ olabilir (taranmadıysa `null`
-  // döner). Bu durumda uydurma bir görev göstermeyiz; "Hidden objective"
-  // yazarız. Aksi halde iki oyuncu rakibin görevi için farklı metin görür
-  // ("görevler çelişkili görünüyor" hatası).
-  const rivalHidden = objectiveHidden(rival)
+  // NOT: Sunucu artık HER İKİ oyuncunun görevini de açıkça döndürür
+  // (bkz. 0026_reveal_all_objectives.sql). Böylece iki istemci de birbirinin
+  // gerçek görevini ve ilerlemesini görür; sahte/uydurma görev yoktur.
   const myTrail = trailById(me?.trail)
 
   // Görev ilerlemesi: `progressOf` HAM sayıyı döner (örn. 3 toplamadan 1 tane
@@ -424,22 +422,14 @@ export function Battle({
             </span>
           </div>
           <small>
-            {rivalHidden ? (
-              <span className="hud-hidden" title="Scout to reveal your rival's objective">
-                🔒 Hidden objective
-              </span>
-            ) : (
-              <>
-                {missionLabel(rivalObjective)}
-                <span className="hud-missions" title="Mission progress">
-                  {' '}
-                  · {rivalCount}/{rivalTarget}
-                </span>
-              </>
-            )}
+            {missionLabel(rivalObjective)}
+            <span className="hud-missions" title="Mission progress">
+              {' '}
+              · {rivalCount}/{rivalTarget}
+            </span>
           </small>
           <div className="hud-bar">
-            <span style={{ width: `${rivalHidden ? 0 : Math.round(rivalProgress * 100)}%` }} />
+            <span style={{ width: `${Math.round(rivalProgress * 100)}%` }} />
           </div>
         </div>
       </header>

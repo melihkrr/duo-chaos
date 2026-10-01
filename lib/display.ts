@@ -114,18 +114,3 @@ export const missionDoneForDisplay = (p: Player) =>
 
 export const missionLabel = (o?: Objective | null) =>
   String(o?.label ?? 'Collect 3 Gold').replace(/\*+/g, '').trim()
-
-/**
- * Rakibin görevi GİZLİ mi?
- *
- * Sunucu (`duo_public_state`), rakibin görevini yalnızca taranmışsa (scout)
- * döndürür; aksi halde `objective: null` gönderir. İstemci eskiden bu `null`
- * değeri `defaultObjectiveForPlayer('p2')` ile SAHTE bir göreve çeviriyordu;
- * bu yüzden iki oyuncu rakibin görevi için FARKLI metinler görüyordu
- * ("görevler çelişkili görünüyor" hatası). Artık gizli görevi uydurmuyoruz.
- *
- * KURAL: Yerel oyuncu (index 0) için `null` = "henüz atanmadı" (fallback
- * gösterilebilir). Rakip (index 1) için `null` = "gizli" (uydurma YOK).
- */
-export const objectiveHidden = (p?: Pick<Player, 'id' | 'objective'>): boolean =>
-  !!p && p.id !== 'p1' && !p.objective
