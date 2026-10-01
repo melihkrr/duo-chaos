@@ -198,6 +198,8 @@ export const useGameLoop = (deps: LoopDeps) => {
     const res = response as
       | {
           ok?: boolean
+          objectiveDone?: boolean
+          completedProgress?: number | null
           state?: {
             objective?: Player['objective']
             objectiveProgress?: number
@@ -215,6 +217,18 @@ export const useGameLoop = (deps: LoopDeps) => {
       | null
     if (!res || res.ok !== true || !res.state) return
     const s = res.state
+    // TAMAMLAMA RAPORU (0040): sunucu, görev tamamlandığında TAMAMLANAN görevin
+    // SON ilerlemesini (`completedProgress`, ör. 4) AYRICA döndürür. Reroll
+    // `objectiveProgress`'i yeni görevin taşınmış değerine çevirdiği için, bu
+    // alan olmadan istemci 4/4'ü HİÇ göremez ve "4 topladım 3/0 gösteriyor"
+    // kaybı oluşur. Tamamlama anında ilerlemeyi `completedProgress`'e sabitleriz;
+    // böylece görev 4/4 olarak TAMAMLANMIŞ görünür, sonra yeni göreve geçilir.
+    const completedProgress =
+      res.objectiveDone === true &&
+      typeof res.completedProgress === 'number' &&
+      Number.isFinite(res.completedProgress)
+        ? res.completedProgress
+        : undefined
     depsRef.current.setState((prev) => {
       const players = prev.players.map((player, index) => {
         if (index !== 0) return player
@@ -234,11 +248,16 @@ export const useGameLoop = (deps: LoopDeps) => {
           typeof player.objectiveProgress === 'number' && Number.isFinite(player.objectiveProgress)
             ? player.objectiveProgress
             : 0
-        const objectiveProgress = objectiveChanged
-          ? (serverProgress ?? 0)
-          : serverProgress === undefined
-            ? localProgress
-            : Math.max(localProgress, serverProgress)
+        // TAMAMLAMA: görev tamamlandıysa TAMAMLANAN görevin son değerini göster.
+        // Bu, görev değişiminden ÖNCE uygulanır; böylece 4/4 anlık görünür.
+        const objectiveProgress =
+          completedProgress !== undefined
+            ? Math.max(localProgress, completedProgress)
+            : objectiveChanged
+              ? (serverProgress ?? 0)
+              : serverProgress === undefined
+                ? localProgress
+                : Math.max(localProgress, serverProgress)
         // SKOR MONOTONİKLİĞİ (KÖK SORUN DÜZELTMESİ: "1080 → 1030").
         //
         // Gecikmiş bir RPC yanıtı (ör. daha eski bir collect) YENİ skoru
@@ -251,9 +270,14 @@ export const useGameLoop = (deps: LoopDeps) => {
           typeof s.roundScore === 'number' && Number.isFinite(s.roundScore)
             ? s.roundScore
             : undefined
+        // TAMAMLAMA ANI (0040): `completedProgress` doluysa görev AZ ÖNCE
+        // tamamlandı. 4/4'ü TAMAMLANAN göreve karşı göstermek için ESKİ görevi
+        // koruruz; yeni görev bir sonraki güncellemede (yoklama/sonraki RPC)
+        // uygulanır. Aksi halde "yeni görev ama 4/4" uyumsuzluğu görünürdü.
+        const showCompleted = completedProgress !== undefined
         return {
           ...player,
-          objective: nextObjective,
+          objective: showCompleted ? player.objective : nextObjective,
           objectiveProgress,
           collectedTypes: s.collectedTypes ?? player.collectedTypes,
           coins: s.coins ?? player.coins,
