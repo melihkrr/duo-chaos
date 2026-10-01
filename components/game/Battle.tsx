@@ -169,10 +169,11 @@ export function Battle({
     return () => window.cancelAnimationFrame(raf)
   }, [livePos, liveRivalPos])
 
+  // YEREL STATE SIRASI: index 0 = "ben", index 1 = "rakip" (iki istemcide de).
   const me = state.players[0]
   const rival = state.players[1]
-  // Yerel oyuncu (p1) maçı kazandı mı? Rakip ayrıldığında popup'ta "You win"
-  // göstermek için kullanılır.
+  // Yerel oyuncu maçı kazandı mı? Rakip ayrıldığında popup'ta "You win"
+  // göstermek için kullanılır. Yerel state'te "ben" her zaman `'p1'`dir.
   const meWon = state.winner === 'p1'
   const myObjective = objectiveOf(me)
   const rivalObjective = objectiveOf(rival)

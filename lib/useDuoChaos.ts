@@ -683,6 +683,7 @@ export const useDuoChaos = () => {
           ...prev,
           coins,
           players: prev.players.map((player, index) => {
+            // Yerel state'te index 1 = "rakip" (iki istemcide de).
             if (index !== 1) return player
             const collectedTypes = { ...(player.collectedTypes ?? {}) }
             for (const [type, count] of Object.entries(gainedTypes)) {
@@ -700,6 +701,7 @@ export const useDuoChaos = () => {
       if (!data || data.by === room.playerId) return
       noteRivalAlive()
       playSound('bump')
+      // Yerel state'te index 0 = "ben", index 1 = "rakip" (iki istemcide de).
       setState((prev) => ({
         ...prev,
         players: prev.players.map((player, index) =>

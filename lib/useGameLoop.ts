@@ -217,6 +217,10 @@ export const useGameLoop = (deps: LoopDeps) => {
       return
     }
 
+    // YEREL STATE SIRASI: `state.players[0]` HER ZAMAN "ben", `[1]` HER ZAMAN
+    // "rakip"tir (bkz. `useGameState`/`mapPlayerId`). `player.id` sunucu slotu
+    // DEĞİL, yerel slottur (`'p1'` = ben, `'p2'` = rakip). Bu yüzden index
+    // tabanlı erişim doğrudur ve iki istemcide de tutarlıdır.
     const me = state.players[0]
     if (!me) return
 
@@ -475,6 +479,7 @@ export const useGameLoop = (deps: LoopDeps) => {
       })
 
       const nextPlayers = prev.players.map((player, index) => {
+        // Yerel state'te index 0 = "ben", index 1 = "rakip" (iki istemcide de).
         if (index === 0) {
           let next = player
           // NOT: Yerel oyuncunun x/y'sini burada state'e YAZMAYIZ. Konum her
