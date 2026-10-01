@@ -1703,32 +1703,95 @@ h3 {
 }
 
 /* ============================================================
-   Avatar picker (hayvan seçimi)
+   Avatar picker (hayvan seçimi) — POPUP deseni
    ============================================================ */
 
-.avatar-picker {
+/* Ana sayfa: yuvarlak avatar butonu + isim alanı yan yana. */
+.name-row {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  width: 100%;
-  margin-top: 4px;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 12px;
+  width: min(420px, 100%);
+  margin: 0 auto 18px;
 }
 
-.avatar-picker-head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  flex-wrap: wrap;
+.name-row .name-field {
+  flex: 1 1 auto;
+  width: auto;
+  margin: 0;
 }
 
-.avatar-picker-head small {
+/* Yuvarlak tetikleyici: seçili hayvanı gösterir, tıklayınca popup açar. */
+.avatar-trigger {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong);
+  background: var(--yellow-soft);
+  cursor: pointer;
+  transition: transform 0.16s var(--ease-bounce), border-color 0.16s var(--ease-soft),
+    box-shadow 0.16s var(--ease-soft);
+}
+
+.avatar-trigger:hover {
+  transform: translateY(-2px) scale(1.04);
+  border-color: var(--ink);
+  box-shadow: 0 4px 0 rgba(43, 36, 64, 0.18);
+}
+
+.avatar-trigger:focus-visible {
+  outline: 3px solid var(--pink);
+  outline-offset: 2px;
+}
+
+.avatar-trigger-glyph {
+  font-size: 30px;
+  line-height: 1;
+}
+
+/* Küçük kalem rozeti — "bu düzenlenebilir" ipucu. */
+.avatar-trigger-badge {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--ink);
+  background: #fff;
   font-size: 11px;
+  line-height: 1;
 }
 
+/* Lobi koltuğu için daha küçük varyant. */
+.avatar-trigger-seat {
+  width: 44px;
+  height: 44px;
+}
+
+.avatar-trigger-seat .avatar-trigger-glyph {
+  font-size: 24px;
+}
+
+.avatar-trigger-seat .avatar-trigger-badge {
+  width: 18px;
+  height: 18px;
+  font-size: 9px;
+}
+
+/* Popup içindeki ızgara. */
 .avatar-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 10px;
 }
 
 .avatar-chip {
@@ -1737,7 +1800,7 @@ h3 {
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  padding: 8px 4px 6px;
+  padding: 10px 4px 8px;
   border: 2px solid var(--line-strong);
   border-radius: var(--r-md);
   background: #fff;
@@ -1760,7 +1823,7 @@ h3 {
 }
 
 .avatar-glyph {
-  font-size: 26px;
+  font-size: 28px;
   line-height: 1;
 }
 
@@ -1777,18 +1840,24 @@ h3 {
   font-size: 10px;
 }
 
-/* Lobi içi kompakt varyant: daha küçük hücreler. */
-.avatar-picker-compact .avatar-grid {
-  grid-template-columns: repeat(auto-fill, minmax(52px, 1fr));
-  gap: 6px;
-}
+@media (max-width: 420px) {
+  .name-row {
+    gap: 8px;
+  }
 
-.avatar-picker-compact .avatar-glyph {
-  font-size: 22px;
-}
+  .avatar-trigger {
+    width: 48px;
+    height: 48px;
+  }
 
-.avatar-picker-compact .avatar-chip {
-  padding: 6px 3px 4px;
+  .avatar-trigger-glyph {
+    font-size: 26px;
+  }
+
+  .avatar-grid {
+    grid-template-columns: repeat(auto-fill, minmax(60px, 1fr));
+    gap: 8px;
+  }
 }
 
 /* ============================================================

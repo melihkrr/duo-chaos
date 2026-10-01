@@ -53,26 +53,28 @@ export function Home({ progress, onCreate, onJoin, busy, error, initialName = ''
             finish with the highest score. Fast, chaotic, and best played with a friend.
           </p>
 
-          <label className="field name-field">
-            <span className="field-label">Your name</span>
-            <input
-              className="name-input"
-              value={name}
-              onChange={(event) => setName(event.target.value.slice(0, NAME_MAX))}
-              placeholder="e.g. Melih"
-              maxLength={NAME_MAX}
-              autoComplete="nickname"
-              spellCheck={false}
-              aria-label="Your display name"
+          <div className="name-row">
+            <AvatarPicker
+              avatar={raw.avatar}
+              level={profile.level}
+              onSelect={(id) => void progress.setCosmetics({ avatar: id })}
+              label="Choose your animal"
             />
-            <small className="muted">Your rival will see this name.</small>
-          </label>
-
-          <AvatarPicker
-            avatar={raw.avatar}
-            level={profile.level}
-            onSelect={(id) => void progress.setCosmetics({ avatar: id })}
-          />
+            <label className="field name-field">
+              <span className="field-label">Your name</span>
+              <input
+                className="name-input"
+                value={name}
+                onChange={(event) => setName(event.target.value.slice(0, NAME_MAX))}
+                placeholder="e.g. Melih"
+                maxLength={NAME_MAX}
+                autoComplete="nickname"
+                spellCheck={false}
+                aria-label="Your display name"
+              />
+              <small className="muted">Your rival will see this name and animal.</small>
+            </label>
+          </div>
 
           <div className="hero-actions">
             <Button onClick={() => onCreate(trimmed)} disabled={busy || !nameValid}>

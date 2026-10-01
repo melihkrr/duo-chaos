@@ -73,9 +73,21 @@ export function Lobby({
           const isMe = index === 0
           return (
             <div key={index} className={['seat', filled ? 'filled' : 'empty'].join(' ')}>
-              <span className="seat-avatar" aria-hidden>
-                {filled ? avatarGlyph(player?.avatar, index === 0 ? 'rabbit' : 'bear') : '❓'}
-              </span>
+              {isMe ? (
+                // Kendi koltuğumda avatar, ismin YANINDA düzenlenebilir bir
+                // butondur: tıklayınca popup açılır ve hayvanı oradan seçerim.
+                <AvatarPicker
+                  avatar={avatar}
+                  level={level}
+                  onSelect={onSelectAvatar}
+                  variant="seat"
+                  label="Change your animal"
+                />
+              ) : (
+                <span className="seat-avatar" aria-hidden>
+                  {filled ? avatarGlyph(player?.avatar, 'bear') : '❓'}
+                </span>
+              )}
               <div className="seat-info">
                 {isMe && editing ? (
                   <input
@@ -115,8 +127,6 @@ export function Lobby({
           )
         })}
       </div>
-
-      <AvatarPicker avatar={avatar} level={level} onSelect={onSelectAvatar} compact />
 
       <div className="lobby-foot">
         {isHost ? (
