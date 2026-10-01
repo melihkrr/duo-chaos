@@ -34,6 +34,44 @@ const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
  */
 const RIVAL_ALIVE_TTL_MS = 6_000
 
+/**
+ * MAÇ KAZANANINI İSTEMCİ TARAFINDA HESAPLA.
+ *
+ * Kök sorun: Sunucudaki `duo_advance_phase`, kazananı `duo_players.total_score`
+ * sütununa göre seçer (`order by total_score desc, slot asc`). Ancak `duo_tick`
+ * hiç çağrılmadığı için sunucunun `score` sütunu HER ZAMAN 0'dır; dolayısıyla
+ * `total_score` de 0 olur ve eşitlik bozucu `slot asc` devreye girip HER İKİ
+ * istemciye de `winner = 'p1'` döner. Sonuç: iki oyuncu da "Victory!" ekranı
+ * görür (biri 35, diğeri 1290 puandayken bile).
+ *
+ * Çözüm: Kazananı sunucudan ALMAYIZ; istemcinin kendi OTORİTE `matchScores`
+ * değerinden hesaplarız. `matchScores` her turda `roundScore`'lardan birikir ve
+ * iki istemcide de aynıdır. Eşitlikte kazanan yoktur (`undefined`).
+ */
+const winnerFromScores = (matchScores?: Record<string, number>): string | undefined => {
+  const p1 = matchScores?.p1 ?? 0
+  const p2 = matchScores?.p2 ?? 0
+  if (p1 === p2) return undefined
+  return p1 > p2 ? 'p1' : 'p2'
+}
+
+/**
+ * Bir tur bittiğinde (`battle` → `results`/`matchover`) kümülatif maç skorunu
+ * üretir: mevcut `matchScores`'a o turun `roundScore`'larını ekler.
+ *
+ * Bu, `advancePhase` yolunda zaten yapılıyordu; ancak faz geçişini önce
+ * yakalayan yol (battle poll / faz uzlaşması) `matchScores`'u biriktirmediği
+ * için kazanan eski (eksik) skordan hesaplanabiliyordu. Kazananı her yolda
+ * TUTARLI hesaplamak için bu yardımcıyı kullanırız.
+ */
+const accumulateMatchScores = (
+  prevMatch: Record<string, number> | undefined,
+  players: Player[],
+): Record<string, number> => ({
+  p1: (prevMatch?.p1 ?? 0) + (players[0]?.roundScore ?? 0),
+  p2: (prevMatch?.p2 ?? 0) + (players[1]?.roundScore ?? 0),
+})
+
 const makeCode = () =>
   Array.from({ length: 6 }, () => CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)]).join('')
 
@@ -492,10 +530,20 @@ export const useDuoChaos = () => {
           }
           if (serverRoundHasData) roundScores = serverRound as Record<string, number>
           if (serverMatchHasData) matchScores = serverMatch as Record<string, number>
+          // KAZANAN: Sunucunun `winner` alanına GÜVENMEYİZ (sunucu skoru hep 0
+          // olduğu için eşitlikte `slot asc` ile daima 'p1' döner ve iki oyuncu
+          // da "Victory!" görür). Kazananı kendi `matchScores`'umuzdan hesaplarız.
+          const nextPhase = data.phase as Phase
+          const winner =
+            nextPhase === 'matchover'
+              ? winnerFromScores(matchScores)
+              : nextPhase === 'results'
+                ? undefined
+                : prev.winner
           return {
             ...prev,
-            phase: data.phase as Phase,
-            winner: data.winner ?? prev.winner,
+            phase: nextPhase,
+            winner,
             roundScores,
             matchScores,
             endsAt: localEndsAt > 0 ? localEndsAt : prev.endsAt,
@@ -945,13 +993,32 @@ export const useDuoChaos = () => {
             : roundChanged
               ? serverCoins
               : mergeCoins(prev.coins, serverCoins)
+          // TUR SONU SKOR BİRİKİMİ: `battle`'dan çıkıyorsak (results/matchover)
+          // o turun `roundScore`'larını kümülatif `matchScores`'a ekleriz. Bu
+          // yol faz geçişini `advancePhase`'ten önce yakalayabilir; biriktirme
+          // yapmazsak kazanan eksik skordan hesaplanır.
+          const leavingBattle = prev.phase === 'battle' && phase !== 'battle'
+          const matchScores = leavingBattle
+            ? accumulateMatchScores(prev.matchScores, players)
+            : prev.matchScores
+          // KAZANAN: Sunucunun `winner` alanına GÜVENMEYİZ (sunucu skoru hep 0
+          // olduğu için eşitlikte daima 'p1' döner → iki oyuncu da "Victory!"
+          // görür). `matchover`'a geçildiğinde kazananı kendi `matchScores`'umuzdan
+          // hesaplarız; diğer fazlarda mevcut değeri koruruz.
+          const winner =
+            phase === 'matchover'
+              ? winnerFromScores(matchScores)
+              : phase === 'results'
+                ? undefined
+                : prev.winner
           return {
             ...prev,
             phase,
             round: data.round ?? prev.round,
             endsAt: localEndsAt > 0 ? localEndsAt : prev.endsAt,
             countdownEndsAt: localCountdownEndsAt > 0 ? localCountdownEndsAt : prev.countdownEndsAt,
-            winner: data.winner ?? prev.winner,
+            winner,
+            matchScores,
             coins,
             players,
           }
@@ -1066,11 +1133,28 @@ export const useDuoChaos = () => {
             : mergeCoins(prev.coins, serverCoins)
         const phaseChanged = nextPhase !== prev.phase
         const coinsChanged = coins !== prev.coins
-        if (!phaseChanged && !data.winner && !coinsChanged) return prev
+        if (!phaseChanged && !coinsChanged) return prev
+        // TUR SONU SKOR BİRİKİMİ: `battle`'dan çıkıyorsak o turun
+        // `roundScore`'larını kümülatif `matchScores`'a ekleriz (bkz. battle poll).
+        const leavingBattle = prev.phase === 'battle' && nextPhase !== 'battle'
+        const matchScores = leavingBattle
+          ? accumulateMatchScores(prev.matchScores, prev.players)
+          : prev.matchScores
+        // KAZANAN: Sunucunun `winner` alanına GÜVENMEYİZ (sunucu skoru hep 0
+        // olduğu için eşitlikte daima 'p1' döner → iki oyuncu da "Victory!"
+        // görür). `matchover`'a geçildiğinde kazananı kendi `matchScores`'umuzdan
+        // hesaplarız; diğer fazlarda mevcut değeri koruruz.
+        const winner =
+          nextPhase === 'matchover'
+            ? winnerFromScores(matchScores)
+            : nextPhase === 'results'
+              ? undefined
+              : prev.winner
         return {
           ...prev,
           phase: nextPhase,
-          winner: data.winner ?? prev.winner,
+          winner,
+          matchScores,
           round: data.round ?? prev.round,
           endsAt: localEndsAt > 0 ? localEndsAt : prev.endsAt,
           countdownEndsAt: localCountdownEndsAt > 0 ? localCountdownEndsAt : prev.countdownEndsAt,
@@ -1300,7 +1384,9 @@ export const useDuoChaos = () => {
           round: data.round ?? prev.round,
           endsAt: localEndsAt > 0 ? localEndsAt : prev.endsAt,
           countdownEndsAt: localCountdownEndsAt > 0 ? localCountdownEndsAt : prev.countdownEndsAt,
-          winner: data.winner ?? prev.winner,
+          // Lobi/geri sayım fazında kazanan YOKTUR; sunucunun (skoru hep 0
+          // olduğu için daima 'p1' dönen) `winner` alanını UYGULAMAYIZ.
+          winner: nextPhase === 'matchover' ? winnerFromScores(prev.matchScores) : undefined,
           players,
         }
       })

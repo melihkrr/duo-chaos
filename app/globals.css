@@ -139,6 +139,19 @@ h3 {
   box-shadow: var(--shadow-sm);
 }
 
+/* ÜST SATIR: marka + aksiyonlar. Bu satır ASLA kendi içinde sarmaz; böylece
+   "DUO CHAOS" yazısı ile ses/leave butonları her zaman aynı satırda kalır.
+   Oda kodu bu satırın DIŞINDA bir kardeş öğedir ve gerekirse alt satıra iner. */
+.topbar-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+
 /* Oda varken üst çubuk ekranın tepesine SABİTLENİR. `top` güvenli alanı
    (çentik) hesaba katar; z-index HUD/overlay'lerin altında ama içeriğin
    üstünde kalacak şekilde ayarlanır. */
@@ -174,17 +187,16 @@ h3 {
   box-shadow: 0 4px 0 rgba(43, 36, 64, 0.16);
 }
 
-/* Oda kodu ortada durur. Üç öğe (marka, oda kodu, aksiyonlar) aynı satıra
-   sığdığında tek satırda kalır. Sığmadığında `flex-basis: 100%` ile oda kodu
-   alt satıra iner ve tam genişlikte ORTALANIR; marka ile aksiyonlar üstte
-   kalır. */
+/* Oda kodu: üst satırdaki marka+aksiyonların YANINDA sığıyorsa aynı satırda
+   ortada durur. Sığmadığında `flex-basis: 100%` ile ALT satıra iner ve tam
+   genişlikte ORTALANIR; marka ile aksiyonlar üst satırda birlikte kalır. */
 .topbar-meta {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
   justify-content: center;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
 }
 
