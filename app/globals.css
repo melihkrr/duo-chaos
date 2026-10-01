@@ -1882,13 +1882,13 @@ h3 {
    Chaos banner
    ============================================================ */
 
-/* Chaos banner: oyun alanının ÜSTÜNDE, normal akıştan bağımsız bir overlay.
+/* Chaos banner: oyun alanının ALTINDA, normal akıştan bağımsız bir overlay.
    `position: absolute` olduğu için görünüp kaybolduğunda arena'yı aşağı/yukarı
    itmez (kayma yok). Arka planı hafif şeffaf + blur ile altındaki oyunu
-   tamamen kapatmaz. */
+   tamamen kapatmaz. Kullanıcı isteği: banner ALTTA çıksın (üstte değil). */
 .chaos-banner {
   position: absolute;
-  top: 8px;
+  bottom: 8px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 40;
@@ -1903,22 +1903,24 @@ h3 {
   background: rgba(255, 255, 255, 0.82);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
-  box-shadow: 0 5px 0 rgba(43, 36, 64, 0.16);
+  box-shadow: 0 -5px 0 rgba(43, 36, 64, 0.16);
   pointer-events: none;
-  /* Chaos olayı başladığında dikkat çeken, hafif "sarsıntılı" giriş. */
+  /* Chaos olayı başladığında dikkat çeken, hafif "sarsıntılı" giriş.
+     Banner ALTTA olduğu için giriş aşağıdan yukarı doğru gelir. */
   animation: chaos-in 0.5s var(--ease-soft) both;
 }
 
 /* `translateX(-50%)` yatay ortalama korunmalı; aksi halde animasyon
-   banner'ı sağa kaydırır. Bu yüzden her karede translateX(-50%) tekrarlanır. */
+   banner'ı sağa kaydırır. Bu yüzden her karede translateX(-50%) tekrarlanır.
+   Banner ALTTA olduğundan giriş +14px (aşağıdan) başlar ve 0'a oturur. */
 @keyframes chaos-in {
   0% {
     opacity: 0;
-    transform: translateX(-50%) translateY(-14px) scale(0.94) rotate(-1.5deg);
+    transform: translateX(-50%) translateY(14px) scale(0.94) rotate(-1.5deg);
   }
   55% {
     opacity: 1;
-    transform: translateX(-50%) translateY(2px) scale(1.02) rotate(0.6deg);
+    transform: translateX(-50%) translateY(-2px) scale(1.02) rotate(0.6deg);
   }
   100% {
     opacity: 1;
@@ -2420,7 +2422,7 @@ h3 {
   }
 
   .chaos-banner {
-    top: 6px;
+    bottom: 6px;
     width: 94%;
     padding: 9px 12px;
     gap: 8px;

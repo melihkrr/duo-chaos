@@ -73,7 +73,17 @@ export const MATCH_PRESENCE_GRACE_MS = 6_000
 export const MOVE_SPEED = 38
 export const COLLECT_RADIUS = 9
 export const STEAL_RADIUS = 10
-export const PLAYER_HIT_R = 4.2
+/**
+ * Oyuncu çarpışma yarıçapı (arena % birimi). GÖRSEL avatar yarıçapıyla
+ * BİREBİR eşleşmelidir; aksi halde oyuncu engelin GÖRÜNEN kenarına
+ * değmeden bloklanır ("engelin yakınından geçerken takılıyorum" şikâyeti).
+ *
+ * Görsel: `.avatar-body` = 32px (border-box) → yarıçap 16px. Tipik arena
+ * genişliği ~615px → 16/615 ≈ 2.6%. Eski değer 4.2 idi; bu, görselden
+ * ~%60 DAHA BÜYÜK bir hayalet yarıçap demekti ve oyuncu engelin
+ * "havada" bir noktasında bloklanıyordu.
+ */
+export const PLAYER_HIT_R = 2.6
 /**
  * Rakip pozisyonu için ÜSTEL yumuşatma oranı (1/saniye). Kare hızından
  * bağımsız çalışır: her karede `alpha = 1 - exp(-k * dt)` kadar hedefe
