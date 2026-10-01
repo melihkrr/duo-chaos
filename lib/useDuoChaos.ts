@@ -867,7 +867,11 @@ export const useDuoChaos = () => {
     const offHello = room.on('hello', (payload) => {
       const data = payload as { by?: string }
       if (!data || data.by === room.playerId) return
-      setRivalLeft(false)
+      // `hello` bir CANLILIK sinyalidir: rakip yeniden bağlandı. Yalnızca
+      // `rivalLeft`'i temizlemek yetmez; `rivalAliveAt`'i de tazelemeliyiz.
+      // Aksi halde presence henüz yeniden senkron olmadan `rivalSilentLongEnough`
+      // true kalır ve `rivalGone` popup'ı hemen geri gelir (yanıp söner).
+      noteRivalAlive()
     })
 
     // SKOR SENKRONU: Rakip MUTLAK skorunu yayınlar; biz de rakibin (index 1)
