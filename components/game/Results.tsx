@@ -3,6 +3,7 @@
 import { Button } from '../ui/Button'
 import { Panel } from '../ui/Panel'
 import { avatarGlyph } from '../../lib/config'
+import { resultScoreForPlayer } from '../../lib/results'
 import type { State } from '../../lib/types'
 
 type Props = {
@@ -79,9 +80,12 @@ export function Results({
           // değerler gösterip "değerler birbirini tutmuyor" hatasına yol
           // açıyordu. Bu yüzden ÖNCE `matchScores`'u, sonra `totalScore`'u
           // deneriz.
-          const score = isMatchOver
-            ? state.matchScores?.[player.id] ?? player.totalScore ?? player.score ?? 0
-            : player.score ?? 0
+          const score = resultScoreForPlayer(
+            state.phase,
+            player,
+            state.roundScores,
+            state.matchScores,
+          )
           const isWinner = winner === player.id
           return (
             <div key={player.id} className={['score-row', isWinner ? 'winner' : ''].join(' ')}>
