@@ -251,14 +251,18 @@ const mergeProgress = (
       objectiveProgress: server.objectiveProgress ?? 0,
     }
   }
-  // SUNUCU OTORİTESİ: sunucu bir değer döndürdüyse AYNEN uygula (max YOK).
-  // Sunucu alanı yoksa (eski oda / geçiş anı) yerel değeri koru.
+  // SUNUCU OTORİTESİ (0035): ilerleme için TEK kaynak sunucudur.
   //
-  // İLERLEME (MONOTONİK): görev değişmediği sürece ilerleme ASLA geri düşmez.
-  // Sunucu snapshot'ı gecikmeli geldiğinde (yerel iyimser artırım henüz
-  // işlenmemişken) eski/düşük değeri uygulamak "artıp geri düşme" hatasına yol
-  // açardı. Bu yüzden görev aynıyken `max(yerel, sunucu)` kullanırız; görev
-  // değiştiğinde (yukarıdaki dal) sunucu değeri (0) geçerlidir.
+  // KÖK SORUN (önceki sürümler): Burada `Math.max(yerel, sunucu)` uygulanıyordu.
+  // Ancak "yerel" değer, istemcinin HER KAREDE bayat `collectedTypes`'tan
+  // YENİDEN İNŞA ettiği iyimser ilerlemeydi ve YANLIŞ (fazla yüksek) olabiliyordu.
+  // `Math.max` bu yanlış değeri KALICI olarak kilitliyordu (asla düşmediği için)
+  // → "3 gösterip sonra 1'e düşme" ve "3 topladım 2 gösteriyor" hataları.
+  //
+  // ÇÖZÜM: İstemci artık ilerleme ÜRETMEZ (`lib/useGameLoop.ts`). Sunucu
+  // `objective_progress`'i `greatest()` ile zaten MONOTONİK tutar; bu yüzden
+  // sunucu değerini AYNEN uygulamak güvenlidir ve geri düşme OLMAZ. Sunucu
+  // alanı yoksa (eski oda / geçiş anı) yerel değeri koruruz.
   const serverProgress =
     typeof server.objectiveProgress === 'number' && Number.isFinite(server.objectiveProgress)
       ? server.objectiveProgress
@@ -273,7 +277,7 @@ const mergeProgress = (
     roundCoins: server.roundCoins ?? local.roundCoins,
     roundStolen: server.roundStolen ?? local.roundStolen,
     collectedTypes: server.collectedTypes ?? local.collectedTypes ?? {},
-    objectiveProgress: serverProgress === undefined ? localProgress : Math.max(localProgress, serverProgress),
+    objectiveProgress: serverProgress === undefined ? localProgress : serverProgress,
   }
 }
 

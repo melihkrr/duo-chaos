@@ -181,6 +181,65 @@ export const useGameLoop = (deps: LoopDeps) => {
     joystick.current.y = y
   }, [])
 
+  /**
+   * OTORİTE DURUM UYGULAYICI (0035).
+   *
+   * `duo_collect` / `duo_steal` yanıtındaki `state` alanını yerel oyuncuya
+   * (index 0) AYNEN uygular. Bu, görev ilerlemesi için TEK OTORİTE KAYNAĞIDIR:
+   * istemci artık ilerlemeyi kendi üretmez; sunucunun onayladığı değeri
+   * (görev tamamlanması + yeni görev ataması dahil) ANINDA yansıtır.
+   *
+   * Böylece:
+   *   * "3 topladım 2 gösteriyor" → sunucu 3 diyorsa 3 gösterilir.
+   *   * "3 gösterip sonra 1'e düşme" → istemci sunucuyu geçemez; `Math.max`
+   *     kilitlenmesi olmaz.
+   *   * "yeni görev uzun süre gelmiyor" → yeni görev, yoklamayı beklemeden
+   *     RPC yanıtıyla ANINDA gelir.
+   */
+  const applyServerState = useCallback((response: unknown) => {
+    const res = response as
+      | {
+          ok?: boolean
+          state?: {
+            objective?: Player['objective']
+            objectiveProgress?: number
+            collectedTypes?: Player['collectedTypes']
+            coins?: number
+            stolen?: number
+            roundCoins?: number
+            roundStolen?: number
+            missionDone?: boolean
+            objectivesDone?: number
+            score?: number
+            roundScore?: number
+          }
+        }
+      | null
+    if (!res || res.ok !== true || !res.state) return
+    const s = res.state
+    depsRef.current.setState((prev) => {
+      const players = prev.players.map((player, index) => {
+        if (index !== 0) return player
+        return {
+          ...player,
+          // GÖREV: sunucu yeni görev atadıysa (reroll) burada ANINDA gelir.
+          objective: s.objective ?? player.objective,
+          objectiveProgress: s.objectiveProgress ?? player.objectiveProgress,
+          collectedTypes: s.collectedTypes ?? player.collectedTypes,
+          coins: s.coins ?? player.coins,
+          stolen: s.stolen ?? player.stolen,
+          roundCoins: s.roundCoins ?? player.roundCoins,
+          roundStolen: s.roundStolen ?? player.roundStolen,
+          missionDone: s.missionDone ?? player.missionDone,
+          objectivesDone: s.objectivesDone ?? player.objectivesDone,
+          score: s.score ?? player.score,
+          roundScore: s.roundScore ?? player.roundScore,
+        }
+      })
+      return { ...prev, players }
+    })
+  }, [])
+
   // Klavye girdisi.
   useEffect(() => {
     // Klavye kısayolları yalnızca oyun alanında geçerli olmalı. Bir metin
@@ -554,94 +613,54 @@ export const useGameLoop = (deps: LoopDeps) => {
     // "win" sesi mükerrer çalıyordu. Artık tüm kararları ve yan etkileri
     // güncelleyicinin DIŞINDA, mevcut `state` üzerinden hesaplıyoruz; güncelleyici
     // yalnızca saf bir dönüşüm yapar. SKOR ise tamamen sunucuya aittir.
-    // İYİMSER TABAN: görev `id`'si değiştiyse (sunucu yeni görev atadı ve
-    // sayaçları sıfırladı) tabanı SIFIRLA. Aksi halde eski görevin sayıları
-    // yeni göreve taşınır ve yoklama sıfırlayınca sayaç zıplar.
+    // ========================================================================
+    // GÖREV İLERLEMESİ — TEK OTORİTE KAYNAĞI (0035).
+    //
+    // KÖK SORUN (önceki sürümler): İstemci HER KAREDE ilerlemeyi
+    // `me.collectedTypes` (yalnızca ~1 sn'lik yoklamayla güncellenir) + bu
+    // karenin coinlerinden YENİDEN İNŞA ediyor ve `state.players[0]
+    // .objectiveProgress`'e yazıyordu. Ardından `mergeProgress`
+    // (`lib/useDuoChaos.ts`) `Math.max(yerel, sunucu)` uyguluyordu. İstemcinin
+    // BAYAT tabandan türeyen yeniden inşası YANLIŞ (fazla yüksek) değer
+    // üretebiliyordu; `Math.max` bu yanlış değeri KALICI olarak kilitliyordu
+    // (asla düşmediği için) → "3 gösterip sonra 1'e düşme" ve "3 topladım 2
+    // gösteriyor" hataları.
+    //
+    // ÇÖZÜM: İstemci artık ilerlemeyi KAREDE ÜRETMEZ. İlerleme YALNIZCA
+    // sunucudan gelir:
+    //   * `duo_collect`/`duo_steal` yanıtındaki `state.objectiveProgress`
+    //     (eylem sonrası ANLIK otorite — aşağıda uygulanır), ve
+    //   * `duo_public_state` yoklaması (yakınsama/yedek).
+    // Böylece istemci sunucuyu ASLA geçemez; `Math.max` kilitlenmesi ortadan
+    // kalkar ve ilerleme deterministik olur.
+    //
+    // Burada yalnızca GÖREV KİMLİĞİNİ izleriz: sunucu yeni görev atadığında
+    // (`objective.id` değiştiğinde) yerel kutlama durumunu temizleriz. İlerleme
+    // DEĞERİNE dokunmayız — o sunucunun tekelindedir.
     const objectiveId = me.objective?.id ?? null
     const objectiveIdChanged = objectiveIdRef.current !== objectiveId
     if (objectiveIdChanged) {
       objectiveIdRef.current = objectiveId
     }
-    // ANINDA REROLL (0033) İSTEMCİ UYUMU:
-    // Sunucu görev tamamlandığı ANDA reroll YAPAR ve yeni görev atar. Bu yüzden
-    // görev değişimi YALNIZCA `objective.id` değişimiyle algılanır. Eskiden
-    // burada `objectiveCompleted = Boolean(me.missionDone)` ile taban 0'a
-    // çekiliyordu; ancak sunucu ANINDA reroll yaptığı için bu, sunucu
-    // snapshot'ı ile yarışıyor ve bar "3 → 1" gibi zıplıyordu. Artık taban
-    // yalnızca gerçek görev id değişiminde sıfırlanır.
-    const objectiveChanged = objectiveIdChanged
-    // Görev değiştiyse taban 0; aksi halde sunucu değeri.
-    const baseProgress = objectiveChanged ? 0 : (me.objectiveProgress ?? 0)
 
     const objective = me.objective
     const collectedCount = collectedIds.length
 
-    // İYİMSER İLERLEME (ÇİFT SAYMA YOK — 0033):
-    // Bu karede toplanan coinlerin TÜRLERİNİ sayarız. Coinler respawn sonrası
-    // AYNI id ile yeniden doğduğundan, id bazlı kalıcı bir "sayıldı" Set'i
-    // KULLANMAYIZ (aksi halde respawn edilen coin ikinci kez sayılmaz ve istemci
-    // sunucudan geri kalır → "3 topladım 2 gösteriyor"). Sunucu her toplamada
-    // `collected_types`'ı artırdığı için istemci de her toplamayı saymalıdır.
-    // Çift sayma riski yoktur: `collectedSet` yalnızca BU karenin toplanan
-    // coinlerini içerir ve her coin bir kez toplanır (sunucu `already_collected`
-    // ile ikinci toplamayı reddeder).
+    // Bu karenin toplanan coinlerinin TÜRLERİ — yalnızca YEREL görsel geri
+    // bildirim (uçan rozet, combo) ve `collectedTypes` iyimser toplamı için.
+    // İLERLEME HESABINDA KULLANILMAZ (o sunucuya aittir).
     const freshCoins = state.coins.filter((coin) => collectedSet.has(coin.id))
     const freshTypes = freshCoins.reduce<Partial<Record<Coin['type'], number>>>(
       (counts, coin) => ({ ...counts, [coin.type]: (counts[coin.type] ?? 0) + 1 }),
       {},
     )
 
-    let progressDelta = 0
-    if (objective?.requirements) {
-      // Tür bazlı: sunucu `duo_mission_progress` ile AYNI mantık. Taban, sunucu
-      // `collectedTypes`'ıdır; üzerine YALNIZCA yeni coinlerin katkısını ekleriz.
-      progressDelta = Object.entries(objective.requirements).reduce((sum, [type, required]) => {
-        const before = Math.min(me.collectedTypes?.[type as Coin['type']] ?? 0, required || 0)
-        const after = Math.min(
-          (me.collectedTypes?.[type as Coin['type']] ?? 0) + (freshTypes[type as Coin['type']] ?? 0),
-          required || 0,
-        )
-        return sum + Math.max(0, after - before)
-      }, 0)
-    } else if (objective?.coinType && objective.coinType !== 'mixed') {
-      progressDelta = freshTypes[objective.coinType] ?? 0
-    } else if (objective?.kind === 'steal') {
-      progressDelta = stealing ? 1 : 0
-    } else {
-      progressDelta = freshCoins.length
-    }
-    // MONOTONİK: görev değişmediği sürece ilerleme ASLA geri düşmez. Sunucu
-    // snapshot'ı gecikmeli geldiğinde `baseProgress` eski (düşük) kalabilir;
-    // yerel değerin altına inmeyiz. Görev değiştiyse taban zaten 0'dır ve
-    // `objectiveChanged` dalı yeni değeri uygular.
-    const localProgress = me.objectiveProgress ?? 0
-    const projectedProgress = objectiveChanged
-      ? baseProgress + progressDelta
-      : Math.max(localProgress, baseProgress + progressDelta)
-
-    // Görev tamamlanma kararı: sunucu ilerlemesi + iyimser katkı hedefi
-    // karşılıyorsa tamamlanmış sayılır. `!me.missionDone` guard'ı şart: görev
-    // tamamlandıktan sonra ilerleme yeni görev verilene kadar hedefi
+    // Görev tamamlanma kararı: YALNIZCA sunucunun onayladığı ilerleme hedefi
+    // karşılıyorsa tamamlanmış sayılır. İstemci iyimser ilerleme ÜRETMEDİĞİ
+    // için bu karar da sunucu değerine dayanır. `!me.missionDone` guard'ı şart:
+    // görev tamamlandıktan sonra ilerleme yeni görev verilene kadar hedefi
     // karşılamaya devam eder; guard olmadan her karede tekrar tetiklenir.
-    //
-    // `collectedTypes`: sunucu toplamı + bu karede sayılan yeni coinler. Böylece
-    // `objectiveSatisfied`'ın `resourcesMet` kontrolü (tür bazlı hedef) doğru
-    // çalışır; yalnızca bu karenin coinleriyle sınırlı kalmaz.
-    const accumulatedTypes: Partial<Record<Coin['type'], number>> = {
-      ...(me.collectedTypes ?? {}),
-    }
-    for (const [type, count] of Object.entries(freshTypes)) {
-      accumulatedTypes[type as Coin['type']] =
-        (accumulatedTypes[type as Coin['type']] ?? 0) + (count ?? 0)
-    }
-    const projected: Player = {
-      ...me,
-      coins: me.coins + collectedCount,
-      stolen: me.stolen + (stealing ? 1 : 0),
-      collectedTypes: accumulatedTypes,
-      objectiveProgress: projectedProgress,
-    }
-    const objectiveDone = !me.missionDone && objectiveSatisfied(projected)
+    const objectiveDone = !me.missionDone && objectiveSatisfied(me)
 
     // SKOR ARTIK SUNUCUDA HESAPLANIR. İstemci yalnızca toplama/çalma olayını
     // sunucuya bildirir (`duo_collect` / `duo_steal`); puanı `duo_tick` +
@@ -698,8 +717,10 @@ export const useGameLoop = (deps: LoopDeps) => {
           // karede `livePos` ref'i üzerinden doğrudan DOM'a uygulanır; state'e
           // yazmak 60Hz render tetikler ve hareketi bozar. State'teki x/y
           // yalnızca tur başında (spawn) doğru olması yeterlidir.
-          // Yerel görsel geri bildirim: toplanan coin sayısı ve görev ilerlemesi
-          // anında güncellenir. SKOR'a DOKUNMAYIZ — skor sunucudan gelir.
+          // Yerel görsel geri bildirim: toplanan coin sayısı ANINDA güncellenir
+          // (uçan rozet, combo, HUD sayacı). SKOR'a ve GÖREV İLERLEMESİNE
+          // DOKUNMAYIZ — ikisi de sunucunun tekelindedir (0035). İlerleme,
+          // `duo_collect`/`duo_steal` yanıtındaki otorite durumdan uygulanır.
           if (collectedIds.length > 0) {
             changed = true
             next = {
@@ -708,14 +729,18 @@ export const useGameLoop = (deps: LoopDeps) => {
               // TUR TOPLAMI: sonuç ekranı `roundCoins` okur; sunucu yoklaması
               // gelene kadar iyimser artırırız (sunucu değeri yine otoritedir).
               roundCoins: (next.roundCoins ?? 0) + collectedIds.length,
-              // TOPLAM TÜRLER: sunucu toplamı + bu karede sayılan yeni coinler.
-              // Yalnızca bu karenin coinlerini yazmak, görev ilerlemesini
-              // "2/3"te takılı bırakıyordu; artık tam toplam yazılır.
-              collectedTypes: accumulatedTypes,
-              // İYİMSER İLERLEME: sunucu yoklaması gelene kadar ilerlemeyi
-              // doğrudan artırırız. Sunucu değeri (monotonik birleştirme ile)
-              // geldiğinde otorite olur; asla geri düşmez.
-              objectiveProgress: projectedProgress,
+              // TOPLAM TÜRLER: yalnızca YEREL görsel türetim için (rakip HUD'u
+              // `collectedTypes`'tan ilerleme gösterir). Sunucu yanıtı/yoklaması
+              // geldiğinde otorite değerle ezilir.
+              collectedTypes: {
+                ...(next.collectedTypes ?? {}),
+                ...Object.fromEntries(
+                  Object.entries(freshTypes).map(([type, count]) => [
+                    type,
+                    (next.collectedTypes?.[type as Coin['type']] ?? 0) + (count ?? 0),
+                  ]),
+                ),
+              },
             }
           }
           if (stealing) {
@@ -725,8 +750,6 @@ export const useGameLoop = (deps: LoopDeps) => {
               stolen: next.stolen + 1,
               // TUR TOPLAMI: sonuç ekranı `roundStolen` okur; iyimser artır.
               roundStolen: (next.roundStolen ?? 0) + 1,
-              // Çalma görevi ilerlemesi (steal kind) iyimser artırılır.
-              objectiveProgress: projectedProgress,
             }
           }
           // Görev tamamlandıysa: yalnızca YEREL kutlama durumunu işaretle.
@@ -812,9 +835,22 @@ export const useGameLoop = (deps: LoopDeps) => {
       // (`collectedIds[0]`) gönderiliyordu; aynı karede birden fazla coin
       // toplandığında sunucu yalnızca birini işliyor ve skor/görev ilerlemesi
       // istemci ile sunucu arasında ayrışıyordu.
-      for (const coinId of collectedIds) {
-        void call('duo_collect', { p_token: token, p_coin_id: coinId }).catch(() => undefined)
-      }
+      //
+      // OTORİTE DURUM (0035): `duo_collect` artık eylem sonrası TAM durumu
+      // (`state`) döndürür. Yanıtı SIRAYLA uygularız; böylece aynı karede
+      // birden fazla coin toplandığında bile ilerleme/sayaçlar sunucunun
+      // onayladığı SON değere yakınsar ve görev tamamlanması + yeni görev
+      // ataması ANINDA (yoklamayı beklemeden) yansır.
+      void (async () => {
+        for (const coinId of collectedIds) {
+          try {
+            const res = await call('duo_collect', { p_token: token, p_coin_id: coinId })
+            applyServerState(res)
+          } catch {
+            // Sunucu reddederse (too_far / already_collected) sessizce geç.
+          }
+        }
+      })()
     }
     if (stealing) {
       broadcast('steal', { by: playerId })
@@ -830,7 +866,8 @@ export const useGameLoop = (deps: LoopDeps) => {
           // Konum tazeleme başarısız olsa bile çalmayı yine de deneriz.
         }
         try {
-          await call('duo_steal', { p_token: token })
+          const res = await call('duo_steal', { p_token: token })
+          applyServerState(res)
         } catch {
           // Sunucu reddederse (too_far vb.) sessizce yut; yerel iyimser
           // geri bildirim zaten verildi, sunucu otoritesi sonraki yoklamada
@@ -842,7 +879,7 @@ export const useGameLoop = (deps: LoopDeps) => {
     // üretir ne de rakibe yayınlar; her iki taraf da `duo_public_state`
     // yoklamasından aynı mutlak skoru okur. Böylece çift sayma ve "bende
     // farklı, onda farklı" uyumsuzluğu tamamen ortadan kalkar.
-  }, [])
+  }, [applyServerState])
 
   // Ana döngü yalnızca aktif fazlarda (countdown/battle) çalışır.
   // home/lobby/results'ta RAF tamamen durur — boşuna 60fps render yok.
