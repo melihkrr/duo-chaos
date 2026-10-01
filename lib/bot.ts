@@ -1,4 +1,12 @@
-import { ARENA, COLLECT_RADIUS, MOVE_SPEED, STEAL_RADIUS, getCoinValue } from './config'
+import {
+  ARENA,
+  COLLECT_RADIUS,
+  MOVE_SPEED,
+  OBSTACLES,
+  PLAYER_HIT_R,
+  STEAL_RADIUS,
+  getCoinValue,
+} from './config'
 import { objectiveOf, progressOf, targetOf } from './display'
 import type { Coin, CoinType, Objective, Player } from './types'
 
@@ -66,6 +74,29 @@ const STEAL_APPROACH_RADIUS = 26
 const STEAL_STANDOFF_RADIUS = STEAL_RADIUS + 4
 /** Botun çalma denemesi için minimum bekleme (ms) — insanla aynı cooldown. */
 const BOT_STEAL_COOLDOWN_MS = 700
+const NAVIGATION_CLEARANCE = 0.75
+
+type NavigationPoint = { x: number; y: number }
+type NavigationObstacle = {
+  cx: number
+  cy: number
+  hw: number
+  hh: number
+  cos: number
+  sin: number
+}
+
+const NAVIGATION_OBSTACLES: NavigationObstacle[] = OBSTACLES.map((obstacle) => {
+  const angle = (obstacle.angleDeg * Math.PI) / 180
+  return {
+    cx: obstacle.cx,
+    cy: obstacle.cy,
+    hw: obstacle.w / 2 + PLAYER_HIT_R + NAVIGATION_CLEARANCE,
+    hh: obstacle.h / 2 + PLAYER_HIT_R + NAVIGATION_CLEARANCE,
+    cos: Math.cos(angle),
+    sin: Math.sin(angle),
+  }
+})
 
 /**
  * Botun kalıcı (kareler arası) hafızası. React dışında bir ref'te tutulur.
@@ -138,6 +169,142 @@ export const coinPriority = (coin: Coin, objective: Objective | null, collectedT
 /** İki nokta arası mesafe. */
 const dist = (ax: number, ay: number, bx: number, by: number) => Math.hypot(ax - bx, ay - by)
 
+const segmentEntersRectangle = (
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number,
+  halfWidth: number,
+  halfHeight: number,
+) => {
+  const dx = toX - fromX
+  const dy = toY - fromY
+  let enter = -Infinity
+  let exit = Infinity
+
+  for (const [origin, delta, extent] of [
+    [fromX, dx, halfWidth],
+    [fromY, dy, halfHeight],
+  ]) {
+    if (Math.abs(delta) < 1e-9) {
+      if (origin <= -extent || origin >= extent) return false
+      continue
+    }
+    const first = (-extent - origin) / delta
+    const second = (extent - origin) / delta
+    enter = Math.max(enter, Math.min(first, second))
+    exit = Math.min(exit, Math.max(first, second))
+  }
+
+  return Math.max(enter, 0) < Math.min(exit, 1)
+}
+
+const segmentIsClear = (from: NavigationPoint, to: NavigationPoint) =>
+  NAVIGATION_OBSTACLES.every((obstacle) => {
+    const localFromX =
+      (from.x - obstacle.cx) * obstacle.cos + (from.y - obstacle.cy) * obstacle.sin
+    const localFromY =
+      -(from.x - obstacle.cx) * obstacle.sin + (from.y - obstacle.cy) * obstacle.cos
+    const localToX =
+      (to.x - obstacle.cx) * obstacle.cos + (to.y - obstacle.cy) * obstacle.sin
+    const localToY =
+      -(to.x - obstacle.cx) * obstacle.sin + (to.y - obstacle.cy) * obstacle.cos
+    return !segmentEntersRectangle(
+      localFromX,
+      localFromY,
+      localToX,
+      localToY,
+      obstacle.hw,
+      obstacle.hh,
+    )
+  })
+
+const obstacleCorners = (obstacle: NavigationObstacle): NavigationPoint[] => {
+  const corners: NavigationPoint[] = []
+  for (const x of [-obstacle.hw, obstacle.hw]) {
+    for (const y of [-obstacle.hh, obstacle.hh]) {
+      corners.push({
+        x: obstacle.cx + x * obstacle.cos - y * obstacle.sin,
+        y: obstacle.cy + x * obstacle.sin + y * obstacle.cos,
+      })
+    }
+  }
+  return corners
+}
+
+/**
+ * Returns the next visible waypoint on the shortest collision-free route.
+ * The expanded rectangles match the player's collision radius, with a small
+ * margin so collision resolution does not stop the bot at a corner.
+ */
+const nextNavigationPoint = (
+  from: NavigationPoint,
+  target: NavigationPoint,
+): NavigationPoint => {
+  if (segmentIsClear(from, target)) return target
+
+  const points = [
+    from,
+    target,
+    ...NAVIGATION_OBSTACLES.flatMap(obstacleCorners).filter(
+      (point) =>
+        point.x >= ARENA.minX &&
+        point.x <= ARENA.maxX &&
+        point.y >= ARENA.minY &&
+        point.y <= ARENA.maxY,
+    ),
+  ]
+  const distances = points.map(() => Infinity)
+  const previous = points.map(() => -1)
+  const visited = points.map(() => false)
+  distances[0] = 0
+
+  for (let iteration = 0; iteration < points.length; iteration += 1) {
+    let current = -1
+    for (let index = 0; index < points.length; index += 1) {
+      if (!visited[index] && (current < 0 || distances[index] < distances[current])) {
+        current = index
+      }
+    }
+    if (current < 0 || !Number.isFinite(distances[current])) break
+    if (current === 1) break
+    visited[current] = true
+
+    for (let next = 1; next < points.length; next += 1) {
+      if (visited[next] || next === current || !segmentIsClear(points[current], points[next])) {
+        continue
+      }
+      const candidate = distances[current] + dist(
+        points[current].x,
+        points[current].y,
+        points[next].x,
+        points[next].y,
+      )
+      if (candidate < distances[next]) {
+        distances[next] = candidate
+        previous[next] = current
+      }
+    }
+  }
+
+  if (previous[1] < 0) return target
+  let waypoint = 1
+  while (previous[waypoint] > 0) waypoint = previous[waypoint]
+  return points[waypoint]
+}
+
+const approachWithNavigation = (
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number,
+  collectIds: number[],
+  steal: boolean,
+): BotDecision => {
+  const waypoint = nextNavigationPoint({ x: fromX, y: fromY }, { x: toX, y: toY })
+  return approach(fromX, fromY, waypoint.x, waypoint.y, collectIds, steal)
+}
+
 /**
  * Botun bir kare için kararını üretir. SAF bir fonksiyondur: yalnızca girdiye
  * ve `memory`'ye bakar; `memory`'yi yerinde günceller (kareler arası durum).
@@ -190,7 +357,7 @@ export const decideBot = (input: BotInput, memory: BotMemory): BotDecision => {
   if (now < memory.mistakeUntil) {
     const wrong = coins.find((c) => c.id === memory.mistakeCoinId && !c.collectedBy)
     if (wrong) {
-      return approach(bx, by, wrong.x, wrong.y, [], false)
+      return approachWithNavigation(bx, by, wrong.x, wrong.y, [], false)
     }
     // Yanlış hedef kaybolduysa hatayı bitir.
     memory.mistakeUntil = 0
@@ -200,7 +367,14 @@ export const decideBot = (input: BotInput, memory: BotMemory): BotDecision => {
   const available = coins.filter((c) => !c.collectedBy)
   if (available.length === 0) {
     // Coin yoksa merkeze doğru süzül (hareket hissi).
-    return approach(bx, by, (ARENA.minX + ARENA.maxX) / 2, (ARENA.minY + ARENA.maxY) / 2, [], false)
+    return approachWithNavigation(
+      bx,
+      by,
+      (ARENA.minX + ARENA.maxX) / 2,
+      (ARENA.minY + ARENA.maxY) / 2,
+      [],
+      false,
+    )
   }
 
   // Hedefi periyodik olarak yeniden seç (her karede değiştirmek titremeye yol açar).
@@ -217,7 +391,7 @@ export const decideBot = (input: BotInput, memory: BotMemory): BotDecision => {
         memory.mistakeUntil = now + MISTAKE_MS
         memory.mistakeCoinId = worst.id
         memory.targetCoinId = worst.id
-        return approach(bx, by, worst.x, worst.y, [], false)
+        return approachWithNavigation(bx, by, worst.x, worst.y, [], false)
       }
     }
     // Doğru hedef: en yüksek öncelikli, en yakın coin (öncelik + mesafe).
@@ -266,12 +440,12 @@ export const decideBot = (input: BotInput, memory: BotMemory): BotDecision => {
   // yürümek yerine normal coin hedefine devam eder (veya durur). Böylece bot
   // rakibin "içine girmez". Çalma bayrağı yine de iletilir.
   if (targetCoin) {
-    return approach(bx, by, targetCoin.x, targetCoin.y, collectIds, wantSteal)
+    return approachWithNavigation(bx, by, targetCoin.x, targetCoin.y, collectIds, wantSteal)
   }
   // Coin hedefi yok ama çalma yaklaşması tercih ediliyorsa rakibe doğru ilerle
   // (standoff mesafesinde durur; üzerine yürümez).
   if (stealApproach && rival) {
-    return approach(bx, by, rival.x, rival.y, collectIds, wantSteal)
+    return approachWithNavigation(bx, by, rival.x, rival.y, collectIds, wantSteal)
   }
   return { dx: 0, dy: 0, collectIds, steal: wantSteal }
 }
