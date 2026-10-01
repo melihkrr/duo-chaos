@@ -6,6 +6,7 @@ import { CosmeticsPicker } from './CosmeticsPicker'
 import { VirtualJoystick } from './VirtualJoystick'
 import { Button } from '../ui/Button'
 import { ARENA, OBSTACLES, trailById } from '../../lib/config'
+import { SCORE_POP_MS } from '../../lib/useGameLoop'
 import { missionLabel, objectiveOf, progressOf, targetOf } from '../../lib/display'
 import type { ChaosApi } from '../../lib/useChaos'
 import type { CosmeticsApi } from '../../lib/useCosmetics'
@@ -41,6 +42,21 @@ type Props = {
    * gösterir. `null` = gösterilecek ödül yok.
    */
   diamondPopRef: React.RefObject<{ x: number; y: number; at: number } | null>
+  /**
+   * COMBO serisi: `{ count, at }`. Yerel oyuncu ardışık topladıkça `count`
+   * artar; `Battle` HUD'da "x3 COMBO" rozetini gösterir. Yalnızca görseldir.
+   */
+  comboRef: React.RefObject<{ count: number; at: number }>
+  /**
+   * Uçan puan rozetleri: her toplamada coinin konumunda beliren "+5/+15/+25"
+   * etiketleri. `Battle` bunları arena'ya basar ve süresi dolunca temizler.
+   */
+  scorePopRef: React.RefObject<Array<{ id: number; x: number; y: number; value: number; at: number }>>
+  /**
+   * Ekran sarsıntısı sinyali: çalma/çarpışma anında `{ at, kind }` yazılır.
+   * `Battle` değer değiştiğinde arena'ya kısa bir shake animasyonu uygular.
+   */
+  shakeRef: React.RefObject<{ at: number; kind: 'steal' | 'bump' } | null>
   /** Rakip oyundan ayrıldı mı? True iken oyun duraklar ve bir uyarı gösterilir. */
   rivalLeft: boolean
   /** "Odadan ayrıl" — oyuncu odayı terk eder. */
@@ -51,6 +67,45 @@ const coinClass = (type: string) => `coin coin-${type}`
 
 /** Elmas "+50" rozetinin ekranda kalma süresi (ms). */
 const DIAMOND_POP_MS = 1_100
+/** COMBO rozetinin, son toplamadan sonra görünür kaldığı süre (ms). */
+const COMBO_WINDOW_MS = 2_200
+/** Ekran sarsıntısı animasyonunun süresi (ms). */
+const SHAKE_MS = 320
+
+/**
+ * HUD skorunu yumuşakça hedefe "sayarak" gösterir. Sunucu skoru sıçradığında
+ * (ör. +50 elmas) sayı aniden değişmek yerine kısa bir animasyonla artar; bu,
+ * kazanılan puanı çok daha tatmin edici kılar. Fark büyükse hız ölçeklenir.
+ */
+function AnimatedScore({ value }: { value: number }) {
+  const [display, setDisplay] = useState(value)
+  const displayRef = useRef(value)
+
+  useEffect(() => {
+    let raf = 0
+    const tick = () => {
+      const current = displayRef.current
+      const diff = value - current
+      if (Math.abs(diff) < 1) {
+        if (current !== value) {
+          displayRef.current = value
+          setDisplay(value)
+        }
+      } else {
+        // Fark büyükse daha hızlı yaklaş (en az 1, en fazla farkın %25'i).
+        const step = Math.max(1, Math.ceil(Math.abs(diff) * 0.25)) * Math.sign(diff)
+        const next = current + step
+        displayRef.current = next
+        setDisplay(next)
+      }
+      raf = window.requestAnimationFrame(tick)
+    }
+    raf = window.requestAnimationFrame(tick)
+    return () => window.cancelAnimationFrame(raf)
+  }, [value])
+
+  return <>{display}</>
+}
 
 export function Battle({
   state,
@@ -63,6 +118,9 @@ export function Battle({
   liveRivalPos,
   celebrateRef,
   diamondPopRef,
+  comboRef,
+  scorePopRef,
+  shakeRef,
   rivalLeft,
   onLeaveRoom,
 }: Props) {
@@ -85,6 +143,15 @@ export function Battle({
   // Elmas (jackpot) "+50" rozeti. `diamondPopRef` yerel oyuncu elması
   // topladığında dolar; değer değiştiğinde rozeti kısa süreliğine gösteririz.
   const [diamondPop, setDiamondPop] = useState<{ x: number; y: number; at: number } | null>(null)
+  // COMBO rozeti: `{ count, at }`. Seri penceresi dolduğunda (comboRef.at
+  // bayatladığında) rozeti gizleriz; aksi halde HUD'da kalıcı görünürdü.
+  const [combo, setCombo] = useState(0)
+  // Uçan puan rozetleri. `scorePopRef` her toplamada büyür; süresi dolanları
+  // temizleriz. Ekranda aynı anda en fazla birkaç rozet tutulur.
+  const [scorePops, setScorePops] = useState<Array<{ id: number; x: number; y: number; value: number; at: number }>>([])
+  // Ekran sarsıntısı: `shakeRef` değiştiğinde kısa süreliğine bir CSS sınıfı
+  // uygularız (arena'ya "vuruş" hissi verir).
+  const [shake, setShake] = useState<{ at: number; kind: 'steal' | 'bump' } | null>(null)
   // Tam ekrana alınacak sarmalayıcı düğüm (`.battle-wrap`).
   const wrapRef = useRef<HTMLElement | null>(null)
   // Yerel avatarın DOM düğümü. Konumu her karede doğrudan buna yazarız.
@@ -179,6 +246,62 @@ export function Battle({
     return () => window.clearTimeout(id)
   }, [diamondPop])
 
+  // COMBO rozetini izle. `comboRef.count` 2+ olduğunda gösteririz; seri
+  // penceresi (COMBO_WINDOW_MS) dolunca gizleriz. `comboRef.at` her toplamada
+  // güncellendiğinden, son toplamadan bu yana pencere geçtiyse rozeti kapatırız.
+  useEffect(() => {
+    let raf = 0
+    const watch = () => {
+      const value = comboRef.current
+      const fresh = Date.now() - value.at <= COMBO_WINDOW_MS
+      setCombo(fresh && value.count >= 2 ? value.count : 0)
+      raf = window.requestAnimationFrame(watch)
+    }
+    raf = window.requestAnimationFrame(watch)
+    return () => window.cancelAnimationFrame(raf)
+  }, [comboRef])
+
+  // Uçan puan rozetlerini izle. `scorePopRef` yeni rozetlerle büyür; süresi
+  // dolanları (SCORE_POP_MS) temizleriz. Böylece ekran kalabalıklaşmaz.
+  useEffect(() => {
+    let raf = 0
+    const watch = () => {
+      const list = scorePopRef.current
+      const cutoff = Date.now() - SCORE_POP_MS
+      const alive = list.filter((pop) => pop.at >= cutoff)
+      setScorePops((prev) => {
+        // Yalnızca gerçekten değiştiyse yeni referans döndür (gereksiz render yok).
+        if (prev.length === alive.length && prev.every((pop, index) => pop.id === alive[index]?.id)) {
+          return prev
+        }
+        return alive
+      })
+      raf = window.requestAnimationFrame(watch)
+    }
+    raf = window.requestAnimationFrame(watch)
+    return () => window.cancelAnimationFrame(raf)
+  }, [scorePopRef])
+
+  // Ekran sarsıntısını izle. `shakeRef` yeni bir zaman damgası taşıdığında
+  // kısa süreliğine shake durumunu açarız; animasyon bitince temizleriz.
+  useEffect(() => {
+    let raf = 0
+    let last = 0
+    const watch = () => {
+      const value = shakeRef.current
+      if (value && value.at !== last) {
+        last = value.at
+        setShake(value)
+        window.setTimeout(() => {
+          setShake((current) => (current && current.at === value.at ? null : current))
+        }, SHAKE_MS)
+      }
+      raf = window.requestAnimationFrame(watch)
+    }
+    raf = window.requestAnimationFrame(watch)
+    return () => window.cancelAnimationFrame(raf)
+  }, [shakeRef])
+
   // Yerel oyuncunun konumunu doğrudan DOM'a uygula (React render'ı olmadan).
   // Bu, hareketin 60Hz'de akıcı kalmasını sağlar; `state` yalnızca skor/coin
   // gibi anlamlı değişimlerde güncellenir.
@@ -253,7 +376,7 @@ export function Battle({
             <strong>{me?.name ?? 'You'}</strong>
             {/* Skor = kümülatif puan (coin + çalma + görev bonusları). */}
             <span className="hud-score" title="Total score">
-              {me?.score ?? 0}
+              <AnimatedScore value={me?.score ?? 0} />
             </span>
           </div>
           <small>
@@ -285,7 +408,7 @@ export function Battle({
             <strong>{rival?.name ?? 'Rival'}</strong>
             {/* Skor = kümülatif puan. */}
             <span className="hud-score" title="Total score">
-              {rival?.score ?? 0}
+              <AnimatedScore value={rival?.score ?? 0} />
             </span>
             <span className="hud-badge rival" aria-hidden>
               🐻
@@ -306,7 +429,22 @@ export function Battle({
 
       <ChaosBanner chaos={chaos} />
 
-      <div className="arena">
+      <div
+        className={[
+          'arena',
+          shake ? `shake-${shake.kind}` : '',
+          chaos.event ? `arena-chaos-${chaos.event.id}` : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+      >
+        {combo >= 2 && (
+          <div className="combo-badge" role="status" aria-live="polite">
+            <span className="combo-x">x{combo}</span>
+            <span className="combo-label">COMBO</span>
+          </div>
+        )}
+
         {showCountdown && (
           <div className="countdown-overlay" role="status" aria-live="polite">
             <span key={countdownStep} className="countdown-num">
@@ -384,6 +522,19 @@ export function Battle({
             +50
           </span>
         )}
+
+        {/* Uçan puan rozetleri: her toplanan coin için "+5/+15/+25" değeri
+            coinin konumunda kısa süreliğine yükselir. */}
+        {scorePops.map((pop) => (
+          <span
+            key={pop.id}
+            className="score-pop"
+            style={{ left: `${pop.x}%`, top: `${pop.y}%` }}
+            aria-hidden
+          >
+            +{pop.value}
+          </span>
+        ))}
 
         {state.players.map((player, index) => {
           const isMe = index === 0

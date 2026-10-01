@@ -84,6 +84,25 @@ export function Results({
                   <small>Score</small>
                   {score}
                 </span>
+                {/* Tur içi performans kırılımı: toplanan coin, çalınan coin ve
+                    tamamlanan görev. Maç sonunda tur istatistikleri sıfırlandığı
+                    için yalnızca tur sonuçlarında gösterilir. */}
+                {!isMatchOver && (
+                  <span className="score-stats" aria-label="Round stats">
+                    <span className="stat-chip" title="Coins collected">
+                      <span aria-hidden>🪙</span>
+                      {player.coins ?? 0}
+                    </span>
+                    <span className="stat-chip" title="Coins stolen">
+                      <span aria-hidden>🦹</span>
+                      {player.stolen ?? 0}
+                    </span>
+                    <span className="stat-chip" title="Missions completed">
+                      <span aria-hidden>🎯</span>
+                      {player.objectivesDone ?? 0}
+                    </span>
+                  </span>
+                )}
               </div>
             </div>
           )

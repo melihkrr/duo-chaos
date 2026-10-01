@@ -17,6 +17,9 @@ export type SoundName =
   | 'scout'
   | 'chaos'
   | 'jackpot'
+  | 'combo'
+  | 'streak'
+  | 'roundwin'
   | 'win'
   | 'lose'
   | 'emote'
@@ -63,6 +66,21 @@ const RECIPES: Record<SoundName, ToneSpec[]> = {
     { freq: 1319, dur: 0.12, type: 'triangle', gain: 0.2, delay: 0.18 },
     { freq: 1568, dur: 0.28, type: 'triangle', gain: 0.22, delay: 0.3 },
     { freq: 2093, dur: 0.3, type: 'sine', gain: 0.14, delay: 0.42 },
+  ],
+  // Combo: kısa, yükselen tek nota — ardışık toplamada perde yükselir
+  // (çağıran taraf `playSound('combo')`'yu hızlandırılmış aralıklarla çalar).
+  combo: [{ freq: 1046, to: 1568, dur: 0.08, type: 'triangle', gain: 0.16 }],
+  // Streak: combo serisi belirgin bir eşiğe ulaştığında çalan parlak arpej.
+  streak: [
+    { freq: 1318, dur: 0.08, type: 'triangle', gain: 0.18 },
+    { freq: 1760, dur: 0.08, type: 'triangle', gain: 0.18, delay: 0.07 },
+    { freq: 2093, dur: 0.16, type: 'sine', gain: 0.16, delay: 0.14 },
+  ],
+  // Tur sonu kazanma: maç sonu 'win'den daha kısa, tur bazlı bir fanfar.
+  roundwin: [
+    { freq: 659, dur: 0.12, type: 'triangle', gain: 0.2 },
+    { freq: 880, dur: 0.12, type: 'triangle', gain: 0.2, delay: 0.12 },
+    { freq: 1174, dur: 0.24, type: 'triangle', gain: 0.18, delay: 0.24 },
   ],
   win: [
     { freq: 523, dur: 0.14, type: 'triangle', gain: 0.2 },

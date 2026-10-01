@@ -18,6 +18,7 @@ import {
   REMOTE_SMOOTHING_K,
   STEAL_COOLDOWN_MS,
   STEAL_RADIUS,
+  getCoinValue,
 } from './config'
 import { objectiveSatisfied } from './display'
 import { resolveMove } from './movement'
@@ -35,6 +36,22 @@ const REMOTE_SETTLE = 0.25
  * kadar görüneceğini belirler; oyun akışını bloklamaz.
  */
 const OBJECTIVE_CELEBRATE_MS = 1_400
+
+/**
+ * COMBO (ardışık toplama serisi) penceresi (ms).
+ *
+ * İki toplama arası bu süreden kısaysa seri artar; aksi halde sıfırlanır.
+ * Amaç: oyuncuyu hızlı ve sürekli toplamaya teşvik eden, tatmin edici bir
+ * "ritim" hissi vermek. Seri yalnızca GÖRSEL/SES geri bildirimidir; puan
+ * hesabı tamamen sunucuya aittir (combo puanı ÜRETMEZ).
+ */
+const COMBO_WINDOW_MS = 2_200
+/** Bu seri uzunluğuna ulaşınca "streak" fanfarı çalar (görsel vurgu). */
+const COMBO_STREAK_AT = 5
+/** Bir toplama olayında gösterilecek en fazla uçan puan rozeti. */
+const SCORE_POP_MAX = 4
+/** Uçan puan rozetinin ekranda kalma süresi (ms). */
+export const SCORE_POP_MS = 900
 
 type LoopDeps = {
   state: State
@@ -126,6 +143,16 @@ export const useGameLoop = (deps: LoopDeps) => {
   // ve zamanını buraya yazarız. `Battle` bu değeri izleyerek elmasın üstünde
   // uçan "+50" rozetini gösterir. `null` = gösterilecek bir ödül yok.
   const diamondPopRef = useRef<{ x: number; y: number; at: number } | null>(null)
+  // COMBO (ardışık toplama serisi): son toplama anı ve güncel seri uzunluğu.
+  // `Battle` bu değeri izleyerek HUD'da "x3 COMBO" rozetini gösterir.
+  const comboRef = useRef<{ count: number; at: number }>({ count: 0, at: 0 })
+  // UÇAN PUAN ROZETLERİ: her toplamada coinin konumunda "+5/+15/+25/+50"
+  // rozetleri belirir. `Battle` bu diziyi izleyip ekrana basar. Dizi kısa
+  // tutulur (SCORE_POP_MAX) ki ekran kalabalıklaşmasın.
+  const scorePopRef = useRef<Array<{ id: number; x: number; y: number; value: number; at: number }>>([])
+  // EKRAN SARSINTISI (juice): çalma/çarpışma anında artan bir zaman damgası.
+  // `Battle` değer değiştiğinde arena'ya kısa bir shake animasyonu uygular.
+  const shakeRef = useRef<{ at: number; kind: 'steal' | 'bump' } | null>(null)
   // Sanal joystick vektörü. `VirtualJoystick` `setJoystick` ile buraya yazar;
   // böylece her pointer hareketinde React render tetiklenmez (yalnızca RAF okur).
   const joystick = useRef<JoystickVector>({ x: 0, y: 0 })
@@ -262,6 +289,9 @@ export const useGameLoop = (deps: LoopDeps) => {
         remoteTarget.current = null
         remoteSample.current = null
         remoteVel.current = { x: 0, y: 0 }
+        // Yeni turda combo serisini ve uçan puan rozetlerini sıfırla.
+        comboRef.current = { count: 0, at: 0 }
+        scorePopRef.current = []
       }
       // Tur geri geldiyse (bayat snapshot düzeltmesi): konumu KORU.
     }
@@ -439,12 +469,37 @@ export const useGameLoop = (deps: LoopDeps) => {
         // çalarız. Böylece oyuncu büyük ödülü aldığını net hisseder.
         const diamondCoin = nearby.find((coin) => coin.type === 'diamond')
         collectedDiamond = Boolean(diamondCoin)
-        playSound(collectedDiamond ? 'jackpot' : 'collect')
+        // COMBO: iki toplama arası COMBO_WINDOW_MS'den kısaysa seri artar.
+        // Seri yalnızca geri bildirimdir; puanı sunucu verir.
+        const prevCombo = comboRef.current
+        const comboCount = now - prevCombo.at <= COMBO_WINDOW_MS ? prevCombo.count + 1 : 1
+        comboRef.current = { count: comboCount, at: now }
+        // SES: elmas > combo/streak > normal toplama önceliğiyle çal.
+        if (collectedDiamond) {
+          playSound('jackpot')
+        } else if (comboCount >= COMBO_STREAK_AT) {
+          playSound('streak')
+        } else if (comboCount >= 2) {
+          playSound('combo')
+        } else {
+          playSound('collect')
+        }
         // "+50" rozeti için elmasın konumunu ve anını kaydet. `Battle` bu
         // değeri izleyerek elmasın üstünde uçan rozeti gösterir.
         if (diamondCoin) {
           diamondPopRef.current = { x: diamondCoin.x, y: diamondCoin.y, at: now }
         }
+        // UÇAN PUAN ROZETLERİ: her toplanan coin için değerini hesapla ve
+        // coinin konumunda kısa süreliğine göster. Ekran kalabalıklaşmasın diye
+        // en fazla SCORE_POP_MAX rozet tutarız (en yeniler öne gelir).
+        const pops = nearby.slice(0, SCORE_POP_MAX).map((coin, index) => ({
+          id: now + index,
+          x: coin.x,
+          y: coin.y,
+          value: getCoinValue(coin.type, state.chaosEvent?.id, me.objective),
+          at: now,
+        }))
+        scorePopRef.current = [...scorePopRef.current, ...pops].slice(-SCORE_POP_MAX)
       }
     }
     const collectedSet = new Set(collectedIds)
@@ -459,6 +514,9 @@ export const useGameLoop = (deps: LoopDeps) => {
       lastSteal.current = now
       stealing = true
       playSound('steal')
+      // EKRAN SARSINTISI: çalma anında arena'ya kısa bir "vuruş" sarsıntısı
+      // uygularız. `Battle` bu zaman damgasını izleyip CSS sınıfını tetikler.
+      shakeRef.current = { at: now, kind: 'steal' }
     }
 
     // --- Tek `setState`: hareket + rakip + toplama + çalma + yeniden doğma. ---
@@ -690,7 +748,17 @@ export const useGameLoop = (deps: LoopDeps) => {
     }
   }, [deps.state.phase])
 
-  return { keys, setJoystick, livePos, liveRivalPos, celebrateRef, diamondPopRef }
+  return {
+    keys,
+    setJoystick,
+    livePos,
+    liveRivalPos,
+    celebrateRef,
+    diamondPopRef,
+    comboRef,
+    scorePopRef,
+    shakeRef,
+  }
 }
 
 export { COUNTDOWN_MS, PHASE_TICK_MS }

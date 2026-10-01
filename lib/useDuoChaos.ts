@@ -663,6 +663,12 @@ export const useDuoChaos = () => {
   // Elmas (jackpot) toplama anı/konumu. `Battle` bunu izleyip elmasın üstünde
   // uçan "+50" rozetini gösterir.
   const diamondPopRef = loop.diamondPopRef
+  // COMBO serisi (ardışık toplama). `Battle` HUD'da "x3 COMBO" rozetini gösterir.
+  const comboRef = loop.comboRef
+  // Uçan puan rozetleri (+5/+15/+25/+50). `Battle` bunları arena'ya basar.
+  const scorePopRef = loop.scorePopRef
+  // Ekran sarsıntısı (çalma/çarpışma). `Battle` arena'ya shake uygular.
+  const shakeRef = loop.shakeRef
 
   // Realtime olaylarını bağla.
   useEffect(() => {
@@ -2075,6 +2081,9 @@ export const useDuoChaos = () => {
     liveRivalPos,
     celebrateRef,
     diamondPopRef,
+    comboRef,
+    scorePopRef,
+    shakeRef,
     createRoom,
     joinRoom,
     restore,

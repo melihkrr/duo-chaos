@@ -88,6 +88,9 @@ export default function Page() {
           liveRivalPos={game.liveRivalPos}
           celebrateRef={game.celebrateRef}
           diamondPopRef={game.diamondPopRef}
+          comboRef={game.comboRef}
+          scorePopRef={game.scorePopRef}
+          shakeRef={game.shakeRef}
           rivalLeft={game.rivalLeft}
           onLeaveRoom={() => setConfirmLeave(true)}
         />

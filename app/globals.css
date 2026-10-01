@@ -1225,6 +1225,105 @@ h3 {
   }
 }
 
+/* --- Uçan puan rozetleri (+5/+15/+25): coinin konumunda yükselip kaybolur --- */
+.score-pop {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  font-weight: 800;
+  font-size: 15px;
+  color: var(--ink);
+  text-shadow: 0 0 4px #fff, 0 1px 0 #fff;
+  pointer-events: none;
+  z-index: 4;
+  animation: score-rise 0.9s var(--ease-soft) forwards;
+}
+
+@keyframes score-rise {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.7);
+  }
+  30% {
+    opacity: 1;
+    transform: translate(-50%, -95%) scale(1.1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -170%) scale(1);
+  }
+}
+
+/* --- COMBO rozeti: HUD'un üstünde, ortada beliren seri göstergesi --- */
+.combo-badge {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 12px;
+  border: 3px solid var(--ink);
+  border-radius: 999px;
+  background: linear-gradient(150deg, #ffe27a, #ffb347);
+  box-shadow: 0 4px 0 rgba(43, 36, 64, 0.22);
+  pointer-events: none;
+  z-index: 12;
+  animation: combo-pop 0.28s var(--ease-soft);
+}
+
+.combo-x {
+  font-weight: 900;
+  font-size: 18px;
+  color: var(--ink);
+}
+
+.combo-label {
+  font-weight: 800;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: #7a4a00;
+}
+
+@keyframes combo-pop {
+  0% {
+    transform: translateX(-50%) scale(0.6);
+    opacity: 0;
+  }
+  60% {
+    transform: translateX(-50%) scale(1.12);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(-50%) scale(1);
+    opacity: 1;
+  }
+}
+
+/* --- Ekran sarsıntısı (juice): çalma/çarpışma anında arena titrer --- */
+.arena.shake-steal {
+  animation: shake-hard 0.32s var(--ease-soft);
+}
+
+.arena.shake-bump {
+  animation: shake-soft 0.32s var(--ease-soft);
+}
+
+@keyframes shake-hard {
+  0%, 100% { transform: translate(0, 0); }
+  20% { transform: translate(-5px, 3px); }
+  40% { transform: translate(5px, -3px); }
+  60% { transform: translate(-4px, -2px); }
+  80% { transform: translate(4px, 2px); }
+}
+
+@keyframes shake-soft {
+  0%, 100% { transform: translate(0, 0); }
+  25% { transform: translate(-3px, 2px); }
+  50% { transform: translate(3px, -2px); }
+  75% { transform: translate(-2px, 1px); }
+}
+
 .avatar {
   position: absolute;
   width: 36px;
@@ -1590,7 +1689,23 @@ h3 {
   border-radius: var(--r-lg);
   background: #fff;
   box-shadow: 0 5px 0 rgba(43, 36, 64, 0.16);
-  animation: rise 0.35s var(--ease-soft) both;
+  /* Chaos olayı başladığında dikkat çeken, hafif "sarsıntılı" giriş. */
+  animation: chaos-in 0.5s var(--ease-soft) both;
+}
+
+@keyframes chaos-in {
+  0% {
+    opacity: 0;
+    transform: translateY(-14px) scale(0.94) rotate(-1.5deg);
+  }
+  55% {
+    opacity: 1;
+    transform: translateY(2px) scale(1.02) rotate(0.6deg);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1) rotate(0);
+  }
 }
 
 .chaos-banner strong {
@@ -1614,6 +1729,16 @@ h3 {
   font-size: 13px;
   font-weight: 900;
   font-variant-numeric: tabular-nums;
+  animation: chaos-timer-pulse 1s var(--ease-soft) infinite alternate;
+}
+
+@keyframes chaos-timer-pulse {
+  from {
+    opacity: 0.65;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .chaos-gold-rush {
@@ -1640,6 +1765,51 @@ h3 {
 
 .chaos-jackpot {
   background: var(--mint-soft);
+}
+
+/* Chaos olayı sürerken arenaya olayın "ruhunu" yansıtan hafif renk tonu.
+   Overlay pointer-events:none olduğu için oyunu etkilemez. */
+.arena-chaos-gold-rush::after,
+.arena-chaos-blackout::after,
+.arena-chaos-magnet::after,
+.arena-chaos-swap::after,
+.arena-chaos-jackpot::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  z-index: 3;
+  animation: chaos-tint-in 0.6s var(--ease-soft) both;
+}
+
+.arena-chaos-gold-rush::after {
+  background: radial-gradient(circle at 50% 40%, rgba(255, 214, 84, 0.28), transparent 68%);
+}
+
+.arena-chaos-blackout::after {
+  background: radial-gradient(circle at 50% 45%, transparent 32%, rgba(20, 16, 34, 0.62) 100%);
+}
+
+.arena-chaos-magnet::after {
+  background: radial-gradient(circle at 50% 50%, rgba(150, 108, 255, 0.26), transparent 70%);
+}
+
+.arena-chaos-swap::after {
+  background: radial-gradient(circle at 50% 50%, rgba(255, 120, 190, 0.24), transparent 70%);
+}
+
+.arena-chaos-jackpot::after {
+  background: radial-gradient(circle at 50% 45%, rgba(94, 234, 190, 0.28), transparent 68%);
+}
+
+@keyframes chaos-tint-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 /* ============================================================
@@ -1751,6 +1921,32 @@ h3 {
   font-size: 34px;
   line-height: 1;
   color: var(--ink);
+}
+
+/* Tur sonu performans kırılımı: coin / çalma / görev çipleri. */
+.score-stats {
+  display: flex;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px !important;
+  font-weight: 800;
+  color: var(--muted);
+}
+
+.stat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 2px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  font-size: 12px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  animation: pop-in 0.3s var(--ease-bounce) both;
 }
 
 .results-actions {
