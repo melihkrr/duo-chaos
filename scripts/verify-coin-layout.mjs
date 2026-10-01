@@ -54,7 +54,8 @@ const spawnCoins = (seed) => {
       id: i,
       x: 12 + col * 19 + (next() * 6 - 3),
       y: 16 + row * 30 + (next() * 8 - 4),
-      type: COIN_TYPES[Math.floor(next() * COIN_TYPES.length)] ?? 'gold',
+      // Round-robin types (mirror of lib/config.ts + migration 0036).
+      type: COIN_TYPES[i % COIN_TYPES.length] ?? 'gold',
     }
   })
 }

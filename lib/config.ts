@@ -266,7 +266,12 @@ export const spawnCoins = (seed = 'round-1'): Coin[] => {
       // Izgara hücresinin merkezi + küçük deterministik sapma.
       x: 12 + col * 19 + (next() * 6 - 3),
       y: 16 + row * 30 + (next() * 8 - 4),
-      type: COIN_TYPES[Math.floor(next() * COIN_TYPES.length)] ?? 'gold',
+      // Renkler SIRAYLA (round-robin) dağıtılır — rastgele DEĞİL. 14 coin /
+      // 4 renk = her renkten en az 3 tane garanti edilir. Böylece "4 Blue"
+      // veya "3 Emerald" gibi görevler HER ZAMAN tamamlanabilir olur; rastgele
+      // dağıtımda haritada yeterli renk olmadığı için görev imkânsız kalıyordu.
+      // Sunucudaki duo_spawn_coins ile BİREBİR aynı olmalıdır.
+      type: COIN_TYPES[i % COIN_TYPES.length] ?? 'gold',
     }
   })
 }
