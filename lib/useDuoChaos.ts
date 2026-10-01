@@ -12,6 +12,11 @@ import {
   spawnCoins,
 } from './config'
 import { friendlyError } from './errors'
+import {
+  createPositionActionQueue,
+  isRpcSuccess,
+  runAfterPositionSync,
+} from './objectiveSync'
 import { playSound, unlockAudio } from './sound'
 import { useChaos } from './useChaos'
 import { useCosmetics } from './useCosmetics'
@@ -322,77 +327,25 @@ const mergeProgress = (
 }
 
 /**
- * RAKİBİN görev ilerlemesini birleştirir — SUNUCU OTORİTESİ (monotonik DEĞİL).
+ * RAKİBİN görev ilerlemesini birleştirir — sunucu otoritesi ve görev-başı monotoniklik.
  *
  * KÖK SORUN ("görev sahibi 2/3, rakip 3/3 görüyor"):
  *   Görevin SAHİBİ, ilerlemesinin TEK otoritesidir. Rakip istemci sahibin
  *   ilerlemesini KENDİ yerel olaylarından (collect/steal yayınları) türetirse,
  *   bu yerel değer sunucunun otoriter değerinin ÜSTÜNE çıkabilir (yayın
  *   kaybolması/gecikmesi, sahibin sunucudaki sayacından farklı olması vb.).
- *   `mergeProgress` monotonik (`Math.max`) olduğu için bu yanlış değer BİR DAHA
- *   DÜŞMEZ → rakip kalıcı olarak "3/3" gösterirken sahip "2/3" görür.
+ *   Bu yerel türetim artık yapılmıyor. Sunucunun ilerlemesi görev başına
+ *   monotoniktir; aynı görev için eski bir yoklama daha düşük değer döndürürse
+ *   iki istemci de en son gördüğü otoriter ilerlemeyi korur.
  *
- * ÇÖZÜM: Rakip için ilerlemeyi SUNUCUDAN AYNEN alırız (monotonik kilitleme YOK).
- *   Tek istisna BAYAT snapshot: sunucunun `objectivesDone`'ı yerelden GERİDE
- *   ise snapshot önceki göreve aittir; o zaman yerel değeri koruruz (eski
- *   görevin ilerlemesi yeni görevin üzerine yazılmasın). Görev kimliği
- *   değiştiyse sunucu sayaçları sıfırlamıştır; sunucu değerini AYNEN alırız.
+ * Görev kimliği gerçekten değiştiğinde yeni görev ve ilerleme birlikte alınır;
+ * aynı görevde ise stale snapshot ilerlemeyi düşüremez.
  */
 const mergeRivalProgress = (
   local: Player,
   server: Partial<Player>,
   objectiveChanged: boolean,
-): Pick<
-  Player,
-  'coins' | 'stolen' | 'roundCoins' | 'roundStolen' | 'collectedTypes' | 'objectiveProgress'
-> => {
-  const serverDone =
-    typeof server.objectivesDone === 'number' && Number.isFinite(server.objectivesDone)
-      ? server.objectivesDone
-      : undefined
-  const localDone =
-    typeof local.objectivesDone === 'number' && Number.isFinite(local.objectivesDone)
-      ? local.objectivesDone
-      : 0
-  const staleSnapshot = serverDone !== undefined && serverDone < localDone
-  // BAYAT SNAPSHOT: hiçbir alanı uygulamayız (önceki göreve ait).
-  if (staleSnapshot) {
-    return {
-      coins: local.coins,
-      stolen: local.stolen,
-      roundCoins: local.roundCoins,
-      roundStolen: local.roundStolen,
-      collectedTypes: local.collectedTypes ?? {},
-      objectiveProgress: local.objectiveProgress ?? 0,
-    }
-  }
-  // Görev GERÇEKTEN değiştiyse sunucu sayaçları sıfırlamıştır; AYNEN al.
-  if (objectiveChanged) {
-    return {
-      coins: server.coins ?? local.coins,
-      stolen: server.stolen ?? local.stolen,
-      roundCoins: server.roundCoins ?? local.roundCoins,
-      roundStolen: server.roundStolen ?? local.roundStolen,
-      collectedTypes: server.collectedTypes ?? {},
-      objectiveProgress: server.objectiveProgress ?? 0,
-    }
-  }
-  // SUNUCU OTORİTESİ (monotonik DEĞİL): rakip için ilerleme sunucudan AYNEN
-  // alınır. Böylece sahibin otoriter değeri (ör. 2/3) rakibe de BİREBİR yansır
-  // ve yerel türetim onu asla yukarı kilitli tutamaz.
-  const serverProgress =
-    typeof server.objectiveProgress === 'number' && Number.isFinite(server.objectiveProgress)
-      ? server.objectiveProgress
-      : undefined
-  return {
-    coins: server.coins ?? local.coins,
-    stolen: server.stolen ?? local.stolen,
-    roundCoins: server.roundCoins ?? local.roundCoins,
-    roundStolen: server.roundStolen ?? local.roundStolen,
-    collectedTypes: server.collectedTypes ?? local.collectedTypes ?? {},
-    objectiveProgress: serverProgress ?? local.objectiveProgress ?? 0,
-  }
-}
+): ReturnType<typeof mergeProgress> => mergeProgress(local, server, objectiveChanged)
 
 /**
  * Sunucu coin listesini yerel listeyle birleştirir (sunucu OTORİTEDİR).
@@ -485,6 +438,7 @@ export const useDuoChaos = () => {
   // `room` ÖNCE kurulur: `useGameState` yerel oyuncunun GERÇEK spawn konumunu
   // sunucu slotuna (`room.playerId`) göre belirler (aynalama için kritik).
   const room = useRoom()
+  const positionActionQueue = useRef(createPositionActionQueue())
   const game = useGameState(room.playerId)
   const progress = useProgress()
   const chaos = useChaos()
@@ -718,14 +672,40 @@ export const useDuoChaos = () => {
     (x: number, y: number) => {
       // Pozisyonu her karede yayınla: rakip bu broadcast ile akıcı görünür.
       room.broadcast('move', { by: room.playerId, x, y })
-      // Sunucuya yazma "best-effort"tur. 60Hz'de yayın yaptığımız için
-      // `duo_start_round` oyuncu satırını sıfırlarken bir `duo_move` yarışıp
-      // `not_a_player` fırlatabilir; bu zararsızdır (sonraki kare başarılı olur).
-      // Yakalanmazsa unhandled rejection → `pageerror` olur, bu yüzden yutarız.
-      void room
-        .call('duo_move', { p_token: room.token ?? room.playerId, p_x: x, p_y: y })
-        .catch(() => undefined)
+      positionActionQueue.current.enqueueMove(
+        async () => {
+          const response = await room.call('duo_move', {
+            p_token: room.token ?? room.playerId,
+            p_x: x,
+            p_y: y,
+          })
+          if (!isRpcSuccess(response)) {
+            throw new Error(`duo_move rejected: ${JSON.stringify(response)}`)
+          }
+        },
+        (error) => console.warn('Failed to sync player position', error),
+      )
     },
+    [room],
+  )
+
+  const runPositionedActions = useCallback(
+    (x: number, y: number, actions: Array<() => Promise<void>>) =>
+      positionActionQueue.current.runActions(() =>
+        runAfterPositionSync(
+          async () => {
+            const response = await room.call('duo_move', {
+              p_token: room.token ?? room.playerId,
+              p_x: x,
+              p_y: y,
+            })
+            if (!isRpcSuccess(response)) {
+              throw new Error(`duo_move rejected before gameplay action: ${JSON.stringify(response)}`)
+            }
+          },
+          actions,
+        ),
+      ),
     [room],
   )
 
@@ -861,6 +841,7 @@ export const useDuoChaos = () => {
     // doğru şekilde ayırt edebilir.
     playerId: room.playerId,
     publishMove,
+    runPositionedActions,
     broadcast: room.broadcast,
     call: room.call,
     syncChaos: chaos.sync,
@@ -999,7 +980,7 @@ export const useDuoChaos = () => {
             // sayaçlarını güncelleriz (bunlar skor/HUD için gereklidir ve
             // sunucu değeri geldiğinde otorite olur). `objectiveProgress`'i
             // BURADA HİÇ yazmayız; rakip satırının ilerlemesi yalnızca sunucu
-            // yoklamasından (`mergeRivalProgress`, monotonik DEĞİL) gelir.
+            // yoklamasından (`mergeRivalProgress`, aynı görev içinde monotonik) gelir.
             return {
               ...player,
               coins: player.coins + newlyCollected,
@@ -1283,6 +1264,7 @@ export const useDuoChaos = () => {
       if (localCountdownEndsAt > 0) serverDeadlineRef.current.countdownEndsAt = localCountdownEndsAt
       if (localEndsAt > 0) serverDeadlineRef.current.endsAt = localEndsAt
       setState((prev) => {
+        if (typeof data.round === 'number' && data.round < prev.round) return prev
         const players = prev.players.map((player) => {
           const server = data.players?.find((item) => mapPlayerId(String(item.id), myId) === player.id)
           if (!server) return player
@@ -1421,12 +1403,11 @@ export const useDuoChaos = () => {
             // düşmüyordu. Örnek: sahip sunucuda 2 çalma yapmışken rakip istemci
             // 3 çalma yayını görmüşse rakip kalıcı olarak "3/3" gösteriyordu.
             //
-            // ÇÖZÜM: Rakip için `mergeRivalProgress` kullanırız — ilerlemeyi
-            // SUNUCUDAN AYNEN alır (monotonik kilitleme YOK). Böylece sahibin
-            // otoriter değeri (ör. 2/3) rakibe de BİREBİR yansır. Yerel
-            // `collectedTypes`/`coins`/`roundCoins`/`stolen` iyimser sayaçları
-            // (HUD görseli için) korunur; yalnızca GÖREV İLERLEMESİ sunucudan
-            // gelir. Bayat snapshot koruması `mergeRivalProgress` içindedir.
+            // ÇÖZÜM: Rakip de yalnızca sunucu ilerlemesini uygular. Artık
+            // yayınlardan yerel objectiveProgress türetilmediği için aynı görev
+            // içinde `Math.max` stale poll yanıtlarının ilerlemeyi geri almasını
+            // engeller; reroll'da görev kimliği + ilerleme birlikte sıfırlanır.
+            // Eski objective sürümündeki snapshot ayrıca reddedilir.
             const rivalLocalObjectiveId = player.objective?.id ?? null
             const rivalServerObjectiveId = server.objective?.id ?? null
             const rivalServerDone =
@@ -1625,6 +1606,8 @@ export const useDuoChaos = () => {
       const localEndsAt = toLocal(data.endsAt)
       const localCountdownEndsAt = toLocal(data.countdownEndsAt)
       setState((prev) => {
+        const serverRound = typeof data.round === 'number' ? data.round : prev.round
+        if (serverRound < prev.round) return prev
         const serverPhase = data.phase as Phase
         // Faz geçişleri. Döngüsel bir akış vardır: bir tur bittiğinde
         // `results`'a, yeni tur başladığında TEKRAR `countdown`'a döneriz.
@@ -1656,7 +1639,6 @@ export const useDuoChaos = () => {
         // TUR MONOTONİKLİĞİ: bayat/geri sunucu turu UYGULANMAZ (bkz. battle poll
         // açıklaması). Aksi halde `useGameLoop` konumu spawn'a yeniden tohumlar ve
         // oyuncu "ışınlanıp geri gelir".
-        const serverRound = typeof data.round === 'number' ? data.round : prev.round
         const nextRound = serverRound > prev.round ? serverRound : prev.round
         const roundChanged = nextRound !== prev.round
         const coins = !serverCoins

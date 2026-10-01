@@ -21,6 +21,7 @@ import {
 } from './config'
 import { objectiveSatisfied } from './display'
 import { resolveMove } from './movement'
+import { applyAuthoritativeActionState, isRpcSuccess } from './objectiveSync'
 import { playSound } from './sound'
 import type { Coin, Player, State } from './types'
 
@@ -66,6 +67,12 @@ type LoopDeps = {
   token: string | null
   /** Yerel oyuncunun pozisyonunu yayınlar. */
   publishMove: (x: number, y: number) => void
+  /** Konum RPC'si ve eylemleri tüm konum yazımlarıyla sıralı çalıştırır. */
+  runPositionedActions: (
+    x: number,
+    y: number,
+    actions: Array<() => Promise<void>>,
+  ) => Promise<void>
   /** Toplama/çalma olayını yayınlar. */
   broadcast: (event: string, payload: unknown) => void
   /** Sunucu RPC'si. */
@@ -183,18 +190,16 @@ export const useGameLoop = (deps: LoopDeps) => {
    * OTORİTE DURUM UYGULAYICI (0035).
    *
    * `duo_collect` / `duo_steal` yanıtındaki `state` alanını yerel oyuncuya
-   * (index 0) AYNEN uygular. Bu, görev ilerlemesi için TEK OTORİTE KAYNAĞIDIR:
-   * istemci artık ilerlemeyi kendi üretmez; sunucunun onayladığı değeri
-   * (görev tamamlanması + yeni görev ataması dahil) ANINDA yansıtır.
+   * (index 0) uygular. Sunucu tek otoritedir; fakat paralel RPC yanıtları ters
+   * sırada ulaşabileceği için eski görev sürümü ve önceki tur yanıtları reddedilir.
    *
    * Böylece:
    *   * "3 topladım 2 gösteriyor" → sunucu 3 diyorsa 3 gösterilir.
-   *   * "3 gösterip sonra 1'e düşme" → istemci sunucuyu geçemez; `Math.max`
-   *     kilitlenmesi olmaz.
+   *   * "3 gösterip sonra 1'e düşme" → görev-başı monotoniklik eski yanıtı reddeder.
    *   * "yeni görev uzun süre gelmiyor" → yeni görev, yoklamayı beklemeden
    *     RPC yanıtıyla ANINDA gelir.
    */
-  const applyServerState = useCallback((response: unknown) => {
+  const applyServerState = useCallback((response: unknown, actionRound: number) => {
     const res = response as
       | {
           ok?: boolean
@@ -229,72 +234,9 @@ export const useGameLoop = (deps: LoopDeps) => {
       Number.isFinite(res.completedProgress)
         ? res.completedProgress
         : undefined
-    depsRef.current.setState((prev) => {
-      const players = prev.players.map((player, index) => {
-        if (index !== 0) return player
-        // GÖREV: sunucu yeni görev atadıysa (reroll) burada ANINDA gelir.
-        const nextObjective = s.objective ?? player.objective
-        const objectiveChanged = (nextObjective?.id ?? null) !== (player.objective?.id ?? null)
-        // MONOTONİKLİK (KÖK SORUN DÜZELTMESİ): `objectiveProgress`'e birden çok
-        // yazar var (bu taze RPC yanıtı + `duo_public_state` yoklaması). Gecikmiş
-        // bir RPC yanıtı (ör. daha eski bir collect) yeni değeri EZMEMELİ.
-        // Görev kimliği DEĞİŞMEDİĞİ sürece ilerleme asla düşmez; yalnızca artar.
-        // Tek meşru sıfırlama görev değişimindedir (sunucu yeni görev atar).
-        const serverProgress =
-          typeof s.objectiveProgress === 'number' && Number.isFinite(s.objectiveProgress)
-            ? s.objectiveProgress
-            : undefined
-        const localProgress =
-          typeof player.objectiveProgress === 'number' && Number.isFinite(player.objectiveProgress)
-            ? player.objectiveProgress
-            : 0
-        // TAMAMLAMA: görev tamamlandıysa TAMAMLANAN görevin son değerini göster.
-        // Bu, görev değişiminden ÖNCE uygulanır; böylece 4/4 anlık görünür.
-        const objectiveProgress =
-          completedProgress !== undefined
-            ? Math.max(localProgress, completedProgress)
-            : objectiveChanged
-              ? (serverProgress ?? 0)
-              : serverProgress === undefined
-                ? localProgress
-                : Math.max(localProgress, serverProgress)
-        // SKOR MONOTONİKLİĞİ (KÖK SORUN DÜZELTMESİ: "1080 → 1030").
-        //
-        // Gecikmiş bir RPC yanıtı (ör. daha eski bir collect) YENİ skoru
-        // EZMEMELİ. Skor, maç boyunca MONOTONİKTİR; yalnızca ARTABİLİR. Tek
-        // meşru sıfırlama yeni maçtadır (`resetMatch`/`blankPlayer`), bu yol
-        // değil. Bu yüzden `Math.max` uygularız.
-        const serverScore =
-          typeof s.score === 'number' && Number.isFinite(s.score) ? s.score : undefined
-        const serverRoundScore =
-          typeof s.roundScore === 'number' && Number.isFinite(s.roundScore)
-            ? s.roundScore
-            : undefined
-        // TAMAMLAMA ANI (0040): `completedProgress` doluysa görev AZ ÖNCE
-        // tamamlandı. 4/4'ü TAMAMLANAN göreve karşı göstermek için ESKİ görevi
-        // koruruz; yeni görev bir sonraki güncellemede (yoklama/sonraki RPC)
-        // uygulanır. Aksi halde "yeni görev ama 4/4" uyumsuzluğu görünürdü.
-        const showCompleted = completedProgress !== undefined
-        return {
-          ...player,
-          objective: showCompleted ? player.objective : nextObjective,
-          objectiveProgress,
-          collectedTypes: s.collectedTypes ?? player.collectedTypes,
-          coins: s.coins ?? player.coins,
-          stolen: s.stolen ?? player.stolen,
-          roundCoins: s.roundCoins ?? player.roundCoins,
-          roundStolen: s.roundStolen ?? player.roundStolen,
-          missionDone: s.missionDone ?? player.missionDone,
-          objectivesDone: s.objectivesDone ?? player.objectivesDone,
-          score: serverScore === undefined ? player.score : Math.max(player.score ?? 0, serverScore),
-          roundScore:
-            serverRoundScore === undefined
-              ? player.roundScore
-              : Math.max(player.roundScore ?? 0, serverRoundScore),
-        }
-      })
-      return { ...prev, players }
-    })
+    depsRef.current.setState((prev) =>
+      applyAuthoritativeActionState(prev, s, completedProgress, actionRound),
+    )
   }, [])
 
   // Klavye girdisi.
@@ -351,6 +293,7 @@ export const useGameLoop = (deps: LoopDeps) => {
       token,
       playerId,
       publishMove,
+      runPositionedActions,
       broadcast,
       call,
       syncChaos,
@@ -879,108 +822,45 @@ export const useGameLoop = (deps: LoopDeps) => {
       if (heartbeatDue) lastHeartbeat.current = now
       publishMove(nextX, nextY)
     }
-    // KONUM TAZELEME (KRİTİK): Sunucu `duo_collect`/`duo_steal` menzilini
-    // KENDİ sakladığı `x/y` ile doğrular. İstemci `duo_move`'u yalnızca
-    // HAREKET ederken gönderir; oyuncu bir coinin üstünde DURURSA sunucudaki
-    // konum bayatlar ve toplama `too_far` ile REDDEDİLİR → istemci skoru artar
-    // ama sunucu skoru artmaz ("puanlar tutmuyor"). Bu yüzden toplama/çalma
-    // öncesinde konumu MUTLAKA tazeleriz.
-    //
-    // KÖK SORUN ("Collect 2 Red → 1/2" — EŞZAMANLI TOPLAMA YARIŞI):
-    //   Buradaki `duo_move` eskiden "fire-and-forget" (`void call(...)`) idi ve
-    //   hemen ardından `duo_collect` çağrıları gönderiliyordu. İki geçerli
-    //   toplama neredeyse aynı anda (oyuncu coinlerin üstüne yeni varmışken)
-    //   yapıldığında, `duo_collect` sunucuya `duo_move`'dan ÖNCE ulaşabiliyordu.
-    //   Sunucu menzili KENDİ sakladığı BAYAT `x/y` ile doğruladığı için toplama
-    //   `too_far` ile REDDEDİLİYORDU. İstemci coini yine de YEREL olarak
-    //   "toplandı" işaretlediği için oyuncu iki coini de toplamış GÖRÜYORDU,
-    //   ama sunucu yalnızca birini sayıyordu → görev 1/2'de takılıyordu.
-    //
-    //   ÇÖZÜM: `duo_steal` yolunda zaten yapıldığı gibi, toplamadan ÖNCE konumu
-    //   `await` ile tazele. Bu bir gecikme/debounce/retry DEĞİLDİR; iki bağımlı
-    //   sunucu çağrısının DOĞRU SIRALAMASIDIR (önce konum, sonra toplama).
-    //   Böylece sunucu her toplamayı GÜNCEL konumla doğrular ve iki geçerli
-    //   toplama da atomik olarak (0039 kilidi) sayılır.
-    if (collectedIds.length > 0 || stealing) {
-      // `respawnAt`'i de yayınlarız: rakip coinleri TAM AYNI anda canlandırsın.
-      // Aksi halde iki taraf farklı zamanlarda canlandırır ve "bende var, onda
-      // yok" uyumsuzluğu oluşur.
-      //
-      // `diamond: true` bayrağı: rakip, elmasın alındığını bilir ve ona göre
-      // geri bildirim verir (elmas tek seferliktir, canlandırılmaz).
-      if (collectedIds.length > 0) {
-        broadcast('collect', {
-          ids: collectedIds,
-          by: playerId,
-          respawnAt: now + COIN_RESPAWN_MS,
-          diamond: collectedDiamond,
+    // Position and action RPCs are separate requests. Serialize the position
+    // update before dispatching any action that validates against server x/y.
+    const actions: Array<() => Promise<void>> = []
+    if (collectedIds.length > 0) {
+      // Every collected coin is sent independently; the server serializes
+      // counter updates and each response contains the authoritative state.
+      for (const coinId of collectedIds) {
+        actions.push(async () => {
+          const response = await call('duo_collect', { p_token: token, p_coin_id: coinId })
+          if (!isRpcSuccess(response)) {
+            console.warn('duo_collect rejected', response)
+            return
+          }
+          applyServerState(response, state.round)
+          const coin = freshCoins.find((item) => item.id === coinId)
+          broadcast('collect', {
+            ids: [coinId],
+            by: playerId,
+            respawnAt: coin?.type === 'diamond' ? undefined : now + COIN_RESPAWN_MS,
+            diamond: coin?.type === 'diamond',
+          })
         })
-      }
-      // Sunucuya TOPLANAN HER coini bildir. Önceden yalnızca ilk coin
-      // (`collectedIds[0]`) gönderiliyordu; aynı karede birden fazla coin
-      // toplandığında sunucu yalnızca birini işliyor ve skor/görev ilerlemesi
-      // istemci ile sunucu arasında ayrışıyordu.
-      //
-      // OTORİTE DURUM (0035): `duo_collect` artık eylem sonrası TAM durumu
-      // (`state`) döndürür. Yanıtı uygularız; böylece aynı karede birden fazla
-      // coin toplandığında bile ilerleme/sayaçlar sunucunun onayladığı SON
-      // değere yakınsar ve görev tamamlanması + yeni görev ataması ANINDA
-      // (yoklamayı beklemeden) yansır.
-      //
-      // GECİKME OPTİMİZASYONU (KÖK SORUN: "görev ilerlemesi geç görünüyor"):
-      //   Eski kod `await duo_move` → SONRA her coin için `await duo_collect`
-      //   şeklinde SIRALI bir zincir kuruyordu. Bu, ilerlemenin ekrana
-      //   yansımasından önce EN AZ 2 tam ağ gidiş-dönüşü (RTT) beklemek
-      //   demekti: bir RTT konum tazeleme, bir RTT de toplama. Gerçek ağda bu
-      //   100–400 ms'lik bir gecikme yaratıyordu.
-      //
-      //   ÇÖZÜM: Konum tazelemeyi ve TÜM toplamaları EŞZAMANLI (concurrent)
-      //   göndeririz. Bu GÜVENLİDİR çünkü:
-      //     * `duo_move` idempotenttir (yalnızca `x/y` yazar).
-      //     * `duo_collect` sunucuda oyuncu satırını `FOR UPDATE` ile
-      //       serileştirir (0039) ve menzili kendi sakladığı konumla doğrular;
-      //       eşzamanlı çağrılar atomik olarak sıraya girer, hiçbiri kaybolmaz
-      //       veya çift sayılmaz.
-      //     * Konum tazeleme yine de gönderilir (fire-and-forget), böylece
-      //       "oyuncu coine yeni vardı, sunucudaki konum bayat" yarışı
-      //       düzelmeye devam eder. `duo_collect` menzil doğrulaması sunucunun
-      //       EN SON konumunu kullanır; 60 Hz `publishMove` heartbeat'i de
-      //       konumu sürekli tazeler.
-      //   Böylece ilerleme, ilk `duo_collect` yanıtı döner dönmez (tek RTT)
-      //   uygulanır — sıralı zincirin ekstra RTT'si ortadan kalkar.
-      //
-      //   NOT: Bu bir gecikme/debounce/retry DEĞİLDİR ve iyimser/sahte
-      //   ilerleme ÜRETMEZ. İlerleme yine YALNIZCA sunucunun döndürdüğü
-      //   otoriter `state`'ten gelir; yalnızca ağ sıralaması optimize edilir.
-      if (collectedIds.length > 0) {
-        // Konum tazeleme: eşzamanlı gönderilir, yanıtı beklenmez.
-        void call('duo_move', { p_token: token, p_x: nextX, p_y: nextY }).catch(() => undefined)
-        // Tüm toplamaları EŞZAMANLI gönder; her yanıt geldiği anda uygula.
-        for (const coinId of collectedIds) {
-          void call('duo_collect', { p_token: token, p_coin_id: coinId })
-            .then((res) => applyServerState(res))
-            .catch(() => undefined)
-        }
       }
     }
     if (stealing) {
-      broadcast('steal', { by: playerId })
-      // YARIŞ ÖNLEME (KRİTİK): Sunucu `duo_steal` menzilini KENDİ sakladığı
-      // `x/y` ile doğrular. Konumu tazelemezsek, `duo_steal` sunucudaki BAYAT
-      // konumla doğrulanır ve çalma `too_far` ile REDDEDİLİR → "steal
-      // çalışmıyor".
-      //
-      // GECİKME OPTİMİZASYONU: Eski kod `await duo_move` → SONRA `await
-      // duo_steal` şeklinde SIRALI iki RTT bekliyordu. Artık konum tazelemeyi
-      // ve çalmayı EŞZAMANLI göndeririz (collect yolundaki ile aynı gerekçe):
-      // `duo_move` idempotent, `duo_steal` sunucuda `FOR UPDATE` ile
-      // serileştirilir (0039). Konum tazeleme yine gönderilir (fire-and-forget)
-      // ve 60 Hz `publishMove` heartbeat'i sunucu konumunu sürekli tazeler;
-      // böylece menzil doğrulaması doğru kalırken ekstra RTT ortadan kalkar.
-      void call('duo_move', { p_token: token, p_x: nextX, p_y: nextY }).catch(() => undefined)
-      void call('duo_steal', { p_token: token })
-        .then((res) => applyServerState(res))
-        .catch(() => undefined)
+      actions.push(async () => {
+        const response = await call('duo_steal', { p_token: token })
+        if (!isRpcSuccess(response)) {
+          console.warn('duo_steal rejected', response)
+          return
+        }
+        applyServerState(response, state.round)
+        broadcast('steal', { by: playerId })
+      })
+    }
+    if (actions.length > 0) {
+      void runPositionedActions(nextX, nextY, actions).catch((error: unknown) => {
+        console.error('Failed to submit authoritative gameplay actions', error)
+      })
     }
     // SKOR YAYINI YOK: puan artık sunucunun tekelindedir. İstemci skoru ne
     // üretir ne de rakibe yayınlar; her iki taraf da `duo_public_state`

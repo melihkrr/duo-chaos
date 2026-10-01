@@ -1,23 +1,14 @@
 // ============================================================================
 // DUO CHAOS — objective OWNER authority test (two-client convergence).
 //
-// Reproduces the reported bug:
-//   Objective: "Steal 3 from your rival".
-//   The OWNER correctly sees 2/3, but the OTHER PLAYER sees 3/3.
+// Reproduces stale snapshots on two independent client projections.
 //
-// ROOT CAUSE (fixed in lib/useDuoChaos.ts):
-//   The rival's client optimistically DERIVED the owner's `objectiveProgress`
-//   from its own local `collect`/`steal` broadcasts (offCollect / offSteal),
-//   and the pull loop's rival branch used `mergeProgress` — which is MONOTONIC
-//   (`Math.max(local, server)`). Once the rival's locally-derived value reached
-//   3, `Math.max` LOCKED it at 3 forever, even when the server (the owner's
-//   authority) said 2. Result: owner 2/3, rival 3/3.
-//
-// FIX:
-//   1. offCollect / offSteal NO LONGER derive the owner's objectiveProgress
-//      locally (they only update optimistic coins/stolen/collectedTypes).
-//   2. The rival branch uses `mergeRivalProgress` — SERVER-AUTHORITATIVE, NOT
-//      monotonic — so the owner's authoritative value is reflected EXACTLY.
+// Root cause fixed in lib/useDuoChaos.ts:
+//   The owner already merged progress monotonically within an objective, but
+//   the rival applied every snapshot verbatim. Overlapping polls could return
+//   out of order, making the rival move backwards or temporarily disagree.
+//   Local collect/steal broadcasts no longer derive objective progress, so the
+//   same monotonic server-authoritative merge is safe for both clients.
 //
 // This test mirrors the EXACT merge rules and drives them through the reported
 // interleaving, asserting the invariant:
@@ -92,7 +83,7 @@ const mergeProgress = (local, server, objectiveChanged) => {
 }
 
 // --- Mirror of lib/useDuoChaos.ts mergeRivalProgress (RIVAL's view of the
-// owner's objective). SERVER-AUTHORITATIVE, NOT monotonic. This is the fix.
+// owner's objective). Monotonic within one objective, reset only on reroll.
 const mergeRivalProgress = (local, server, objectiveChanged) => {
   const serverDone =
     typeof server.objectivesDone === 'number' && Number.isFinite(server.objectivesDone)
@@ -133,13 +124,12 @@ const mergeRivalProgress = (local, server, objectiveChanged) => {
     roundCoins: server.roundCoins ?? local.roundCoins,
     roundStolen: server.roundStolen ?? local.roundStolen,
     collectedTypes: server.collectedTypes ?? local.collectedTypes ?? {},
-    objectiveProgress: serverProgress ?? local.objectiveProgress ?? 0,
+    objectiveProgress:
+      serverProgress === undefined
+        ? local.objectiveProgress ?? 0
+        : Math.max(local.objectiveProgress ?? 0, serverProgress),
   }
 }
-
-// --- The OLD (buggy) rival merge: monotonic, same as mergeProgress. Used only
-// to PROVE the bug reproduces without the fix.
-const mergeRivalProgressBuggy = mergeProgress
 
 const OBJ = { id: 'steal-3', kind: 'steal', target: 3 }
 
@@ -157,38 +147,18 @@ const makePlayer = (overrides = {}) => ({
 })
 
 // ============================================================================
-// Scenario 1: the EXACT reported case.
-//   Owner steals 2 → server says 2/3. Rival's client ALSO receives a 3rd
-//   `steal` broadcast (e.g. a duplicate/late/optimistic local event) BEFORE the
-//   server snapshot catches up. With the OLD monotonic merge the rival locks at
-//   3; with the FIX the rival follows the server (2).
+// Scenario 1: owner-authoritative progress is reflected identically when the
+// rival has only received a local event (events do not update objectiveProgress).
 // ============================================================================
-console.log('Scenario 1: owner 2/3, rival receives a spurious 3rd steal broadcast')
+console.log('Scenario 1: owner 2/3, rival receives a steal event before its snapshot')
 {
   // Owner's authoritative server state after 2 steals.
   const server = { objective: OBJ, objectiveProgress: 2, objectivesDone: 0, stolen: 2 }
-
-  // Rival's local row. The OLD offSteal derived progress locally → 3.
-  const rivalLocalBuggy = makePlayer({ objectiveProgress: 3, stolen: 3 })
-  const rivalLocalFixed = makePlayer({ objectiveProgress: 0, stolen: 3 })
-
-  const buggy = mergeRivalProgressBuggy(rivalLocalBuggy, server, false)
-  const fixed = mergeRivalProgress(rivalLocalFixed, server, false)
-
-  check(
-    'OLD merge locks the rival at 3/3 (reproduces the bug)',
-    buggy.objectiveProgress === 3,
-    `got ${buggy.objectiveProgress}`,
-  )
-  check(
-    'FIXED merge shows the owner\u2019s authoritative 2/3 to the rival',
-    fixed.objectiveProgress === 2,
-    `got ${fixed.objectiveProgress}`,
-  )
-  check(
-    'owner and rival now display the SAME progress (2/3)',
-    fixed.objectiveProgress === server.objectiveProgress,
-  )
+  const rivalLocal = makePlayer({ objectiveProgress: 0, stolen: 2 })
+  const rival = mergeRivalProgress(rivalLocal, server, false)
+  const owner = mergeProgress(makePlayer(), server, false)
+  check('rival applies the owner\u2019s authoritative progress', rival.objectiveProgress === 2)
+  check('owner and rival display the SAME progress (2/3)', rival.objectiveProgress === owner.objectiveProgress)
 }
 
 // ============================================================================
@@ -224,21 +194,16 @@ console.log('\nScenario 2: owner steals 1\u21922\u21923 \u2014 both clients iden
 }
 
 // ============================================================================
-// Scenario 3: the rival's local broadcast arrives but the server snapshot is
-//   STALE (behind). The rival must NOT jump ahead of the owner's authority.
+// Scenario 3: an older server snapshot arrives after a newer one; progress
+//   must not move backwards on the rival.
 // ============================================================================
-console.log('\nScenario 3: rival local broadcast ahead of a stale server snapshot')
+console.log('\nScenario 3: stale server snapshot cannot move rival progress backwards')
 {
-  // Rival optimistically saw 3 steals locally, but the server (owner authority)
-  // is still at 2 and its snapshot is NOT stale (objectivesDone equal).
-  const rivalLocal = makePlayer({ objectiveProgress: 3, stolen: 3 })
-  const server = { objective: OBJ, objectiveProgress: 2, objectivesDone: 0, stolen: 2 }
-  const merged = mergeRivalProgress(rivalLocal, server, false)
-  check(
-    'rival follows the server (2), not its local optimistic 3',
-    merged.objectiveProgress === 2,
-    `got ${merged.objectiveProgress}`,
-  )
+  let rival = makePlayer({ objectiveProgress: 3, stolen: 3 })
+  const stale = { objective: OBJ, objectiveProgress: 2, objectivesDone: 0, stolen: 2 }
+  const merged = mergeRivalProgress(rival, stale, false)
+  rival = { ...rival, ...merged }
+  check('rival keeps the latest valid value (3), ignoring stale 2', rival.objectiveProgress === 3)
 }
 
 // ============================================================================
@@ -306,13 +271,13 @@ console.log('\nScenario 6: collect objective \u2014 owner 2/2, rival sees 2/2')
 }
 
 // ============================================================================
-// Scenario 7: adversarial interleaving — rival local 3, then server 2, then
-//   server 3. The rival must track the server EXACTLY (2 then 3), never lock.
+// Scenario 7: server progress 2 → 3, then a delayed snapshot with 2.
+//   Both clients preserve the same monotonic value.
 // ============================================================================
-console.log('\nScenario 7: adversarial interleaving \u2014 rival tracks the server exactly')
+console.log('\nScenario 7: adversarial interleaving \u2014 delayed snapshot after progress 3')
 {
-  let rival = makePlayer({ objectiveProgress: 3, stolen: 3 })
-  const seq = [2, 2, 3]
+  let rival = makePlayer({ objectiveProgress: 0, stolen: 0 })
+  const seq = [2, 3, 2]
   const seen = []
   for (const n of seq) {
     const server = { objective: OBJ, objectiveProgress: n, objectivesDone: 0, stolen: n }
@@ -321,8 +286,8 @@ console.log('\nScenario 7: adversarial interleaving \u2014 rival tracks the serv
     seen.push(rival.objectiveProgress)
   }
   check(
-    'rival sequence is [2,2,3] (follows server, never locked at 3)',
-    JSON.stringify(seen) === JSON.stringify([2, 2, 3]),
+    'rival sequence is [2,3,3] (stale progress cannot regress)',
+    JSON.stringify(seen) === JSON.stringify([2, 3, 3]),
     `got ${JSON.stringify(seen)}`,
   )
 }
