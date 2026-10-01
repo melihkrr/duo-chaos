@@ -21,8 +21,8 @@
 //   2. No accepted collect is silently dropped.
 //   3. `objective_progress` for the ACTIVE objective never exceeds its target
 //      and never goes backwards while the objective id is unchanged.
-//   4. When an objective completes, the NEXT objective starts at 0 and the
-//      overflow collections are applied to the NEW objective (not lost).
+//   4. When an objective completes, the NEXT objective starts at 0. Coins
+//      collected under the completed objective never progress the next one.
 //
 // Usage: SUPABASE_DB_PASSWORD=... node scripts/test-collect-loss.mjs
 // ============================================================================
@@ -151,9 +151,9 @@ const forceObjective = async (client, code, objective) => {
 
 // Stack ALL coins of the given types on the player and return their ids.
 const stackCoins = async (client, code, types) => {
-  await client.query(`update duo_players set x = 500, y = 500 where room_code = $1 and slot = 1`, [code])
+  await client.query(`update duo_players set x = 50, y = 50 where room_code = $1 and slot = 1`, [code])
   await client.query(
-    `update duo_coins set x = 500, y = 500, collected_by = null, respawn_at = 0
+    `update duo_coins set x = 50, y = 50, collected_by = null, respawn_at = 0
       where room_code = $1 and type::text = any($2::text[])`,
     [code, types],
   )

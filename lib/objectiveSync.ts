@@ -26,8 +26,9 @@ export const isRpcSuccess = (response: unknown): response is { ok: true } =>
 export const runAfterPositionSync = async (
   syncPosition: () => Promise<void>,
   actions: Array<() => Promise<void>>,
+  positionIncludedInAction = false,
 ): Promise<void> => {
-  await syncPosition()
+  if (!positionIncludedInAction) await syncPosition()
   let failed = false
   let firstError: unknown
   await Promise.all(
@@ -97,8 +98,15 @@ export const createPositionActionQueue = () => {
       }
       start()
     },
-    runActions: (run: () => Promise<void>) =>
+    runActions: (run: () => Promise<void>, positionIncludedInAction = false) =>
       new Promise<void>((resolve, reject) => {
+        if (positionIncludedInAction) {
+          // The action transaction writes its own latest position, so queued
+          // movement snapshots before it are redundant and add another RTT.
+          for (let index = tasks.length - 1; index >= 0; index -= 1) {
+            if (tasks[index]?.kind === 'move') tasks.splice(index, 1)
+          }
+        }
         tasks.push({ kind: 'actions', run, resolve, reject })
         start()
       }),
@@ -221,6 +229,70 @@ export const applyAuthoritativeActionState = (
       roundStolen: server.roundStolen ?? player.roundStolen,
       missionDone: server.missionDone ?? player.missionDone,
       objectivesDone: server.objectivesDone ?? player.objectivesDone,
+      score:
+        server.score === undefined
+          ? player.score
+          : Math.max(player.score ?? 0, server.score),
+      roundScore:
+        server.roundScore === undefined
+          ? player.roundScore
+          : Math.max(player.roundScore ?? 0, server.roundScore),
+    }
+  })
+
+  return { ...previous, players }
+}
+
+export const applyAuthoritativeRivalState = (
+  previous: State,
+  server: AuthoritativeActionState,
+  actionRound: number,
+): State => {
+  if (previous.round !== actionRound) return previous
+
+  const local = previous.players[1]
+  if (!local) return previous
+
+  const serverDone =
+    typeof server.objectivesDone === 'number' && Number.isFinite(server.objectivesDone)
+      ? server.objectivesDone
+      : undefined
+  const localDone =
+    typeof local.objectivesDone === 'number' && Number.isFinite(local.objectivesDone)
+      ? local.objectivesDone
+      : 0
+  if (serverDone !== undefined && serverDone < localDone) return previous
+
+  const objective = server.objective ?? local.objective
+  const objectiveChanged = (objective?.id ?? null) !== (local.objective?.id ?? null)
+  const serverProgress =
+    typeof server.objectiveProgress === 'number' && Number.isFinite(server.objectiveProgress)
+      ? server.objectiveProgress
+      : undefined
+  const localProgress =
+    typeof local.objectiveProgress === 'number' && Number.isFinite(local.objectiveProgress)
+      ? local.objectiveProgress
+      : 0
+  if (!objectiveChanged && serverProgress !== undefined && serverProgress < localProgress) {
+    return previous
+  }
+
+  const progress = mergeObjectiveProgress(local, server, objectiveChanged)
+  const players = previous.players.map((player, index) => {
+    if (index !== 1) return player
+    return {
+      ...player,
+      objective,
+      objectiveProgress: progress.objectiveProgress,
+      collectedTypes: progress.collectedTypes,
+      coins: progress.coins,
+      stolen: progress.stolen,
+      roundCoins: progress.roundCoins,
+      roundStolen: progress.roundStolen,
+      missionDone: objectiveChanged
+        ? (server.missionDone ?? false)
+        : Boolean(player.missionDone || server.missionDone),
+      objectivesDone: serverDone ?? player.objectivesDone,
       score:
         server.score === undefined
           ? player.score

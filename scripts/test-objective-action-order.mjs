@@ -245,6 +245,30 @@ console.log('\nPosition updates and authoritative actions share one ordered queu
       events.indexOf('steal:end') < events.indexOf('move:4'))
 }
 
+console.log('\nPosition-including actions discard superseded queued movement')
+{
+  const queue = createPositionActionQueue()
+  const events = []
+  let releaseMove
+  const moveGate = new Promise((resolve) => {
+    releaseMove = resolve
+  })
+  queue.enqueueMove(async () => {
+    events.push('move:in-flight')
+    await moveGate
+  }, () => {})
+  queue.enqueueMove(async () => {
+    events.push('move:stale')
+  }, () => {})
+  const actionTask = queue.runActions(async () => {
+    events.push('batch-with-position')
+  }, true)
+  releaseMove()
+  await actionTask
+  check('batch skips queued movement because it carries the latest position',
+    events.includes('batch-with-position') && !events.includes('move:stale'))
+}
+
 console.log('\nTwo independent client views: same-objective stale snapshots and objective rollover')
 {
   for (let iteration = 0; iteration < 1_000; iteration += 1) {

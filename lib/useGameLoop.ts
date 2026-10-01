@@ -72,6 +72,7 @@ type LoopDeps = {
     x: number,
     y: number,
     actions: Array<() => Promise<void>>,
+    positionIncludedInAction?: boolean,
   ) => Promise<void>
   /** Toplama/çalma olayını yayınlar. */
   broadcast: (event: string, payload: unknown) => void
@@ -161,6 +162,7 @@ export const useGameLoop = (deps: LoopDeps) => {
   // Sanal joystick vektörü. `VirtualJoystick` `setJoystick` ile buraya yazar;
   // böylece her pointer hareketinde React render tetiklenmez (yalnızca RAF okur).
   const joystick = useRef<JoystickVector>({ x: 0, y: 0 })
+  const pendingCollectedCoinIds = useRef(new Set<number>())
   // GÖREV KİMLİĞİ: sunucu bir görev tamamlanınca yeni bir görev atar ve
   // `collected_types`'ı SIFIRLAR. İstemci iyimser ilerlemeyi `me.objectiveProgress`
   // tabanından biriktirir; görev değiştiğinde taban hâlâ ESKİ görevin sayısını
@@ -199,7 +201,11 @@ export const useGameLoop = (deps: LoopDeps) => {
    *   * "yeni görev uzun süre gelmiyor" → yeni görev, yoklamayı beklemeden
    *     RPC yanıtıyla ANINDA gelir.
    */
-  const applyServerState = useCallback((response: unknown, actionRound: number) => {
+  const applyServerState = useCallback((
+    response: unknown,
+    actionRound: number,
+    showCompletedObjective = true,
+  ) => {
     const res = response as
       | {
           ok?: boolean
@@ -229,6 +235,7 @@ export const useGameLoop = (deps: LoopDeps) => {
     // kaybı oluşur. Tamamlama anında ilerlemeyi `completedProgress`'e sabitleriz;
     // böylece görev 4/4 olarak TAMAMLANMIŞ görünür, sonra yeni göreve geçilir.
     const completedProgress =
+      showCompletedObjective &&
       res.objectiveDone === true &&
       typeof res.completedProgress === 'number' &&
       Number.isFinite(res.completedProgress)
@@ -537,55 +544,20 @@ export const useGameLoop = (deps: LoopDeps) => {
     // geçerli bir toplama KAYBOLUYORDU ve görev 1/2'de takılıyordu.
     //
     // Kapı GEREKSİZDİ: aynı coini her karede yeniden toplamayı zaten
-    // `!coin.collectedBy` filtresi (aşağıda) ve `collectedSet` işaretlemesi
-    // engeller. Kapı yalnızca GEÇERLİ toplamaları düşürüyordu. Bu yüzden
-    // kaldırıldı: HER kare yakındaki toplanmamış coinleri değerlendirir.
-    // Sunucu eşzamanlı toplamaları atomik serileştirir (0039), bu yüzden aynı
-    // karede birden fazla coin göndermek güvenlidir.
+    // `!coin.collectedBy` filtresi ve bekleyen ID kümesi engeller. Kapı yalnızca
+    // GEÇERLİ toplamaları düşürüyordu. Bu yüzden HER kare yakındaki toplanmamış
+    // coinleri değerlendirir; sunucu onayı gelene kadar tekrar istek gönderilmez.
     let collectedIds: number[] = []
-    let collectedDiamond = false
     {
       const nearby = state.coins.filter(
-        (coin) => !coin.collectedBy && Math.hypot(coin.x - nextX, coin.y - nextY) <= COLLECT_RADIUS,
+        (coin) =>
+          !coin.collectedBy &&
+          !pendingCollectedCoinIds.current.has(coin.id) &&
+          Math.hypot(coin.x - nextX, coin.y - nextY) <= COLLECT_RADIUS,
       )
       if (nearby.length > 0) {
         collectedIds = nearby.map((coin) => coin.id)
-        // ELMAS (JACKPOT) GERİ BİLDİRİMİ: elmas tek seferlik ve 50 puanlık
-        // olduğundan normal "collect" sesinden AYRI, daha tatmin edici bir ses
-        // çalarız. Böylece oyuncu büyük ödülü aldığını net hisseder.
-        const diamondCoin = nearby.find((coin) => coin.type === 'diamond')
-        collectedDiamond = Boolean(diamondCoin)
-        // COMBO: iki toplama arası COMBO_WINDOW_MS'den kısaysa seri artar.
-        // Seri yalnızca geri bildirimdir; puanı sunucu verir.
-        const prevCombo = comboRef.current
-        const comboCount = now - prevCombo.at <= COMBO_WINDOW_MS ? prevCombo.count + 1 : 1
-        comboRef.current = { count: comboCount, at: now }
-        // SES: elmas > combo/streak > normal toplama önceliğiyle çal.
-        if (collectedDiamond) {
-          playSound('jackpot')
-        } else if (comboCount >= COMBO_STREAK_AT) {
-          playSound('streak')
-        } else if (comboCount >= 2) {
-          playSound('combo')
-        } else {
-          playSound('collect')
-        }
-        // "+50" rozeti için elmasın konumunu ve anını kaydet. `Battle` bu
-        // değeri izleyerek elmasın üstünde uçan rozeti gösterir.
-        if (diamondCoin) {
-          diamondPopRef.current = { x: diamondCoin.x, y: diamondCoin.y, at: now }
-        }
-        // UÇAN PUAN ROZETLERİ: her toplanan coin için değerini hesapla ve
-        // coinin konumunda kısa süreliğine göster. Ekran kalabalıklaşmasın diye
-        // en fazla SCORE_POP_MAX rozet tutarız (en yeniler öne gelir).
-        const pops = nearby.slice(0, SCORE_POP_MAX).map((coin, index) => ({
-          id: now + index,
-          x: coin.x,
-          y: coin.y,
-          value: getCoinValue(coin.type, state.chaosEvent?.id, me.objective),
-          at: now,
-        }))
-        scorePopRef.current = [...scorePopRef.current, ...pops].slice(-SCORE_POP_MAX)
+        for (const coinId of collectedIds) pendingCollectedCoinIds.current.add(coinId)
       }
     }
     const collectedSet = new Set(collectedIds)
@@ -641,7 +613,7 @@ export const useGameLoop = (deps: LoopDeps) => {
     //
     // ÇÖZÜM: İstemci artık ilerlemeyi KAREDE ÜRETMEZ. İlerleme YALNIZCA
     // sunucudan gelir:
-    //   * `duo_collect`/`duo_steal` yanıtındaki `state.objectiveProgress`
+    //   * `duo_collect_batch`/`duo_steal_versioned` yanıtındaki `state.objectiveProgress`
     //     (eylem sonrası ANLIK otorite — aşağıda uygulanır), ve
     //   * `duo_public_state` yoklaması (yakınsama/yedek).
     // Böylece istemci sunucuyu ASLA geçemez; `Math.max` kilitlenmesi ortadan
@@ -657,16 +629,7 @@ export const useGameLoop = (deps: LoopDeps) => {
     }
 
     const objective = me.objective
-    const collectedCount = collectedIds.length
-
-    // Bu karenin toplanan coinlerinin TÜRLERİ — yalnızca YEREL görsel geri
-    // bildirim (uçan rozet, combo) ve `collectedTypes` iyimser toplamı için.
-    // İLERLEME HESABINDA KULLANILMAZ (o sunucuya aittir).
     const freshCoins = state.coins.filter((coin) => collectedSet.has(coin.id))
-    const freshTypes = freshCoins.reduce<Partial<Record<Coin['type'], number>>>(
-      (counts, coin) => ({ ...counts, [coin.type]: (counts[coin.type] ?? 0) + 1 }),
-      {},
-    )
 
     // Görev tamamlanma kararı: YALNIZCA sunucunun onayladığı ilerleme hedefi
     // karşılıyorsa tamamlanmış sayılır. İstemci iyimser ilerleme ÜRETMEDİĞİ
@@ -690,9 +653,8 @@ export const useGameLoop = (deps: LoopDeps) => {
     setState((prev) => {
       let changed = false
 
-      // Coinler: toplananları işaretle, süresi dolanları AYNI konum ve AYNI
-      // renkte canlandır. Renk yuvaya (id'ye) bağlıdır; yalnızca yeni turda
-      // yeniden dağıtılır. Böylece coinler "kendi kendine renk değiştirmez".
+      // Only server-confirmed pickups change local coin state. Respawns keep
+      // the original position and type.
       //
       // ÖNEMLİ (ELMAS / JACKPOT): Elmas TEK SEFERLİK bir ödüldür. Sunucu
       // (`duo_respawn_coins`) elmasları ASLA canlandırmaz (`type <> 'diamond'`).
@@ -701,14 +663,6 @@ export const useGameLoop = (deps: LoopDeps) => {
       // beliriyordu ("elması alsam bile hemen tekrar çıkıyor" hatası). Elması
       // bu mantığın DIŞINDA tutarız: toplandıysa kalıcı olarak toplanmış kalır.
       const nextCoins = prev.coins.map((coin) => {
-        if (collectedSet.has(coin.id)) {
-          changed = true
-          if (coin.type === 'diamond') {
-            // Tek seferlik: respawn planlama, kalıcı olarak toplanmış işaretle.
-            return { ...coin, collectedBy: 'p1' as const, respawnAt: undefined }
-          }
-          return { ...coin, collectedBy: 'p1' as const, respawnAt: now + COIN_RESPAWN_MS }
-        }
         if (
           coin.type !== 'diamond' &&
           coin.collectedBy &&
@@ -730,32 +684,6 @@ export const useGameLoop = (deps: LoopDeps) => {
           // karede `livePos` ref'i üzerinden doğrudan DOM'a uygulanır; state'e
           // yazmak 60Hz render tetikler ve hareketi bozar. State'teki x/y
           // yalnızca tur başında (spawn) doğru olması yeterlidir.
-          // Yerel görsel geri bildirim: toplanan coin sayısı ANINDA güncellenir
-          // (uçan rozet, combo, HUD sayacı). SKOR'a ve GÖREV İLERLEMESİNE
-          // DOKUNMAYIZ — ikisi de sunucunun tekelindedir (0035). İlerleme,
-          // `duo_collect`/`duo_steal` yanıtındaki otorite durumdan uygulanır.
-          if (collectedIds.length > 0) {
-            changed = true
-            next = {
-              ...next,
-              coins: next.coins + collectedIds.length,
-              // TUR TOPLAMI: sonuç ekranı `roundCoins` okur; sunucu yoklaması
-              // gelene kadar iyimser artırırız (sunucu değeri yine otoritedir).
-              roundCoins: (next.roundCoins ?? 0) + collectedIds.length,
-              // TOPLAM TÜRLER: yalnızca YEREL görsel türetim için (rakip HUD'u
-              // `collectedTypes`'tan ilerleme gösterir). Sunucu yanıtı/yoklaması
-              // geldiğinde otorite değerle ezilir.
-              collectedTypes: {
-                ...(next.collectedTypes ?? {}),
-                ...Object.fromEntries(
-                  Object.entries(freshTypes).map(([type, count]) => [
-                    type,
-                    (next.collectedTypes?.[type as Coin['type']] ?? 0) + (count ?? 0),
-                  ]),
-                ),
-              },
-            }
-          }
           if (stealing) {
             changed = true
             next = {
@@ -775,9 +703,9 @@ export const useGameLoop = (deps: LoopDeps) => {
           // bir sonraki `duo_public_state` yoklamasında sunucudan gelir ve
           // yukarıdaki birleştirme (`{ ...player, ...server }`) ile uygulanır.
           //
-          // Burada yalnızca `missionDone` bayrağını kaldırırız ki kutlama bir
-          // kez gösterilsin; `coins`/`stolen`/`collectedTypes` sunucudan
-          // tazelenene kadar korunur (sunucu görev değişiminde bunları sıfırlar).
+          // Burada yalnızca `missionDone` bayrağını işaretleriz ki kutlama bir
+          // kez gösterilsin. Otoriter RPC yanıtı görev değişimini doğrudan,
+          // polling ise yedek olarak uygular.
           if (objectiveDone) {
             changed = true
             next = {
@@ -822,43 +750,135 @@ export const useGameLoop = (deps: LoopDeps) => {
       if (heartbeatDue) lastHeartbeat.current = now
       publishMove(nextX, nextY)
     }
-    // Position and action RPCs are separate requests. Serialize the position
-    // update before dispatching any action that validates against server x/y.
+    // Collect batches include their position; steals still require a preceding
+    // position RPC. Both paths share the position/action queue.
     const actions: Array<() => Promise<void>> = []
     if (collectedIds.length > 0) {
-      // Every collected coin is sent independently; the server serializes
-      // counter updates and each response contains the authoritative state.
-      for (const coinId of collectedIds) {
-        actions.push(async () => {
-          const response = await call('duo_collect', { p_token: token, p_coin_id: coinId })
+      actions.push(async () => {
+        try {
+          const response = await call('duo_collect_batch', {
+            p_token: token,
+            p_coin_ids: collectedIds,
+            p_x: nextX,
+            p_y: nextY,
+            p_expected_objectives_done: me.objectivesDone ?? 0,
+            p_expected_round: state.round,
+          })
           if (!isRpcSuccess(response)) {
-            console.warn('duo_collect rejected', response)
+            console.warn('duo_collect_batch rejected', response)
             return
           }
-          applyServerState(response, state.round)
-          const coin = freshCoins.find((item) => item.id === coinId)
-          broadcast('collect', {
-            ids: [coinId],
-            by: playerId,
-            respawnAt: coin?.type === 'diamond' ? undefined : now + COIN_RESPAWN_MS,
-            diamond: coin?.type === 'diamond',
-          })
-        })
-      }
+          const result = response as {
+            acceptedCoinIds?: unknown
+            objectiveDone?: boolean
+            state?: {
+              objectivesDone?: number
+            }
+          }
+          const authoritativeState = (response as { state?: unknown }).state
+          if (!Array.isArray(result.acceptedCoinIds) || !result.state || !authoritativeState) {
+            throw new Error('duo_collect_batch returned an invalid success payload')
+          }
+          const requestedIds = new Set(collectedIds)
+          const acceptedIds = result.acceptedCoinIds.filter(
+            (id): id is number => Number.isInteger(id) && requestedIds.has(id),
+          )
+          applyServerState(response, state.round, false)
+          if (
+            result.objectiveDone === true &&
+            (result.state.objectivesDone ?? 0) > (me.objectivesDone ?? 0)
+          ) {
+            celebrateRef.current = Date.now()
+            playSound('win')
+          }
+
+          const acceptedCoins = freshCoins.filter((coin) => acceptedIds.includes(coin.id))
+          if (acceptedCoins.length > 0) {
+            const acceptedAt = Date.now()
+            const respawnAt = acceptedAt + COIN_RESPAWN_MS
+            depsRef.current.setState((prev) => {
+              if (prev.round !== state.round) return prev
+              const accepted = new Set(acceptedIds)
+              return {
+                ...prev,
+                coins: prev.coins.map((coin) => {
+                  if (!accepted.has(coin.id)) return coin
+                  return coin.type === 'diamond'
+                    ? { ...coin, collectedBy: 'p1' as const, respawnAt: undefined }
+                    : { ...coin, collectedBy: 'p1' as const, respawnAt }
+                }),
+              }
+            })
+
+            const diamondCoins = acceptedCoins.filter((coin) => coin.type === 'diamond')
+            const regularCoins = acceptedCoins.filter((coin) => coin.type !== 'diamond')
+            const prevCombo = comboRef.current
+            const comboCount = acceptedAt - prevCombo.at <= COMBO_WINDOW_MS ? prevCombo.count + 1 : 1
+            comboRef.current = { count: comboCount, at: acceptedAt }
+            if (diamondCoins.length > 0) playSound('jackpot')
+            else if (comboCount >= COMBO_STREAK_AT) playSound('streak')
+            else if (comboCount >= 2) playSound('combo')
+            else playSound('collect')
+
+            const diamond = diamondCoins[0]
+            if (diamond) {
+              diamondPopRef.current = { x: diamond.x, y: diamond.y, at: acceptedAt }
+            }
+            const pops = acceptedCoins.slice(0, SCORE_POP_MAX).map((coin, index) => ({
+              id: acceptedAt + index,
+              x: coin.x,
+              y: coin.y,
+              value: getCoinValue(coin.type, state.chaosEvent?.id, me.objective),
+              at: acceptedAt,
+            }))
+            scorePopRef.current = [...scorePopRef.current, ...pops].slice(-SCORE_POP_MAX)
+
+            for (const group of [regularCoins, diamondCoins]) {
+              if (group.length === 0) continue
+              const isDiamond = group[0].type === 'diamond'
+              broadcast('collect', {
+                ids: group.map((coin) => coin.id),
+                by: playerId,
+                respawnAt: isDiamond ? undefined : respawnAt,
+                diamond: isDiamond,
+                objectiveState: authoritativeState,
+                round: state.round,
+              })
+            }
+          }
+        } finally {
+          for (const coinId of collectedIds) pendingCollectedCoinIds.current.delete(coinId)
+        }
+      })
     }
     if (stealing) {
       actions.push(async () => {
-        const response = await call('duo_steal', { p_token: token })
+        const response = await call('duo_steal_versioned', {
+          p_token: token,
+          p_expected_objectives_done: me.objectivesDone ?? 0,
+          p_expected_round: state.round,
+        })
         if (!isRpcSuccess(response)) {
           console.warn('duo_steal rejected', response)
           return
         }
         applyServerState(response, state.round)
-        broadcast('steal', { by: playerId })
+        const result = response as { state?: unknown }
+        broadcast('steal', {
+          by: playerId,
+          objectiveState: result.state,
+          round: state.round,
+        })
       })
     }
     if (actions.length > 0) {
-      void runPositionedActions(nextX, nextY, actions).catch((error: unknown) => {
+      const positionIncludedInCollection = collectedIds.length > 0 && !stealing
+      void runPositionedActions(
+        nextX,
+        nextY,
+        actions,
+        positionIncludedInCollection,
+      ).catch((error: unknown) => {
         console.error('Failed to submit authoritative gameplay actions', error)
       })
     }

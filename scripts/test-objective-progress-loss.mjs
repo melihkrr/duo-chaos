@@ -13,9 +13,8 @@
 // INVARIANTS (must hold for EVERY scenario):
 //   I1. While the objective id is UNCHANGED, `objective_progress` is MONOTONIC
 //       (never decreases) and never exceeds the target.
-//   I2. When an objective completes, the overflow collections accepted in the
-//       SAME batch are NOT silently discarded: they must be applied to the NEW
-//       objective if they match it, and `round_coins` must still count them.
+//   I2. A batch is stamped with its observed objective version. If it completes
+//       that objective, no coin in that batch can progress the next objective.
 //   I3. The number of accepted collects for the ACTIVE objective is never
 //       greater than the reported progress (no "collected 4, shows 3").
 //   I4. `duo_public_state` reports the SAME `objectiveProgress` as the last
@@ -148,9 +147,9 @@ const forceObjective = async (client, code, objective) => {
 
 // Stack ALL coins of the given types on the player and return their ids.
 const stackCoins = async (client, code, types) => {
-  await client.query(`update duo_players set x = 500, y = 500 where room_code = $1 and slot = 1`, [code])
+  await client.query(`update duo_players set x = 50, y = 50 where room_code = $1 and slot = 1`, [code])
   await client.query(
-    `update duo_coins set x = 500, y = 500, collected_by = null, respawn_at = 0
+    `update duo_coins set x = 50, y = 50, collected_by = null, respawn_at = 0
       where room_code = $1 and type::text = any($2::text[])`,
     [code, types],
   )
@@ -176,19 +175,31 @@ const publicState = async (client, code, token) => {
   return res
 }
 
-// Fire N concurrent duo_collect calls, each on its own connection.
+// Send one frame's pickups through the same atomic batch RPC as the client.
 const concurrentCollect = async (code, token, coinIds) => {
-  const conns = await Promise.all(coinIds.map(() => connectOne()))
-  const results = await Promise.all(
-    coinIds.map((coinId, i) =>
-      rpc(conns[i], 'duo_collect', { p_code: code, p_token: token, p_coin_id: coinId }).catch((e) => ({
-        ok: false,
-        reason: `error:${e.message}`,
-      })),
-    ),
-  )
-  await Promise.all(conns.map((c) => c.end().catch(() => undefined)))
-  return results
+  const conn = await connectOne()
+  try {
+    const { rows } = await conn.query(
+      `select r.round, p.objectives_done, p.x, p.y
+         from duo_rooms r join duo_players p on p.room_code = r.code
+        where r.code = $1 and p.token = $2`,
+      [code, token],
+    )
+    if (rows.length !== 1) throw new Error('test player/room not found')
+    const result = await rpc(conn, 'duo_collect_batch', {
+      p_code: code,
+      p_token: token,
+      p_coin_ids: coinIds,
+      p_x: rows[0].x,
+      p_y: rows[0].y,
+      p_expected_objectives_done: rows[0].objectives_done,
+      p_expected_round: rows[0].round,
+    })
+    const acceptedIds = new Set(result?.acceptedCoinIds ?? [])
+    return coinIds.map((coinId) => ({ ok: acceptedIds.has(coinId), response: result }))
+  } finally {
+    await conn.end().catch(() => undefined)
+  }
 }
 
 const run = async () => {
@@ -241,12 +252,11 @@ const run = async () => {
     }
 
     // ========================================================================
-    // SCENARIO 2: OVER-COLLECTION — "Collect 2 Red" but 5 red collected.
-    //   The 3 overflow reds must NOT be lost: they must be applied to the NEW
-    //   objective if it is red-based, and `round_coins` must be 5.
-    //   We force the NEXT objective to also be red so overflow is measurable.
+    // SCENARIO 2: OVER-COLLECTION within one observed objective version.
+    //   Every valid coin counts toward round totals, but no excess coin is
+    //   carried into whichever objective becomes active next.
     // ========================================================================
-    console.log('\nScenario 2: "Collect 2 Red" — 5 concurrent red (overflow must not vanish)')
+    console.log('\nScenario 2: "Collect 2 Red" — batch extras never carry to the next objective')
     {
       const code = makeCode('P2')
       const host = `hostP2-${Date.now()}`
@@ -277,6 +287,95 @@ const run = async () => {
         `roundCoins=${after.round_coins} expected=${ok}`,
       )
       check('2: objective completed', Number(after.objectives_done) >= 1, `done=${after.objectives_done}`)
+      check(
+        '2: new objective has zero progress and clean objective counters',
+        Number(after.objective_progress) === 0 &&
+          Number(after.coins) === 0 &&
+          Object.keys(after.collected_types ?? {}).length === 0 &&
+          Number(after.stolen) === 0,
+        `progress=${after.objective_progress} coins=${after.coins} types=${JSON.stringify(after.collected_types)}`,
+      )
+    }
+
+    // A coin for a future objective is collected while Red remains active.
+    // Its round total is retained, but its objective counter must reset.
+    console.log('\nScenario 2b: Blue collected during Red objective starts Blue at zero')
+    {
+      const code = makeCode('PF')
+      const host = `hostPF-${Date.now()}`
+      const guest = `guestPF-${Date.now()}`
+      await bootstrapRoom(client, code, host, guest)
+      await forceObjective(client, code, {
+        id: 'collect-red-2-future-test',
+        kind: 'collect',
+        label: 'Collect 2 Red',
+        shortLabel: '2 Red',
+        target: 2,
+        coinType: 'red',
+        points: 40,
+      })
+
+      const blueCoins = await stackCoins(client, code, ['blue'])
+      const redCoins = await stackCoins(client, code, ['red'])
+      const collectFrame = async (ids, expectedDone) => {
+        const { rows } = await client.query(
+          `select round from duo_rooms where code = $1`,
+          [code],
+        )
+        return rpc(client, 'duo_collect_batch', {
+          p_code: code,
+          p_token: host,
+          p_coin_ids: ids,
+          p_x: 50,
+          p_y: 50,
+          p_expected_objectives_done: expectedDone,
+          p_expected_round: rows[0].round,
+        })
+      }
+
+      const futureCoinId = blueCoins[0]?.coin_id
+      const beforeCompletion = await collectFrame([futureCoinId], 0)
+      check(
+        'Blue collected during Red does not progress Red',
+        beforeCompletion?.state?.objectiveProgress === 0 &&
+          Number(beforeCompletion?.state?.collectedTypes?.blue ?? 0) === 1,
+      )
+
+      const completingBatch = await collectFrame(
+        redCoins.slice(0, 2).map((coin) => coin.coin_id),
+        0,
+      )
+      const afterCompletion = await readPlayer(client, code)
+      check(
+        'Red rollover clears the earlier Blue and starts the next objective at zero',
+        completingBatch?.objectiveDone === true &&
+          Number(afterCompletion.objectives_done) === 1 &&
+          Number(afterCompletion.objective_progress) === 0 &&
+          Object.keys(afterCompletion.collected_types ?? {}).length === 0,
+      )
+
+      await client.query(
+        `update duo_players
+            set objective = $2::jsonb, objective_progress = 0,
+                collected_types = '{}'::jsonb, coins = 0, stolen = 0, mission_done = false
+          where room_code = $1 and slot = 1`,
+        [code, JSON.stringify({
+          id: 'collect-blue-2-future-test',
+          kind: 'collect',
+          label: 'Collect 2 Blue',
+          shortLabel: '2 Blue',
+          target: 2,
+          coinType: 'blue',
+          points: 40,
+        })],
+      )
+      const freshBlue = blueCoins.find((coin) => coin.coin_id !== futureCoinId)
+      const blueProgress = await collectFrame([freshBlue.coin_id], 1)
+      check(
+        'A Blue collected after Blue becomes active progresses Blue',
+        blueProgress?.state?.objectiveProgress === 1 &&
+          Number(blueProgress?.state?.collectedTypes?.blue ?? 0) === 1,
+      )
     }
 
     // ========================================================================
@@ -303,13 +402,13 @@ const run = async () => {
       const ids = rows.map((r) => r.coin_id)
       // Track the progress reported for the ACTIVE objective. When the
       // objective completes, the server reports `completedProgress` (the final
-      // value of the finished objective) AND the new objective's carried
+      // value of the finished objective) AND the new objective's zeroed
       // progress. We assert the completion is OBSERVABLE (4/4) and that no
       // valid collection is lost.
       //
       // MONOTONICITY is per-OBJECTIVE: progress must never decrease while the
       // objective id is UNCHANGED. On completion the objective id changes and
-      // the new objective legitimately starts at its carried value.
+      // the new objective legitimately starts at zero.
       const seen = []
       let monotonic = true
       let last = 0

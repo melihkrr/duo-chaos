@@ -13,6 +13,7 @@ import {
 } from './config'
 import { friendlyError } from './errors'
 import {
+  applyAuthoritativeRivalState,
   createPositionActionQueue,
   isRpcSuccess,
   runAfterPositionSync,
@@ -221,17 +222,14 @@ const toLocalCoins = (
  *   tarafından hesaplandığı için) tutarlıydı ama TUR İSTATİSTİKLERİ
  *   (`roundCoins`/`roundStolen`) ve `coins`/`stolen` ıraksıyordu.
  *
- * ÇÖZÜM: Bu alanlar için SUNUCU TEK OTORİTEDİR. Sunucu değeri geldiğinde
- *   AYNEN uygularız (monotonik max YOK). İstemci yalnızca sunucu yoklaması
- *   gelene kadar iyimser gösterir; yoklama gelince sunucu değeri kazanır ve
- *   iki istemci AYNI değere yakınsar.
+ * ÇÖZÜM: Bu alanlar için SUNUCU TEK OTORİTEDİR. Eylem RPC yanıtı ve bunun
+ *   Realtime yayını aynı sunucu değerini anında uygular; public-state yoklaması
+ *   yedek yakınsamadır. İstemci sayaçları iyimser olarak artırmaz.
  *
  * Neden "collect → ilerleme kaybolur" hatası geri gelmez?
- *   Sunucu artık `duo_collect`/`duo_steal` içinde `round_coins`/`round_stolen`
- *   sayaçlarını GERÇEKTEN artırır (bkz. 0027_round_stats_authority.sql) ve
- *   `duo_public_state` bunları döndürür. Yani sunucu değeri, iyimser değerin
- *   EN AZ onun kadar güncel halidir; uygulamak ilerlemeyi SİLMEZ. Eski kodda
- *   sunucu bu sayaçları tutmadığı için `max` şarttı; artık gereksiz ve zararlı.
+ *   `duo_collect_batch`/`duo_steal_versioned` işlemleri objective progress ve
+ *   tur sayaçlarını atomik olarak günceller. Bu alanlar eylem yanıtı/yayını
+ *   üzerinden doğrudan uygulanır; public-state snapshot yedek otoritedir.
  *
  * `collectedTypes` için de sunucu otoritedir; sunucu görev değişiminde
  *   sayaçları sıfırlar ve bu sıfırlama iki istemcide de aynı anda görünür.
@@ -291,7 +289,7 @@ const mergeProgress = (
   // SUNUCU OTORİTESİ + MONOTONİKLİK (KÖK SORUN DÜZELTMESİ).
   //
   // KÖK SORUN ("4/4 → 3/4 → 4/4"): `objectiveProgress`'e İKİ yazar vardı:
-  //   1. TAZE yol — `duo_collect`/`duo_steal` RPC yanıtı (`applyServerState`),
+  //   1. TAZE yol — versioned action RPC yanıtı (`applyServerState`),
   //      anında ve otoriter (4/4 gösterir).
   //   2. BAYAT yol — `duo_public_state` yoklaması (~1 sn gecikmeli). Snapshot
   //      4. toplama commit edilmeden ÖNCE alındıysa ilerleme 3 taşır.
@@ -690,21 +688,29 @@ export const useDuoChaos = () => {
   )
 
   const runPositionedActions = useCallback(
-    (x: number, y: number, actions: Array<() => Promise<void>>) =>
-      positionActionQueue.current.runActions(() =>
-        runAfterPositionSync(
-          async () => {
-            const response = await room.call('duo_move', {
-              p_token: room.token ?? room.playerId,
-              p_x: x,
-              p_y: y,
-            })
-            if (!isRpcSuccess(response)) {
-              throw new Error(`duo_move rejected before gameplay action: ${JSON.stringify(response)}`)
-            }
-          },
-          actions,
-        ),
+    (
+      x: number,
+      y: number,
+      actions: Array<() => Promise<void>>,
+      positionIncludedInAction = false,
+    ) =>
+      positionActionQueue.current.runActions(
+        () =>
+          runAfterPositionSync(
+            async () => {
+              const response = await room.call('duo_move', {
+                p_token: room.token ?? room.playerId,
+                p_x: x,
+                p_y: y,
+              })
+              if (!isRpcSuccess(response)) {
+                throw new Error(`duo_move rejected before gameplay action: ${JSON.stringify(response)}`)
+              }
+            },
+            actions,
+            positionIncludedInAction,
+          ),
+        positionIncludedInAction,
       ),
     [room],
   )
@@ -910,10 +916,22 @@ export const useDuoChaos = () => {
     })
 
     const offCollect = room.on('collect', (payload) => {
-      const data = payload as { ids?: number[]; by?: string; respawnAt?: number; diamond?: boolean }
+      const data = payload as {
+        ids?: number[]
+        by?: string
+        respawnAt?: number
+        diamond?: boolean
+        objectiveState?: import('./objectiveSync').AuthoritativeActionState
+        round?: number
+      }
       if (!data || data.by === room.playerId || !data.ids || data.ids.length === 0) return
       const ids = new Set(data.ids)
       noteRivalAlive()
+      const authoritativeState = data.objectiveState
+      const actionRound = data.round
+      if (authoritativeState && typeof actionRound === 'number') {
+        setState((prev) => applyAuthoritativeRivalState(prev, authoritativeState, actionRound))
+      }
       // Rakip ELMASI (jackpot) aldıysa ayırt edici sesi çalarız: elmas tek
       // seferlik ve 50 puanlık olduğundan, oyuncu büyük ödülü KAYBETTİĞİNİ
       // net hisseder. `diamond` bayrağı `useGameLoop` collect yayınından gelir.
@@ -933,112 +951,33 @@ export const useDuoChaos = () => {
           ? data.respawnAt
           : Date.now() + COIN_RESPAWN_MS
       setState((prev) => {
-        // Zaten toplanmış coinleri TEKRAR saymayız (idempotent). Aksi halde
-        // aynı `collect` paketi iki kez gelirse rakip skoru şişer.
-        let newlyCollected = 0
-        // Rakibin topladığı coinlerin TÜRLERİNİ de sayarız. Aksi halde rakip
-        // HUD'undaki görev ilerlemesi ("Collect 3 Emerald" gibi tür bazlı
-        // görevlerde) hep 0 kalıyordu: `progressOf` `collectedTypes`'a bakar,
-        // ancak eski kod yalnızca `coins` sayacını artırıyordu. Coin düzeni iki
-        // istemcide de aynı (deterministik seed) olduğundan türü id'den
-        // yerel listeden güvenle çözebiliriz.
-        const gainedTypes: Partial<Record<Coin['type'], number>> = {}
+        if (typeof actionRound === 'number' && prev.round !== actionRound) return prev
         const coins = prev.coins.map((coin) => {
           if (!ids.has(coin.id)) return coin
           if (coin.collectedBy) return coin
-          newlyCollected += 1
-          gainedTypes[coin.type] = (gainedTypes[coin.type] ?? 0) + 1
           // Elmas tek seferlik: respawn planlama.
           const nextRespawnAt = coin.type === 'diamond' ? undefined : respawnAt
           return { ...coin, collectedBy: 'p2' as const, respawnAt: nextRespawnAt }
         })
-        if (newlyCollected === 0) return prev
-        return {
-          ...prev,
-          coins,
-          players: prev.players.map((player, index) => {
-            // Yerel state'te index 1 = "rakip" (iki istemcide de).
-            if (index !== 1) return player
-            const collectedTypes = { ...(player.collectedTypes ?? {}) }
-            for (const [type, count] of Object.entries(gainedTypes)) {
-              collectedTypes[type as Coin['type']] =
-                (collectedTypes[type as Coin['type']] ?? 0) + (count ?? 0)
-            }
-            // KÖK SORUN DÜZELTMESİ ("görev sahibi 2/3, rakip 3/3 görüyor"):
-            // RAKİBİN GÖREV İLERLEMESİNİ YEREL OLARAK TÜRETMEYİZ/ARTIRMAYIZ.
-            //
-            // Görev ilerlemesinin TEK OTORİTESİ görev SAHİBİNİN sunucu
-            // durumudur (`duo_mission_progress`). Rakip istemci, kendi yerel
-            // `collect` yayınından sahibin ilerlemesini hesaplarsa, sahip henüz
-            // sunucuya yazmamışken (veya yoklama gecikmişken) ilerlemeyi
-            // yanlışlıkla İLERİ taşır. Eski kod burada `derivedProgress`
-            // türetip `Math.max` ile monotonik birleştiriyordu; bu değer bir kez
-            // 3'e ulaşınca `mergeProgress`'in `Math.max`'i onu SONSUZA DEK 3'te
-            // kilitliyordu — sahip 2/3 gösterirken rakip 3/3 gösteriyordu.
-            //
-            // Çözüm: yalnızca iyimser `coins`/`roundCoins`/`collectedTypes`
-            // sayaçlarını güncelleriz (bunlar skor/HUD için gereklidir ve
-            // sunucu değeri geldiğinde otorite olur). `objectiveProgress`'i
-            // BURADA HİÇ yazmayız; rakip satırının ilerlemesi yalnızca sunucu
-            // yoklamasından (`mergeRivalProgress`, aynı görev içinde monotonik) gelir.
-            return {
-              ...player,
-              coins: player.coins + newlyCollected,
-              // TUR TOPLAMI: sonuç ekranı `roundCoins` okur; sunucu yoklaması
-              // gelene kadar iyimser olarak artırırız (iki istemci de aynı
-              // sonucu görsün diye sunucu değeri yine otoritedir).
-              roundCoins: (player.roundCoins ?? 0) + newlyCollected,
-              collectedTypes,
-            }
-          }),
-        }
+        if (coins.every((coin, index) => coin === prev.coins[index])) return prev
+        return { ...prev, coins }
       })
     })
 
     const offSteal = room.on('steal', (payload) => {
-      const data = payload as { by?: string }
+      const data = payload as {
+        by?: string
+        objectiveState?: import('./objectiveSync').AuthoritativeActionState
+        round?: number
+      }
       if (!data || data.by === room.playerId) return
       noteRivalAlive()
       playSound('bump')
-      // Yerel state'te index 0 = "ben", index 1 = "rakip" (iki istemcide de).
-      //
-      // ÖNEMLİ (ÇİFT SAYMA): Rakip benden çaldığında YALNIZCA rakibin `stolen`
-      // sayacını artırırız. Kurbanın (benim) `coins` değerini BURADA
-      // DÜŞÜRMEYİZ: yerel oyun döngüsü (`useGameLoop`), çalmayı BAŞLATAN taraf
-      // ben olduğumda kurbanın coinini zaten düşürür. Ancak rakip çaldığında
-      // döngü bunu bilmez; bu yüzden kurban tarafındaki düşüşü sunucu
-      // (`duo_steal` → `coins = greatest(0, coins - 1)`) uygular ve bir sonraki
-      // `duo_public_state` yoklaması yerel state'e yansıtır. Burada da
-      // düşürürsek düşüş İKİ KEZ olur ("puanlar tutmuyor" hatası).
-      setState((prev) => ({
-        ...prev,
-        players: prev.players.map((player, index) => {
-          if (index === 0) return player
-          // KÖK SORUN DÜZELTMESİ ("görev sahibi 2/3, rakip 3/3 görüyor"):
-          //
-          // RAKİBİN GÖREV İLERLEMESİNİ YEREL OLARAK TÜRETMEYİZ/ARTIRMAYIZ.
-          // Görevin SAHİBİ, ilerlemesinin TEK otoritesidir; sunucu
-          // (`duo_mission_progress`) sahibin `stolen` sayacından ilerlemeyi
-          // hesaplar. Rakip istemci ise yalnızca `steal` YAYININI görür — bu
-          // yayın kaybolabilir, gecikebilir veya sahibin sunucudaki `stolen`
-          // değerinden FARKLI olabilir. Rakip buradan ilerleme türetirse yerel
-          // değeri sunucunun otoriter değerinin ÜSTÜNE çıkar; `mergeProgress`
-          // monotonik (`Math.max`) olduğu için bu yanlış değer BİR DAHA
-          // DÜŞMEZ → rakip kalıcı olarak "3/3" gösterirken sahip "2/3" görür.
-          //
-          // ÇÖZÜM: Rakibin `objectiveProgress`'ine DOKUNMAYIZ. Yalnızca çalma
-          // GÖRSELİ ve tur istatistiği için `stolen`/`roundStolen` iyimser
-          // sayaçlarını artırırız; görev ilerlemesi bir sonraki
-          // `duo_public_state` yoklamasında sunucudan (otoriter) gelir.
-          const stolen = player.stolen + 1
-          return {
-            ...player,
-            stolen,
-            // TUR TOPLAMI: sonuç ekranı `roundStolen` okur; iyimser artır.
-            roundStolen: (player.roundStolen ?? 0) + 1,
-          }
-        }),
-      }))
+      const authoritativeState = data.objectiveState
+      const actionRound = data.round
+      if (authoritativeState && typeof actionRound === 'number') {
+        setState((prev) => applyAuthoritativeRivalState(prev, authoritativeState, actionRound))
+      }
     })
 
     const offEmote = room.on('emote', (payload) => {

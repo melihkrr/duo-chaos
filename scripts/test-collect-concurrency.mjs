@@ -168,9 +168,9 @@ const forceObjective = async (client, code, objective) => {
 
 // Move the host to the centre and stack all coins of the given types on it.
 const stackCoins = async (client, code, types) => {
-  await client.query(`update duo_players set x = 500, y = 500 where room_code = $1 and slot = 1`, [code])
+  await client.query(`update duo_players set x = 50, y = 50 where room_code = $1 and slot = 1`, [code])
   await client.query(
-    `update duo_coins set x = 500, y = 500, collected_by = null, respawn_at = 0
+    `update duo_coins set x = 50, y = 50, collected_by = null, respawn_at = 0
       where room_code = $1 and type::text = any($2::text[])`,
     [code, types],
   )

@@ -1,30 +1,18 @@
 // ============================================================================
-// DUO CHAOS — live test for the CONCURRENT collect path (latency optimization).
+// DUO CHAOS — live test for the atomic batch-collect path.
 //
 // BACKGROUND
-//   The client used to issue, per frame with a nearby coin:
-//       await duo_move(...)            // RTT #1
-//       for (coin of coins) await duo_collect(...)  // RTT #2..N (serialized)
-//   That sequential chain added at least one full network round-trip before the
-//   authoritative objective progress could be applied → "progress appears late".
-//
-//   The optimization fires the position refresh AND all collects CONCURRENTLY:
-//       void duo_move(...)                       // fire-and-forget
-//       for (coin of coins) void duo_collect(...) // concurrent, applied on resolve
-//
-//   This is safe because:
-//     * `duo_move` is idempotent (writes x/y only).
-//     * `duo_collect` locks the player row `FOR UPDATE` (0039), serializing
-//       concurrent actions per player so none is lost or double-counted.
+//   The client used to await a position RPC and then send one locked collect
+//   RPC per coin. The batch endpoint now writes the action position and claims
+//   all coin rows in one transaction, then returns one authoritative state.
 //
 // WHAT THIS TEST PROVES
-//   It reproduces the EXACT new client sequence against the LIVE DB: for each
-//   "frame" it fires `duo_move` + N `duo_collect` calls on SEPARATE connections
-//   SIMULTANEOUSLY (no ordering), then asserts:
+//   It reproduces the client batch against the LIVE DB, then asserts:
 //     1. every valid collect is accepted exactly once (round_coins invariant),
 //     2. objective progress is monotonic and never exceeds the collected count,
 //     3. no duplicate counting (round_coins == distinct coins collected),
-//     4. it holds across MANY rapid frames (stress).
+//   4. each frame uses one RPC regardless of the number of coins,
+//   5. it holds across MANY rapid frames (stress).
 //
 // Usage: SUPABASE_DB_PASSWORD=... node scripts/test-collect-latency.mjs
 // ============================================================================
@@ -201,28 +189,30 @@ const readPlayer = async (client, code) => {
 }
 
 // ---------------------------------------------------------------------------
-// THE CORE SIMULATION: one "frame" = fire duo_move + all collects CONCURRENTLY
-// on separate connections, exactly like the optimized client. Returns the
-// per-call results (in the same order as `coinIds`).
+// One gameplay frame is one atomic server call with the observed objective and
+// round versions attached.
 // ---------------------------------------------------------------------------
 const fireFrame = async (code, token, x, y, coinIds) => {
-  const conns = await Promise.all(coinIds.map(() => connectOne()))
-  const moveConn = await connectOne()
+  const conn = await connectOne()
   try {
-    // Position refresh and ALL collects issued together — no ordering.
-    const movePromise = rpc(moveConn, 'duo_move', { p_code: code, p_token: token, p_x: x, p_y: y }).catch(
-      () => null,
+    const { rows } = await conn.query(
+      `select r.round, p.objectives_done
+         from duo_rooms r join duo_players p on p.room_code = r.code
+        where r.code = $1 and p.token = $2`,
+      [code, token],
     )
-    const collectPromises = coinIds.map((coinId, i) =>
-      rpc(conns[i], 'duo_collect', { p_code: code, p_token: token, p_coin_id: coinId }).catch((e) => ({
-        ok: false,
-        reason: `error:${e.message}`,
-      })),
-    )
-    const [, ...results] = await Promise.all([movePromise, ...collectPromises])
-    return results
+    if (rows.length !== 1) throw new Error('test player/room not found')
+    return await rpc(conn, 'duo_collect_batch', {
+      p_code: code,
+      p_token: token,
+      p_coin_ids: coinIds,
+      p_x: x,
+      p_y: y,
+      p_expected_objectives_done: rows[0].objectives_done,
+      p_expected_round: rows[0].round,
+    })
   } finally {
-    await Promise.all([moveConn, ...conns].map((c) => c.end().catch(() => undefined)))
+    await conn.end().catch(() => undefined)
   }
 }
 
@@ -231,10 +221,9 @@ const run = async () => {
 
   try {
     // ------------------------------------------------------------------------
-    // SCENARIO 1: the EXACT new client sequence — concurrent move + 4 collects
-    // that COMPLETE the objective. Assert on `round_coins` (never reset).
+    // SCENARIO 1: one batch claims all available coins and completes the objective.
     // ------------------------------------------------------------------------
-    console.log('Scenario 1: concurrent duo_move + 4 duo_collect (objective completes)')
+    console.log('Scenario 1: one duo_collect_batch claims all coins (objective completes)')
     const code = makeCode('LC')
     const hostToken = `host-${Date.now()}`
     const guestToken = `guest-${Date.now()}`
@@ -244,8 +233,9 @@ const run = async () => {
     const blueIds = blueRows.map((r) => r.coin_id)
     console.log(`Blue coins on map: ${blueIds.length} (ids: ${blueIds.join(', ')})`)
 
-    const results = await fireFrame(code, hostToken, CENTER_X, CENTER_Y, blueIds)
-    const okCount = results.filter((r) => r && r.ok).length
+    const result = await fireFrame(code, hostToken, CENTER_X, CENTER_Y, blueIds)
+    const acceptedIds = result?.acceptedCoinIds ?? []
+    const okCount = acceptedIds.length
     console.log(`  accepted collects: ${okCount}/${blueIds.length}`)
     check('every concurrent collect was accepted', okCount === blueIds.length, `got ${okCount}`)
 
@@ -277,8 +267,8 @@ const run = async () => {
     const blueRows2 = await stackCoins(client, code2, ['blue'])
     const blueIds2 = blueRows2.map((r) => r.coin_id)
     const take2 = blueIds2.slice(0, 3) // deliberately leave one uncollected
-    const results2 = await fireFrame(code2, host2, CENTER_X, CENTER_Y, take2)
-    const ok2 = results2.filter((r) => r && r.ok).length
+    const result2 = await fireFrame(code2, host2, CENTER_X, CENTER_Y, take2)
+    const ok2 = (result2?.acceptedCoinIds ?? []).length
     const after2 = await readPlayer(client, code2)
     console.log(`  accepted: ${ok2}/${take2.length}  coins=${after2.coins} progress=${after2.objective_progress}`)
     check('sequential-equivalent: all 3 accepted', ok2 === take2.length, `got ${ok2}`)
@@ -340,7 +330,7 @@ const run = async () => {
       const slice = stressIds.slice(f * frameSize, f * frameSize + frameSize)
       if (slice.length === 0) break
       const res = await fireFrame(code3, host3, CENTER_X, CENTER_Y, slice)
-      collectedSoFar += res.filter((r) => r && r.ok).length
+      collectedSoFar += (res?.acceptedCoinIds ?? []).length
       const snap = await readPlayer(client, code3)
       const progress = Number(snap.objective_progress)
       if (progress < lastProgress) monotonic = false
