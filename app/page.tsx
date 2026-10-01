@@ -60,7 +60,7 @@ export default function Page() {
     const { state, chaos, cosmetics, toast, progress } = bot
     return (
       <main className="game-shell">
-        <TopBar code={null} onLeave={() => setConfirmLeave(true)} />
+        <TopBar code={null} showLeave onLeave={() => setConfirmLeave(true)} />
 
         {state.phase === 'home' && (
           <Home

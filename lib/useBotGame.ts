@@ -60,6 +60,11 @@ const SCORE_POP_MAX = 6
 const COMBO_WINDOW_MS = 2_200
 const COMBO_STREAK_AT = 4
 const OBJECTIVE_CELEBRATE_MS = 1_400
+/**
+ * Çalma başına puan. Çok oyunculu `duo_steal` RPC'sindeki `v_steal_score := 20`
+ * ile BİREBİR aynıdır; tek oyunculu modda da aynı puanı uygularız.
+ */
+const STEAL_SCORE = 20
 
 export type BotGameApi = {
   state: State
@@ -569,16 +574,26 @@ export const useBotGame = (): BotGameApi => {
 
         if (collectIds.length > 0) {
           changed = true
-          const freshTypes = s.coins
-            .filter((c) => collectIds.includes(c.id))
-            .reduce<Partial<Record<CoinType, number>>>(
-              (counts, coin) => ({ ...counts, [coin.type]: (counts[coin.type] ?? 0) + 1 }),
-              {},
-            )
+          const collectedCoins = s.coins.filter((c) => collectIds.includes(c.id))
+          const freshTypes = collectedCoins.reduce<Partial<Record<CoinType, number>>>(
+            (counts, coin) => ({ ...counts, [coin.type]: (counts[coin.type] ?? 0) + 1 }),
+            {},
+          )
+          // PUAN TABANLI SKOR (çok oyunculu `duo_collect` ile BİREBİR aynı):
+          // Her toplanan coin, `getCoinValue` kadar puan ekler. Önceden yalnızca
+          // görev tamamlanınca puan ekleniyordu; bu yüzden tek oyunculu modda
+          // "sadece görevlerden puan alabiliyorum" hatası vardı.
+          const coinPoints = collectedCoins.reduce(
+            (sum, coin) => sum + getCoinValue(coin.type, s.chaosEvent?.id, next.objective),
+            0,
+          )
           next = {
             ...next,
             coins: next.coins + collectIds.length,
             roundCoins: (next.roundCoins ?? 0) + collectIds.length,
+            score: next.score + coinPoints,
+            roundScore: (next.roundScore ?? 0) + coinPoints,
+            totalScore: (next.totalScore ?? 0) + coinPoints,
             collectedTypes: {
               ...(next.collectedTypes ?? {}),
               ...Object.fromEntries(
@@ -592,7 +607,15 @@ export const useBotGame = (): BotGameApi => {
         }
         if (stealing) {
           changed = true
-          next = { ...next, stolen: next.stolen + 1, roundStolen: (next.roundStolen ?? 0) + 1 }
+          // ÇALMA PUANI (çok oyunculu `duo_steal` ile aynı): +20 puan.
+          next = {
+            ...next,
+            stolen: next.stolen + 1,
+            roundStolen: (next.roundStolen ?? 0) + 1,
+            score: next.score + STEAL_SCORE,
+            roundScore: (next.roundScore ?? 0) + STEAL_SCORE,
+            totalScore: (next.totalScore ?? 0) + STEAL_SCORE,
+          }
         }
         if (stolenFrom) {
           changed = true

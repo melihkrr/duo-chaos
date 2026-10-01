@@ -7,6 +7,12 @@ import { isMuted, toggleMuted, unlockAudio } from '../../lib/sound'
 type Props = {
   code: string | null
   onLeave: () => void
+  /**
+   * Oda kodu olmasa bile "Leave" butonunu göster. Tek oyunculu (bot) modda
+   * oda kodu YOKTUR ama kullanıcı yine de maçtan ayrılabilmelidir; bu yüzden
+   * bot modunda `true` geçirilir.
+   */
+  showLeave?: boolean
 }
 
 /**
@@ -23,7 +29,7 @@ type Props = {
  * alabilir. Bu yüzden üç öğenin doğal genişliklerini ölçüp sığıp sığmadığına
  * KESİN karar veririz ve `topbar-wrapped` sınıfını buna göre uygularız.
  */
-export function TopBar({ code, onLeave }: Props) {
+export function TopBar({ code, onLeave, showLeave = false }: Props) {
   const [muted, setMuted] = useState(() => isMuted())
   // Üç öğe tek satıra sığmıyor mu? True iken oda kodu alt satıra iner.
   const [wrapped, setWrapped] = useState(false)
@@ -139,7 +145,7 @@ export function TopBar({ code, onLeave }: Props) {
         >
           {muted ? '🔇' : '🔊'}
         </Button>
-        {code && (
+        {(code || showLeave) && (
           <Button variant="ghost" onClick={onLeave}>
             Leave
           </Button>

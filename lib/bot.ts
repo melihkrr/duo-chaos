@@ -56,6 +56,14 @@ const MISTAKE_MS = 900
 const RETARGET_MS = 420
 /** Bot, rakibi bu mesafedeyse ve uygun koşullar varsa çalmaya yönelir. */
 const STEAL_APPROACH_RADIUS = 26
+/**
+ * ÇALMA YAKLAŞMA MESAFESİ (standoff). Bot, çalma menziline (`STEAL_RADIUS`)
+ * girdikten sonra rakibin ÜZERİNE yürümeyi BIRAKIR; bu mesafede durur. Aksi
+ * halde bot rakibin "içine giriyordu" ("bot beni takip edip içime giriyor").
+ * `STEAL_RADIUS`'tan biraz büyük seçilir ki menzil içinde kalıp çalabilsin ama
+ * çakışmasın.
+ */
+const STEAL_STANDOFF_RADIUS = STEAL_RADIUS + 4
 /** Botun çalma denemesi için minimum bekleme (ms) — insanla aynı cooldown. */
 const BOT_STEAL_COOLDOWN_MS = 700
 
@@ -151,15 +159,28 @@ export const decideBot = (input: BotInput, memory: BotMemory): BotDecision => {
   const stealObjective = objective?.kind === 'steal'
   const stealNeeded = stealObjective && progress < target
   let wantSteal = false
+  // Çalma YAKLAŞMASI (isteğe bağlı). ÖNEMLİ: Bu, coin toplamayı ASLA
+  // kısa devre yapmaz. Önceden burada erken `return` vardı; bot çalma görevi
+  // varken rakibi yakın olduğu sürece coin toplamayı tamamen bırakıp sürekli
+  // rakibi kovalıyordu ("bot skor üretmiyor" regresyonu). Artık yaklaşma
+  // yalnızca bir TERCİH'tir: uygun bir coin hedefi yoksa devreye girer.
+  let stealApproach = false
   if (rival) {
     const rivalDist = dist(bx, by, rival.x, rival.y)
     const canStealNow = now - memory.lastStealAt >= BOT_STEAL_COOLDOWN_MS
-    // Rakip menzile girdiyse ve (çalma görevi varsa veya fırsatçıysa) çal.
-    if (rivalDist <= STEAL_RADIUS && canStealNow) {
+    // Çalma YALNIZCA gerçekten gerekliyse (çalma görevi + henüz tamamlanmadıysa)
+    // hedeflenir. Önceden bot, çalma görevi OLMAZSA BİLE rakip menzile girince
+    // fırsatçı olarak ona yürüyordu; bu yüzden "bot beni takip edip içime
+    // giriyordu". Artık fırsatçı takip YOKTUR.
+    if (stealNeeded && rivalDist <= STEAL_RADIUS && canStealNow) {
+      // Menzil içinde ve çalma hazır: çal.
       wantSteal = true
-    } else if (stealNeeded && rivalDist <= STEAL_APPROACH_RADIUS) {
-      // Çalma görevi var ve rakip yakın: ona doğru yönel.
-      return approach(bx, by, rival.x, rival.y, [], false)
+    } else if (stealNeeded && rivalDist <= STEAL_APPROACH_RADIUS && rivalDist > STEAL_STANDOFF_RADIUS) {
+      // Çalma görevi var, rakip yakın ama henüz menzilde değil: yaklaşmayı
+      // TERCİH et. STANDOFF: menzile yaklaşınca (STEAL_STANDOFF_RADIUS) dururuz;
+      // böylece rakibin üzerine yürüyüp "içine girmeyiz". Bu bayrak aşağıda
+      // yalnızca geçerli bir coin hedefi YOKSA kullanılır.
+      stealApproach = true
     }
   }
 
@@ -236,11 +257,21 @@ export const decideBot = (input: BotInput, memory: BotMemory): BotDecision => {
     .map((c) => c.id)
 
   // --- 5) HAREKET ---
-  if (wantSteal && rival) {
-    return approach(bx, by, rival.x, rival.y, collectIds, true)
-  }
+  // ÖNCELİK: Coin toplamak. Çalma YAKLAŞMASI yalnızca geçerli bir coin hedefi
+  // YOKSA devreye girer; böylece bot çalma görevi varken bile skor üretmeye
+  // devam eder (regresyon düzeltmesi).
+  //
+  // ÇALMA ANINDA ÜZERİNE YÜRÜME YOK: `wantSteal` true iken bot zaten
+  // `STEAL_RADIUS` içindedir; çalma bu karede gerçekleşir. Rakibin ÜZERİNE
+  // yürümek yerine normal coin hedefine devam eder (veya durur). Böylece bot
+  // rakibin "içine girmez". Çalma bayrağı yine de iletilir.
   if (targetCoin) {
-    return approach(bx, by, targetCoin.x, targetCoin.y, collectIds, false)
+    return approach(bx, by, targetCoin.x, targetCoin.y, collectIds, wantSteal)
+  }
+  // Coin hedefi yok ama çalma yaklaşması tercih ediliyorsa rakibe doğru ilerle
+  // (standoff mesafesinde durur; üzerine yürümez).
+  if (stealApproach && rival) {
+    return approach(bx, by, rival.x, rival.y, collectIds, wantSteal)
   }
   return { dx: 0, dy: 0, collectIds, steal: wantSteal }
 }

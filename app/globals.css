@@ -550,6 +550,13 @@ h3 {
   box-shadow: 0 4px 0 rgba(0, 0, 0, 0.12);
 }
 
+/* Tek oyunculu mod açıklaması: butonların ALTINDA, üstünde nefes alanı. */
+.bot-hint {
+  margin: 16px auto 0;
+  max-width: 44ch;
+  text-align: center;
+}
+
 .mode-tab {
   flex: 1;
   display: inline-flex;
@@ -584,12 +591,9 @@ h3 {
   cursor: not-allowed;
 }
 
-@media (min-width: 960px) {
-  .mode-toggle {
-    margin-left: 0;
-    margin-right: 0;
-  }
-}
+/* NOT: `.mode-toggle` masaüstünde de `.hero-actions` gibi ORTALANMALIDIR.
+   Önceden burada `margin-left/right: 0` ile ortalamayı bozan bir masaüstü
+   kuralı vardı; kaldırıldı. Artık `margin: 0 auto 16px` her genişlikte geçerli. */
 
 .profile-card {
   width: 100%;
@@ -1607,6 +1611,10 @@ h3 {
   position: absolute;
   right: 22px;
   bottom: 22px;
+  /* GÖREV/HUD katmanlarının ÜZERİNDE olmalı: tam ekranda joystick, görev
+     kartlarının (HUD) altında kalıp dokunulamaz hale geliyordu. `z-index`
+     ile joystick'i HUD'un üstüne çıkarırız. */
+  z-index: 50;
   opacity: 0.42;
   background: rgba(255, 255, 255, 0.28);
   border-color: rgba(43, 36, 64, 0.45);

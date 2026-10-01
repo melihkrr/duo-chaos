@@ -113,6 +113,12 @@ export const useProgress = (): ProgressApi => {
 
   const refresh = useCallback(async () => {
     if (!hasSupabase) return
+    // HİDRASYON YARIŞI: `clientId` henüz localStorage'dan çözülmediyse ('local')
+    // sunucudan ÇEKMEYİZ. Aksi halde bilinmeyen bir istemci için sunucu
+    // varsayılan (seviye 1) döndürür ve bu yanıt, gerçek ilerleme yüklendikten
+    // SONRA gelip onu EZEBİLİR ("profil seviyesi 1'de kalıyor, yenileyince
+    // düzeliyor" hatası). Gerçek `clientId` çözülünce efekt yeniden çalışır.
+    if (clientId === 'local') return
     try {
       const data = await rpc('duo_get_progress', { p_client_id: clientId })
       if (data) {

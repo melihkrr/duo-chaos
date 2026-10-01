@@ -142,7 +142,7 @@ export function Home({ progress, onCreate, onJoin, onPlayBot, busy, error, initi
             )}
           </div>
           {mode === 'bot' && (
-            <p className="muted">
+            <p className="muted bot-hint">
               Single-player match against a medium-difficulty bot. Same rules, same arena.
             </p>
           )}
