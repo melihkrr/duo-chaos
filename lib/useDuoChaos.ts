@@ -5,6 +5,7 @@ import {
   BATTLE_MS,
   COIN_RESPAWN_MS,
   COUNTDOWN_MS,
+  MATCH_PRESENCE_GRACE_MS,
   MATCH_ROUNDS,
   POLL_MS,
   REMOTE_POS_TTL,
@@ -266,6 +267,15 @@ export const useDuoChaos = () => {
     callRef.current = room.call
   }, [room.call])
 
+  // `room.broadcast` da her render'da yeni kimlik taşır. Yoklama effect'i
+  // içinde (misafir lobiden çıkarken `hello` yayını) kullanıldığı için ref'te
+  // tutarız; böylece effect bağımlılığına `room` eklemek zorunda kalmayız ve
+  // interval her render'da sıfırlanmaz.
+  const broadcastRef = useRef(room.broadcast)
+  useEffect(() => {
+    broadcastRef.current = room.broadcast
+  }, [room.broadcast])
+
   // Sunucu saati ile yerel saat arasındaki fark (ms). Sunucu deadline'ları
   // (countdown_ends_at / ends_at) mutlak epoch-ms olarak döner; ancak sunucu
   // saati istemciden farklı olabilir (bulut VM'lerde yaygın). Bu farkı
@@ -285,6 +295,16 @@ export const useDuoChaos = () => {
   // realtime işleyicisinden okunur (işleyici effect kurulumunda bir kez
   // bağlandığı için `state.round`'a doğrudan erişemez).
   const roundRef = useRef(1)
+  // Maçın (ilk turun) başladığı yerel zaman damgası. `rivalGone` hesabında
+  // maç başlangıcından sonraki kısa bir "grace" penceresinde presence
+  // düşüşünü yok saymak için kullanılır (bkz. MATCH_PRESENCE_GRACE_MS).
+  //
+  // NOT: Bu bir REF değil STATE'tir; çünkü `rivalGone` RENDER sırasında
+  // hesaplanır ve lint kuralı (`react-hooks/refs`) render'da ref okumayı
+  // yasaklar. State kullanmak ayrıca grace penceresi dolduğunda yeniden
+  // render tetikleyip "rakip ayrıldı" uyarısının doğru anda görünmesini
+  // sağlar.
+  const [matchStartAt, setMatchStartAt] = useState(0)
   // Sunucudan gelen EN SON yerel-saat deadline'ları. Misafir yeni turda
   // `resetRound` çağırdığında bu değerler `0`'lanır (resetRound `endsAt` ve
   // `countdownEndsAt`'i sıfırlar). Bu yüzden resetten HEMEN sonra sunucu
@@ -421,14 +441,46 @@ export const useDuoChaos = () => {
       if (data?.phase) {
         noteServerNow(data.serverNow)
         const localEndsAt = toLocal(data.endsAt)
-        setState((prev) => ({
-          ...prev,
-          phase: data.phase as Phase,
-          winner: data.winner ?? prev.winner,
-          roundScores: data.roundScores ?? prev.roundScores,
-          matchScores: data.matchScores ?? prev.matchScores,
-          endsAt: localEndsAt > 0 ? localEndsAt : prev.endsAt,
-        }))
+        setState((prev) => {
+          // SKOR OTORİTESİ (İSTEMCİ): `duo_tick` çağrılmadığı için sunucu
+          // `score` sütununu GÜNCELLEMEZ; `duo_advance_phase` bu yüzden
+          // `roundScores`/`matchScores`'u her zaman `{"p1":0,"p2":0}` döndürür.
+          // Sunucu değerlerini körü körüne uygularsak tur sonunda oyuncuların
+          // GERÇEK puanları 0'a düşer ("skorum tur bitince sıfırlandı" hatası).
+          // Bu yüzden sunucu skorları YALNIZCA sıfırdan farklıysa (yani sunucu
+          // gerçekten skor tutuyorsa) uygularız; aksi halde istemci skorunu
+          // koruruz.
+          const serverRound = data.roundScores
+          const serverMatch = data.matchScores
+          const serverRoundHasData =
+            !!serverRound && Object.values(serverRound).some((value) => (value ?? 0) !== 0)
+          const serverMatchHasData =
+            !!serverMatch && Object.values(serverMatch).some((value) => (value ?? 0) !== 0)
+          // Tur bittiğinde (`battle` → `results`/`matchover`) istemci kendi
+          // roundScore'larından roundScores'u ve kümülatif matchScores'u üretir.
+          let roundScores = prev.roundScores
+          let matchScores = prev.matchScores
+          if (from === 'battle' && data.phase !== 'battle') {
+            roundScores = {
+              p1: prev.players[0]?.roundScore ?? 0,
+              p2: prev.players[1]?.roundScore ?? 0,
+            }
+            matchScores = {
+              p1: (prev.matchScores?.p1 ?? 0) + roundScores.p1,
+              p2: (prev.matchScores?.p2 ?? 0) + roundScores.p2,
+            }
+          }
+          if (serverRoundHasData) roundScores = serverRound as Record<string, number>
+          if (serverMatchHasData) matchScores = serverMatch as Record<string, number>
+          return {
+            ...prev,
+            phase: data.phase as Phase,
+            winner: data.winner ?? prev.winner,
+            roundScores,
+            matchScores,
+            endsAt: localEndsAt > 0 ? localEndsAt : prev.endsAt,
+          }
+        })
       } else if (from === 'countdown') {
         // Sunucu henüz `not_ready` döndürdü (istemci saati sunucudan ileride
         // olabilir). Yerel fazı ilerletmeyiz; kısa aralıklarla yeniden deneriz
@@ -549,19 +601,33 @@ export const useDuoChaos = () => {
         // Zaten toplanmış coinleri TEKRAR saymayız (idempotent). Aksi halde
         // aynı `collect` paketi iki kez gelirse rakip skoru şişer.
         let newlyCollected = 0
+        // Rakibin topladığı coinlerin TÜRLERİNİ de sayarız. Aksi halde rakip
+        // HUD'undaki görev ilerlemesi ("Collect 3 Emerald" gibi tür bazlı
+        // görevlerde) hep 0 kalıyordu: `progressOf` `collectedTypes`'a bakar,
+        // ancak eski kod yalnızca `coins` sayacını artırıyordu. Coin düzeni iki
+        // istemcide de aynı (deterministik seed) olduğundan türü id'den
+        // yerel listeden güvenle çözebiliriz.
+        const gainedTypes: Partial<Record<Coin['type'], number>> = {}
         const coins = prev.coins.map((coin) => {
           if (!ids.has(coin.id)) return coin
           if (coin.collectedBy) return coin
           newlyCollected += 1
+          gainedTypes[coin.type] = (gainedTypes[coin.type] ?? 0) + 1
           return { ...coin, collectedBy: 'p2' as const, respawnAt }
         })
         if (newlyCollected === 0) return prev
         return {
           ...prev,
           coins,
-          players: prev.players.map((player, index) =>
-            index === 1 ? { ...player, coins: player.coins + newlyCollected } : player,
-          ),
+          players: prev.players.map((player, index) => {
+            if (index !== 1) return player
+            const collectedTypes = { ...(player.collectedTypes ?? {}) }
+            for (const [type, count] of Object.entries(gainedTypes)) {
+              collectedTypes[type as Coin['type']] =
+                (collectedTypes[type as Coin['type']] ?? 0) + (count ?? 0)
+            }
+            return { ...player, coins: player.coins + newlyCollected, collectedTypes }
+          }),
         }
       })
     })
@@ -1084,6 +1150,25 @@ export const useDuoChaos = () => {
       // Oyuncu adlarını (ve varsa diğer alanları) sunucudan uygula. Yerel
       // oyuncunun adı boşsa mevcut adı koru; rakip adı geldiğinde göster.
       // Ayrıca host oyunu başlattıysa fazı da burada ilerlet.
+      // Faz geçişini GÜNCELLEYİCİ DIŞINDA tespit et. `setState` güncelleyicisi
+      // SAF olmalıdır; broadcast/ref yazımı gibi yan etkiler orada yapılamaz.
+      // Bu effect yalnızca `state.phase === 'lobby'` iken çalıştığı için
+      // "lobiden çıktık" koşulu doğrudan closure'daki `state.phase` ile
+      // belirlenebilir.
+      const leavingLobby = state.phase === 'lobby' && Boolean(data.phase) && data.phase !== 'lobby'
+      if (leavingLobby) {
+        // Misafir lobiden çıkıp maça katıldığını rakibe HEMEN bildirsin.
+        // Host, misafirin presence'ı geçiş sırasında dalgalandığı için
+        // yanlışlıkla "rakip ayrıldı" görebiliyordu; bu `hello` broadcast'i
+        // host'un `rivalLeft` bayrağını temizler ve oyunu kaldığı yerden
+        // sürdürür. `self: false` olduğu için kendimize gitmez.
+        broadcastRef.current('hello', { by: room.playerId })
+        // Maç başlangıç damgasını misafir tarafında da kur (grace penceresi).
+        setMatchStartAt(Date.now())
+        scout.reset()
+        remotePos.current.clear()
+        rivalBroadcastSeenRef.current = false
+      }
       setState((prev) => {
         const players =
           data.players && data.players.length > 0
@@ -1095,15 +1180,29 @@ export const useDuoChaos = () => {
                 const serverName =
                   typeof server.name === 'string' && server.name.trim() ? server.name : player.name
                 const merged = { ...player, ...server, id: player.id, name: serverName } as Player
-                // Sunucu `duo_tick` çağrılmadığı için skoru/kozmetikleri
-                // güncellemez (hep 0/boş döner). Lobide de bu alanları
-                // client'tan koruruz; aksi halde geri yüklenen skor ve seçilen
-                // iz her yoklamada sıfırlanır.
+                // Sunucu `duo_tick` çağrılmadığı için skoru/kozmetikleri VE oyun
+                // ilerlemesini güncellemez (hep 0/boş döner). Lobide de bu
+                // alanları client'tan koruruz; aksi halde geri yüklenen skor,
+                // seçilen iz ve (host oyunu başlatmadan önce) yerel görev her
+                // yoklamada sıfırlanır. `{ ...player, ...server }` yayılımı bu
+                // alanları sunucudan (0/boş) aldığı için açıkça geri yazarız.
                 merged.score = player.score
                 merged.roundScore = player.roundScore
                 merged.totalScore = player.totalScore
                 merged.trail = player.trail
                 merged.emote = player.emote
+                merged.coins = player.coins
+                merged.stolen = player.stolen
+                merged.collectedTypes = player.collectedTypes
+                merged.objectivesDone = player.objectivesDone
+                merged.missionDone = player.missionDone
+                merged.objective = player.objective
+                // Konum ve yavaşlama da client'a aittir: sunucu x/y'si gecikmeli,
+                // `slowed_until` ise sunucu saatiyle damgalıdır (saat farkı
+                // yüzünden yanlış yorumlanıp oyuncuyu kalıcı yavaşlatabilir).
+                merged.x = player.x
+                merged.y = player.y
+                merged.slowedUntil = player.slowedUntil
                 return merged
               })
             : prev.players
@@ -1121,14 +1220,10 @@ export const useDuoChaos = () => {
         // döndürdüğümüz nesne reset'in `coins`/`players`/`objective` değişimini
         // EZER. Bu yüzden reset alanlarını doğrudan burada hesaplayıp tek bir
         // güncellemede uygularız (yarış yok, kayıp yok).
-        const leavingLobby = prev.phase === 'lobby' && nextPhase !== 'lobby'
         if (leavingLobby) {
           const round = data.round ?? prev.round
           const roundSeed = roundSeedFor(room.code, round)
           const [first, second] = generateObjectivePair(roundSeed)
-          scout.reset()
-          remotePos.current.clear()
-          rivalBroadcastSeenRef.current = false
           const { countdownEndsAt, endsAt } = serverDeadlineRef.current
           return {
             ...prev,
@@ -1169,10 +1264,13 @@ export const useDuoChaos = () => {
       })
     }
     void pull()
+    // Hızlı yoklama: host oyunu başlattığında misafir ~700ms içinde fark eder.
+    // Eski 1500ms değeri, misafirin "waiting for rival start" ekranında ~5 sn
+    // takılı kalmasına yol açıyordu (host çoktan oynamaya başlamışken).
     const id = window.setInterval(() => {
       if (typeof document !== 'undefined' && document.hidden) return
       void pull()
-    }, 1500)
+    }, POLL_MS.lobby)
     return () => {
       cancelled = true
       window.clearInterval(id)
@@ -1295,10 +1393,17 @@ export const useDuoChaos = () => {
         resetMatch()
         if (data?.name) updatePlayer('p1', { name: data.name })
         // Skoru geri yükle: sayfa yenilendiğinde puan sıfırlanmasın.
+        //
+        // ÖNEMLİ: `writeScores` KÜMÜLATİF maç skorunu (`score`) saklar, tur
+        // skorunu (`roundScore`) DEĞİL. Eski kod `roundScore`'u da kümülatif
+        // skora eşitliyordu; bu yüzden sayfa yenilendiğinde tur skoru yapay
+        // olarak şişiyordu ("yenileyince puanım uçtu" hatası). Burada yalnızca
+        // kümülatif skoru geri yükleriz; `roundScore` `resetMatch` ile 0'da
+        // kalır (yeni tur başlayınca zaten sıfırdan sayılır).
         const saved = readScores(normalized)
         if (saved) {
-          updatePlayer('p1', { score: saved.p1, roundScore: saved.p1 })
-          updatePlayer('p2', { score: saved.p2, roundScore: saved.p2 })
+          updatePlayer('p1', { score: saved.p1 })
+          updatePlayer('p2', { score: saved.p2 })
         }
         setPhase('lobby')
         syncUrl(`/play/${normalized}`)
@@ -1333,6 +1438,12 @@ export const useDuoChaos = () => {
       // Yeni maçta rakibin eski broadcast konumunu bırak.
       remotePos.current.clear()
       rivalBroadcastSeenRef.current = false
+      // Maç başlangıç damgasını kur: bundan sonraki kısa pencerede presence
+      // düşüşü "rakip ayrıldı" sayılmaz (bkz. MATCH_PRESENCE_GRACE_MS).
+      setMatchStartAt(Date.now())
+      // Yeni maçta eski "rakip ayrıldı" bayrağını temizle; aksi halde önceki
+      // maçtan kalan bayrak yeni maçı anında sonlandırırdı.
+      setRivalLeft(false)
       // Sunucu deadline'larını yerel saate çevir (saat farkı düzeltmesi).
       noteServerNow(res?.serverNow)
       const localCountdown = toLocal(res?.countdownEndsAt)
@@ -1367,6 +1478,10 @@ export const useDuoChaos = () => {
       // noktada başlamasın).
       remotePos.current.clear()
       rivalBroadcastSeenRef.current = false
+      // Yeni turda da grace penceresini tazele ve eski "ayrıldı" bayrağını
+      // temizle (tur geçişinde presence kısa süre dalgalanabilir).
+      setMatchStartAt(Date.now())
+      setRivalLeft(false)
       // Sunucu deadline'ını sakla; misafir tarafı da aynı değeri kullanır.
       if (localCountdown > 0) serverDeadlineRef.current.countdownEndsAt = localCountdown
       // Yeni tur başlarken onay bayraklarını sıfırla; bir sonraki sonuç
@@ -1593,9 +1708,25 @@ export const useDuoChaos = () => {
   // yeniden bağlanıp presence'da göründüğü anda `rivalGone` OTOMATİK olarak
   // `false` olur — böylece "rakip geri geldi ama popup hâlâ duruyor" hatası
   // (setState-in-effect kullanmadan) kökten çözülür.
+  //
+  // KÖK SORUN (düzeltildi): Presence, kanal yeni kurulduğunda ilk `sync`
+  // gelene kadar `false`'tur. Host oyunu başlattığı anda misafirin presence'ı
+  // henüz oturmamışsa `!room.opponentPresent` yanlışlıkla `true` oluyor ve
+  // host "Your rival left the game" görüyordu. Çözüm iki katmanlıdır:
+  //   a) `room.presenceReady` — presence en az bir kez senkron olmadan bu
+  //      sinyale GÜVENMEYİZ.
+  //   b) `matchStartRef` — maç başladıktan sonraki ilk birkaç saniyede
+  //      presence düşüşünü yok sayarız (geçiş sırasında kanal yeniden
+  //      abone olurken oluşan kısa boşluklar). Bu, "5 sn sonra rakip ayrıldı"
+  //      hatasının doğrudan çözümüdür.
   const inActiveMatch = state.phase === 'countdown' || state.phase === 'battle'
+  const presenceTrusted = room.presenceReady
+  const withinMatchGrace =
+    matchStartAt > 0 && now - matchStartAt < MATCH_PRESENCE_GRACE_MS
   const rivalGone =
     Boolean(room.code) &&
+    presenceTrusted &&
+    !withinMatchGrace &&
     !room.opponentPresent &&
     (rivalLeft || inActiveMatch)
 
@@ -1604,7 +1735,6 @@ export const useDuoChaos = () => {
     room,
     progress,
     chaos,
-    scout,
     cosmetics,
     toast,
     busy,

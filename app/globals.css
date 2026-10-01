@@ -139,6 +139,15 @@ h3 {
   box-shadow: var(--shadow-sm);
 }
 
+/* Oda varken üst çubuk ekranın tepesine SABİTLENİR. `top` güvenli alanı
+   (çentik) hesaba katar; z-index HUD/overlay'lerin altında ama içeriğin
+   üstünde kalacak şekilde ayarlanır. */
+.topbar-sticky {
+  position: sticky;
+  top: calc(8px + var(--safe-t));
+  z-index: 40;
+}
+
 .brand {
   display: inline-flex;
   align-items: center;
@@ -170,8 +179,6 @@ h3 {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  order: 3;
-  width: 100%;
   justify-content: center;
 }
 
@@ -183,35 +190,6 @@ h3 {
   border-radius: var(--r-pill);
   background: var(--purple-soft);
   color: #5b4bd6;
-}
-
-.conn {
-  border: 2px solid var(--line);
-  border-radius: var(--r-pill);
-  padding: 4px 11px;
-  font-size: 10px;
-  font-weight: 900;
-  letter-spacing: 0.06em;
-  color: var(--muted);
-  background: #fff;
-}
-
-.conn-live {
-  border-color: var(--mint);
-  color: #178a72;
-  background: var(--mint-soft);
-}
-
-.conn-connecting {
-  border-color: var(--yellow);
-  color: #9a7400;
-  background: var(--yellow-soft);
-}
-
-.conn-error {
-  border-color: var(--pink);
-  color: #c02a5c;
-  background: var(--pink-soft);
 }
 
 .topbar-actions {
@@ -1429,10 +1407,6 @@ h3 {
   font-weight: 700;
 }
 
-.emote-btn {
-  min-width: 130px;
-}
-
 /* ============================================================
    Joystick
    ============================================================ */
@@ -1462,69 +1436,6 @@ h3 {
   box-shadow: 0 4px 0 rgba(43, 36, 64, 0.22);
   pointer-events: none;
   will-change: transform;
-}
-
-/* ============================================================
-   Scout (Guess/Read)
-   ============================================================ */
-
-.scout {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  /* Panel SOLDA konumlandığı için içerik de sola hizalı. */
-  align-items: flex-start;
-  width: 100%;
-}
-
-.scout-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.scout-label {
-  font-size: 10px;
-  font-weight: 900;
-  letter-spacing: 0.1em;
-  color: var(--purple);
-  text-transform: uppercase;
-}
-
-.scout-charges {
-  display: inline-flex;
-  gap: 5px;
-}
-
-.scout-charges i {
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  border: 2px solid var(--ink);
-}
-
-.scout-charges i.on {
-  background: var(--mint);
-}
-
-.scout-charges i.off {
-  background: #fff;
-}
-
-.scout-btn {
-  min-width: 160px;
-}
-
-.scout-hint {
-  margin: 0;
-  max-width: 280px;
-  text-align: right;
-  font-size: 11px;
-  font-weight: 800;
-  padding: 9px 12px;
-  border-radius: var(--r-md);
-  background: var(--yellow-soft);
-  border: 2px solid var(--yellow);
 }
 
 /* ============================================================
@@ -1851,10 +1762,13 @@ h3 {
 @media (max-width: 860px) {
   .topbar {
     padding: 10px 12px;
+    gap: 8px;
   }
 
+  /* Dar ekranda oda kodu ortada kalır; marka ve aksiyonlar sığmazsa sarar. */
   .topbar-meta {
-    order: 3;
+    flex: 1 1 auto;
+    justify-content: center;
   }
 
   .steps {
@@ -1871,7 +1785,7 @@ h3 {
   }
 
   /* MOBİL: joystick EN ÜSTTE olsun. Sütun düzeninde `order: -1` ile joystick
-     panelin üstüne taşınır; panel (scout/emote/kozmetik) altında kalır. */
+     panelin üstüne taşınır; kozmetik (emote/trail) paneli altında kalır. */
   .battle-joystick {
     order: -1;
     justify-content: center;
@@ -1883,7 +1797,6 @@ h3 {
     order: 1;
   }
 
-  .scout,
   .cosmetics,
   .cosmetics-group {
     align-items: stretch;
@@ -1891,16 +1804,6 @@ h3 {
 
   .chip-row {
     justify-content: flex-start;
-  }
-
-  .scout-hint {
-    text-align: left;
-    max-width: none;
-  }
-
-  .scout-btn,
-  .emote-btn {
-    width: 100%;
   }
 
   .joystick {

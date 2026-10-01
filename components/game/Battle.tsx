@@ -3,20 +3,17 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChaosBanner } from './ChaosBanner'
 import { CosmeticsPicker } from './CosmeticsPicker'
-import { ScoutPanel } from './ScoutPanel'
 import { VirtualJoystick } from './VirtualJoystick'
 import { Button } from '../ui/Button'
 import { ARENA, OBSTACLES, trailById } from '../../lib/config'
 import { missionLabel, objectiveOf, progressOf, targetOf } from '../../lib/display'
 import type { ChaosApi } from '../../lib/useChaos'
 import type { CosmeticsApi } from '../../lib/useCosmetics'
-import type { ScoutApi } from '../../lib/useScout'
 import type { State } from '../../lib/types'
 
 type Props = {
   state: State
   chaos: ChaosApi
-  scout: ScoutApi
   cosmetics: CosmeticsApi
   level: number
   secondsLeft: number
@@ -42,7 +39,6 @@ type Props = {
   rivalLeft: boolean
   /** "Odadan ayrıl" — oyuncu odayı terk eder. */
   onLeaveRoom: () => void
-  onEmote: () => void
 }
 
 const coinClass = (type: string) => `coin coin-${type}`
@@ -50,7 +46,6 @@ const coinClass = (type: string) => `coin coin-${type}`
 export function Battle({
   state,
   chaos,
-  scout,
   cosmetics,
   level,
   secondsLeft,
@@ -60,7 +55,6 @@ export function Battle({
   celebrateRef,
   rivalLeft,
   onLeaveRoom,
-  onEmote,
 }: Props) {
   const [now, setNow] = useState(0)
   // Tam ekran modu. `true` iken arena tüm ekranı kaplar; HUD üstte kalır,
@@ -378,16 +372,12 @@ export function Battle({
       </div>
 
       {/* Düzen:
-          - Masaüstü: kozmetik/emote/scout paneli SOLDA, joystick SAĞDA.
+          - Masaüstü: kozmetik (emote + trail) paneli SOLDA, joystick SAĞDA.
           - Mobil: joystick EN ÜSTTE, panel onun altında (CSS `order`).
           - Tam ekran: panel gizlenir, joystick sağ altta yarı şeffaf olarak
             arena'nın üzerine biner (CSS `.is-fullscreen`). */}
       <footer className="battle-foot">
         <div className="battle-side">
-          <ScoutPanel scout={scout} disabled={state.phase !== 'battle'} />
-          <Button variant="ghost" onClick={onEmote} className="emote-btn">
-            {cosmetics.activeGlyph ?? '😀'} Emote
-          </Button>
           <CosmeticsPicker cosmetics={cosmetics} level={level} />
         </div>
         <div className="battle-joystick">

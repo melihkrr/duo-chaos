@@ -12,7 +12,7 @@ import { useDuoChaos } from '../lib/useDuoChaos'
 
 export default function Page() {
   const game = useDuoChaos()
-  const { state, room, progress, chaos, scout, cosmetics, toast } = game
+  const { state, room, progress, chaos, cosmetics, toast } = game
   const [confirmLeave, setConfirmLeave] = useState(false)
 
   // URL'de oda kodu varsa otomatik katıl. Tarayıcı geri/ileri tuşları için
@@ -48,12 +48,7 @@ export default function Page() {
 
   return (
     <main className="game-shell">
-      <TopBar
-        code={room.code}
-        status={room.status}
-        online={progress.online}
-        onLeave={() => setConfirmLeave(true)}
-      />
+      <TopBar code={room.code} onLeave={() => setConfirmLeave(true)} />
 
       {state.phase === 'home' && (
         <Home
@@ -85,7 +80,6 @@ export default function Page() {
         <Battle
           state={state}
           chaos={chaos}
-          scout={scout}
           cosmetics={cosmetics}
           level={progress.profile.level}
           secondsLeft={game.secondsLeft}
@@ -95,7 +89,6 @@ export default function Page() {
           celebrateRef={game.celebrateRef}
           rivalLeft={game.rivalLeft}
           onLeaveRoom={() => setConfirmLeave(true)}
-          onEmote={game.triggerEmote}
         />
       )}
 

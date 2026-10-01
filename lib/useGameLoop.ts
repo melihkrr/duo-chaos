@@ -417,9 +417,46 @@ export const useGameLoop = (deps: LoopDeps) => {
 
     // --- Tek `setState`: hareket + rakip + toplama + çalma + yeniden doğma. ---
     // Kare başına tek render hedefi; bu, hareketin akıcı kalmasını sağlar.
-    // Skor değişimini bu blok içinde yakalarız; sonra rakip HUD'unu beslemek
-    // için `score` broadcast'i yayınlarız (aşağıda).
+    //
+    // ÖNEMLİ (SAFLIK): `setState` güncelleyicisi SAF olmalıdır. React onu
+    // StrictMode'da (geliştirme) veya eşzamanlı render'da BİRDEN FAZLA kez
+    // çağırabilir. Önceden `scoreDelta` bu güncelleyicinin İÇİNDE biriktiriliyor
+    // ve `objectiveHold`/`celebrateRef`/`playSound('win')` gibi YAN ETKİLER de
+    // burada tetikleniyordu. Sonuç: skor yayını iki katına çıkıyor, kutlama ve
+    // "win" sesi mükerrer çalıyordu. Artık tüm kararları ve yan etkileri
+    // güncelleyicinin DIŞINDA, mevcut `state` üzerinden hesaplıyoruz; güncelleyici
+    // yalnızca saf bir dönüşüm yapar.
+    const collectedTypes = state.coins
+      .filter((coin) => collectedSet.has(coin.id))
+      .reduce<Partial<Record<Coin['type'], number>>>(
+        (counts, coin) => ({ ...counts, [coin.type]: (counts[coin.type] ?? 0) + 1 }),
+        { ...(me.collectedTypes ?? {}) },
+      )
+
+    // Görev tamamlanma kararı: toplama/çalma uygulandıktan SONRAKİ varsayımsal
+    // duruma göre değerlendirilir. `!me.missionDone` guard'ı şart: görev
+    // tamamlandıktan sonra `collectedTypes` yeni görev verilene kadar hedefi
+    // karşılamaya devam eder; guard olmadan her karede tekrar tetiklenir.
+    const projected: Player = {
+      ...me,
+      coins: me.coins + collectedIds.length,
+      stolen: me.stolen + (stealing ? 1 : 0),
+      collectedTypes,
+    }
+    const objectiveDone = !me.missionDone && objectiveSatisfied(projected)
+
     let scoreDelta = 0
+    if (collectedIds.length > 0) scoreDelta += gained
+    if (stealing) scoreDelta += 10
+    if (objectiveDone) scoreDelta += OBJECTIVE_BONUS
+
+    // Yan etkiler (ses/kutlama) güncelleyicinin DIŞINDA, tam olarak bir kez.
+    if (objectiveDone) {
+      objectiveHold.current = now + OBJECTIVE_CELEBRATE_MS
+      celebrateRef.current = now
+      playSound('win')
+    }
+
     setState((prev) => {
       let changed = false
 
@@ -448,23 +485,16 @@ export const useGameLoop = (deps: LoopDeps) => {
           // yalnızca tur başında (spawn) doğru olması yeterlidir.
           if (collectedIds.length > 0) {
             changed = true
-            scoreDelta += gained
             next = {
               ...next,
               coins: next.coins + collectedIds.length,
               score: next.score + gained,
               roundScore: (next.roundScore ?? 0) + gained,
-              collectedTypes: prev.coins
-                .filter((coin) => collectedSet.has(coin.id))
-                .reduce<Partial<Record<Coin['type'], number>>>(
-                  (counts, coin) => ({ ...counts, [coin.type]: (counts[coin.type] ?? 0) + 1 }),
-                  { ...(next.collectedTypes ?? {}) },
-                ),
+              collectedTypes,
             }
           }
           if (stealing) {
             changed = true
-            scoreDelta += 10
             next = {
               ...next,
               stolen: next.stolen + 1,
@@ -472,31 +502,20 @@ export const useGameLoop = (deps: LoopDeps) => {
               roundScore: (next.roundScore ?? 0) + 10,
             }
           }
-          // Görev tamamlandıysa: tamamlanma sayacını artır, küçük bir kutlama
-          // tetikle ve YENİ GÖREVİ ANINDA ver. Yeni görev artık bekletilmez;
-          // oyuncu kutlamayı görürken bir yandan yeni göreve başlar.
+          // Görev tamamlandıysa: tamamlanma sayacını artır ve YENİ GÖREVİ ANINDA
+          // ver. Yeni görev artık bekletilmez; oyuncu kutlamayı görürken bir
+          // yandan yeni göreve başlar.
           //
           // ÖNEMLİ: `score` KÜMÜLATİF'tir (toplanan coin + çalınan + görev
           // bonusu). Burada `score`'u görev sayısına EŞİTLEMEYİZ; aksi halde
           // oyuncunun topladığı puan silinir ("görev tamamlanınca 1 skor
           // kazanıyor" şikâyeti tam olarak buydu). Görev tamamlama yalnızca
           // `objectivesDone` sayacını ve bir bonusu ekler.
-          // ÖNEMLİ: `!next.missionDone` guard'ı şart. Görev tamamlandıktan
-          // sonra `collectedTypes` yeni görev verilene kadar hedefi KARŞILAMAYA
-          // DEVAM EDER; guard olmadan bu dal her karede tekrar tetiklenir ve
-          // `objectivesDone` sonsuz artar → "sayaç artmadı" hatası.
-          if (!next.missionDone && objectiveSatisfied(next)) {
+          if (objectiveDone) {
             changed = true
-            scoreDelta += OBJECTIVE_BONUS
-            const done = (next.objectivesDone ?? 0) + 1
-            // Kutlama penceresini başlat (yalnızca görsel; akışı bloklamaz).
-            objectiveHold.current = now + OBJECTIVE_CELEBRATE_MS
-            // Kutlama sinyali: `Battle` bunu görünce konfeti/rozet gösterir.
-            celebrateRef.current = now
-            playSound('win')
             next = {
               ...next,
-              objectivesDone: done,
+              objectivesDone: (next.objectivesDone ?? 0) + 1,
               // Görev başına bonus puan (kümülatif skora eklenir).
               score: next.score + OBJECTIVE_BONUS,
               roundScore: (next.roundScore ?? 0) + OBJECTIVE_BONUS,

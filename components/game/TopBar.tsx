@@ -3,39 +3,32 @@
 import { useState } from 'react'
 import { Button } from '../ui/Button'
 import { isMuted, toggleMuted, unlockAudio } from '../../lib/sound'
-import type { RoomStatus } from '../../lib/useRoom'
 
 type Props = {
   code: string | null
-  status: RoomStatus
-  online: boolean
   onLeave: () => void
 }
 
-const STATUS_LABEL: Record<RoomStatus, string> = {
-  idle: 'Idle',
-  connecting: 'Connecting…',
-  live: 'Live',
-  error: 'Offline',
-}
-
-export function TopBar({ code, status, online, onLeave }: Props) {
+/**
+ * Üst çubuk. Yalnızca oda kodu (varsa) gösterilir; bağlantı durumu ve
+ * bulut/yerel etiketleri kaldırıldı. Oda varken çubuk üstte SABİT (sticky)
+ * kalır ve dar ekranlarda düzgün sarar.
+ */
+export function TopBar({ code, onLeave }: Props) {
   const [muted, setMuted] = useState(() => isMuted())
 
   return (
-    <header className="topbar">
+    <header className={['topbar', code ? 'topbar-sticky' : ''].filter(Boolean).join(' ')}>
       <div className="brand">
         <span className="brand-mark">DC</span>
         <strong>DUO CHAOS</strong>
       </div>
 
-      <div className="topbar-meta">
-        {code && <span className="room-code">Room {code}</span>}
-        <span className={`conn conn-${status}`}>{STATUS_LABEL[status]}</span>
-        <span className={`conn ${online ? 'conn-live' : 'conn-idle'}`}>
-          {online ? '☁️ Cloud' : '📴 Local'}
-        </span>
-      </div>
+      {code && (
+        <div className="topbar-meta">
+          <span className="room-code">Room {code}</span>
+        </div>
+      )}
 
       <div className="topbar-actions">
         <Button

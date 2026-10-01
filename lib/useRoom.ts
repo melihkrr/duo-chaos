@@ -13,6 +13,17 @@ export type RoomApi = {
   name: string
   status: RoomStatus
   opponentPresent: boolean
+  /**
+   * Presence senkronizasyonu EN AZ BİR KEZ tamamlandı mı?
+   *
+   * `opponentPresent === false` tek başına "rakip yok" demek DEĞİLDİR: kanal
+   * yeni kurulduğunda ilk `presence sync` gelene kadar bu değer daima
+   * `false`'tur. Bu bayrak, "gerçekten senkron olduk ve rakip yok" ile
+   * "henüz bilmiyoruz" durumunu ayırt etmemizi sağlar. Aksi halde host, oyunu
+   * başlattığı anda (misafirin presence'ı henüz oturmamışken) yanlışlıkla
+   * "rakip ayrıldı" sonucuna varıyordu.
+   */
+  presenceReady: boolean
   /** Odaya bağlanır ve realtime kanalı açar. */
   connect: (code: string, playerId: 'p1' | 'p2', token?: string, name?: string) => Promise<void>
   /** Bağlantıyı kapatır ve oda durumunu temizler. */
@@ -77,11 +88,15 @@ export const useRoom = (): RoomApi => {
   const [name, setNameState] = useState<string>(() => readName())
   const [status, setStatus] = useState<RoomStatus>('idle')
   const [opponentPresent, setOpponentPresent] = useState(false)
+  const [presenceReady, setPresenceReady] = useState(false)
 
   const channelRef = useRef<ReturnType<NonNullable<ReturnType<typeof getSupabase>>['channel']> | null>(null)
   const handlers = useRef<Map<string, Set<(payload: unknown) => void>>>(new Map())
   const codeRef = useRef<string | null>(null)
   const nameRef = useRef<string>(name)
+  // `disconnect` boş bağımlılıkla memoize edildiği için güncel slot'u bir
+  // ref üzerinden okuruz (leave broadcast'inde `by` alanı için gerekli).
+  const playerIdRef = useRef<'p1' | 'p2'>(playerId)
 
   useEffect(() => {
     codeRef.current = code
@@ -91,10 +106,28 @@ export const useRoom = (): RoomApi => {
     nameRef.current = name
   }, [name])
 
+  useEffect(() => {
+    playerIdRef.current = playerId
+  }, [playerId])
+
   const disconnect = useCallback(async () => {
     const supabase = getSupabase()
     if (supabase && channelRef.current) {
-      await supabase.removeChannel(channelRef.current)
+      // Rakibe TEMİZ bir "ayrıldım" sinyali gönder. Presence düşüşü güvenilmez
+      // (ağ kopması, sekme kapanması) olduğundan, kasıtlı çıkışta açık bir
+      // `leave` broadcast'i yayınlarız; karşı taraf "rakip ayrıldı"yı ANINDA ve
+      // kesin olarak görür. `self: false` olduğu için kendimize gitmez.
+      const channel = channelRef.current
+      try {
+        await channel.send({
+          type: 'broadcast',
+          event: 'leave',
+          payload: { by: playerIdRef.current },
+        })
+      } catch {
+        /* kanal zaten kapanmış olabilir — yoksay */
+      }
+      await supabase.removeChannel(channel)
     }
     channelRef.current = null
     handlers.current.clear()
@@ -103,6 +136,7 @@ export const useRoom = (): RoomApi => {
     setCode(null)
     setToken(null)
     setOpponentPresent(false)
+    setPresenceReady(false)
     setStatus('idle')
   }, [])
 
@@ -128,6 +162,11 @@ export const useRoom = (): RoomApi => {
       }
 
       setStatus('connecting')
+      // Yeni kanal kurulurken presence bilgisi SIFIRLANIR. İlk `presence sync`
+      // gelene kadar `presenceReady === false` kalır; bu sayede "henüz
+      // bilmiyoruz" durumu "rakip yok" sanılmaz.
+      setPresenceReady(false)
+      setOpponentPresent(false)
       if (channelRef.current) await supabase.removeChannel(channelRef.current)
 
       const channel = supabase.channel(`duo-room-${normalized}`, {
@@ -144,6 +183,8 @@ export const useRoom = (): RoomApi => {
         const state = channel.presenceState()
         const keys = Object.keys(state)
         setOpponentPresent(keys.some((key) => key !== nextPlayer))
+        // İlk senkron tamamlandı: artık `opponentPresent` GÜVENİLİR.
+        setPresenceReady(true)
       })
 
       await new Promise<void>((resolve) => {
@@ -227,6 +268,7 @@ export const useRoom = (): RoomApi => {
     name,
     status,
     opponentPresent,
+    presenceReady,
     connect,
     disconnect,
     setName,

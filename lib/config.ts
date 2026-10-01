@@ -27,10 +27,22 @@ export const CLOCK_TICK_MS = 150
  */
 export const REMOTE_POS_TTL = 600
 export const POLL_MS = { lobby: 700, countdown: 500, battle: RECONCILE_MS, other: 1500 }
+/**
+ * Maç başladıktan sonra presence düşüşünü YOK SAYDIĞIMIZ süre (ms).
+ *
+ * KÖK SORUN: Host `duo_start_round` çağırıp faz `countdown`'a geçtiğinde,
+ * misafirin realtime kanalı yeni faza geçerken kısa süreliğine presence
+ * boşluğu yaşayabiliyor. Eski kod bu boşluğu "rakip ayrıldı" sanıp host'ta
+ * "Your rival left the game" gösteriyordu. Maç başlangıcından sonraki bu
+ * pencere içinde presence sinyaline GÜVENMEYİZ; yalnızca açık `leave`
+ * broadcast'i (rivalLeft) dikkate alınır.
+ */
+export const MATCH_PRESENCE_GRACE_MS = 6_000
 
 // --- Hareket / çarpışma ---
-// Hız %/s cinsindendir. 34 → 52: karakter belirgin şekilde daha çevik.
-export const MOVE_SPEED = 52
+// Hız %/s cinsindendir. 52 → 38: karakter çevik ama kontrol edilebilir;
+// 52 çok hızlıydı, hedefe kilitlenmek ve topları takip etmek zorlaşıyordu.
+export const MOVE_SPEED = 38
 export const COLLECT_RADIUS = 9
 export const STEAL_RADIUS = 10
 export const PLAYER_HIT_R = 4.2
