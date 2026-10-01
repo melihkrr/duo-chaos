@@ -1520,15 +1520,31 @@ export const useDuoChaos = () => {
   /**
    * Sonraki turu GERÇEKTEN başlatır. Yalnızca iki oyuncu da onayladığında
    * (aşağıdaki effect) çağrılır. Host'un tek başına başlatması engellenir.
+   *
+   * ÖNEMLİ (TUR SENKRONU): Burada `duo_start_round` DEĞİL, `duo_next_round`
+   * çağırırız. Sunucu tur numarasını YALNIZCA `duo_next_round` artırır
+   * (`round = round + 1`), ardından `duo_start_round`'u çağırır.
+   * `duo_start_round` doğrudan çağrılırsa sunucu turu ARTMAZ; istemci yerelde
+   * `round + 1`'e geçerken sunucu eski turda kalır → coin/görev düzeni ve tur
+   * sayacı iki tarafta UYUŞMAZ ("turlar tutmuyor" hatası).
+   *
+   * NEDEN `duo_advance_phase` DEĞİL? `duo_advance_phase` artık yalnızca
+   * `countdown -> battle` ve `battle -> results` geçişlerini yapar; tur
+   * bitişini `duo_tick` de yapabildiği için `results` fazında idempotenttir
+   * (no-op). Sonraki tura geçiş AYRI bir RPC ile (`duo_next_round`) yapılır;
+   * böylece "turu bitir" ile "sonraki tura geç" niyetleri karışmaz ve
+   * `duo_tick` ile yarışan bir çağrı sonuç ekranını ATLAMAZ.
    */
   const beginNextRound = useCallback(async () => {
     setBusy(true)
     try {
-      const nextRound = state.round + 1
-      const res = await room.call<{ serverNow?: number; countdownEndsAt?: number }>(
-        'duo_start_round',
-        { p_token: room.token ?? room.playerId },
-      )
+      const res = await room.call<{
+        serverNow?: number
+        countdownEndsAt?: number
+        round?: number
+      }>('duo_next_round', { p_token: room.token ?? room.playerId })
+      // Sunucunun ilerlettiği tur numarasını esas al; yoksa yerel +1'e düş.
+      const nextRound = typeof res?.round === 'number' ? res.round : state.round + 1
       resetRound(nextRound, roundSeedFor(room.code, nextRound))
       noteServerNow(res?.serverNow)
       const localCountdown = toLocal(res?.countdownEndsAt)

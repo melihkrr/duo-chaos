@@ -17,7 +17,6 @@ import {
   REMOTE_SNAP_DISTANCE,
   STEAL_COOLDOWN_MS,
   STEAL_RADIUS,
-  randomObjective,
 } from './config'
 import { objectiveSatisfied } from './display'
 import { resolveMove } from './movement'
@@ -499,28 +498,24 @@ export const useGameLoop = (deps: LoopDeps) => {
               stolen: next.stolen + 1,
             }
           }
-          // Görev tamamlandıysa: tamamlanma sayacını artır ve YENİ GÖREVİ ANINDA
-          // ver. Yeni görev artık bekletilmez; oyuncu kutlamayı görürken bir
-          // yandan yeni göreve başlar.
+          // Görev tamamlandıysa: yalnızca YEREL kutlama durumunu işaretle.
           //
-          // ÖNEMLİ: `score` KÜMÜLATİF'tir (toplanan coin + çalınan + görev
-          // bonusu). Burada `score`'u görev sayısına EŞİTLEMEYİZ; aksi halde
-          // oyuncunun topladığı puan silinir ("görev tamamlanınca 1 skor
-          // kazanıyor" şikâyeti tam olarak buydu). Görev tamamlama yalnızca
-          // `objectivesDone` sayacını ve bir bonusu ekler.
+          // ÖNEMLİ (SUNUCU OTORİTESİ): Yeni görevi BURADA ATAMAYIZ. Görev
+          // zinciri sunucuya aittir (`duo_reroll_objective` → `duo_random_objective`).
+          // İstemci `randomObjective()` ile yerel rastgele bir görev seçerse
+          // sunucunun seçtiğinden FARKLI bir görev üretir; iki istemci ve sunucu
+          // farklı görevler görür ("görevler uyuşmuyor" hatası). Yeni görev,
+          // bir sonraki `duo_public_state` yoklamasında sunucudan gelir ve
+          // yukarıdaki birleştirme (`{ ...player, ...server }`) ile uygulanır.
+          //
+          // Burada yalnızca `missionDone` bayrağını kaldırırız ki kutlama bir
+          // kez gösterilsin; `coins`/`stolen`/`collectedTypes` sunucudan
+          // tazelenene kadar korunur (sunucu görev değişiminde bunları sıfırlar).
           if (objectiveDone) {
             changed = true
             next = {
               ...next,
-              objectivesDone: (next.objectivesDone ?? 0) + 1,
-              // YENİ GÖREV ANINDA: bekleme yok. Sayaçlar sıfırlanır ve
-              // rastgele yeni bir görev atanır. Görev bonusu SKORU sunucu
-              // ekler; burada yalnızca görev durumunu ilerletiriz.
-              objective: randomObjective(next.objective?.id),
-              coins: 0,
-              stolen: 0,
-              collectedTypes: {},
-              missionDone: false,
+              missionDone: true,
             }
           }
           return next
