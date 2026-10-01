@@ -789,6 +789,25 @@ h3 {
   text-align: right;
 }
 
+/* HUD TARAF EŞLEŞMESİ: Yerel oyuncu arenada SAĞDA doğduysa (sunucu slotu
+   p2 → x=82) oyuncu panellerini aynalarız. Böylece "ben" paneli SAĞDA,
+   rakip paneli SOLDA görünür ve kullanıcının beklediği taraf eşleşmesi
+   sağlanır. Grid `order` ile DOM sırasını değiştirmeden yer değiştiririz;
+   hizalama da ters çevrilir (sol panel sağa, sağ panel sola yaslanır). */
+.hud-mirrored .hud-player {
+  order: 3;
+  text-align: right;
+}
+
+.hud-mirrored .hud-player.rival {
+  order: 1;
+  text-align: left;
+}
+
+.hud-mirrored .hud-center {
+  order: 2;
+}
+
 .hud-name {
   display: flex;
   align-items: center;
@@ -798,6 +817,14 @@ h3 {
 
 .hud-player.rival .hud-name {
   justify-content: flex-end;
+}
+
+.hud-mirrored .hud-player .hud-name {
+  justify-content: flex-end;
+}
+
+.hud-mirrored .hud-player.rival .hud-name {
+  justify-content: flex-start;
 }
 
 .hud-badge {

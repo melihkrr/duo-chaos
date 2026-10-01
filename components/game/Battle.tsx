@@ -369,12 +369,19 @@ export function Battle({
   const showCountdown =
     state.phase === 'countdown' && countdownLeft > 0 && countdownStep >= 1 && countdownStep <= 3
 
+  // HUD TARAF EŞLEŞMESİ: Yerel oyuncunun arenadaki GERÇEK tarafı sunucu
+  // slotuna göre belirlenir (p1 → x=18 SOL, p2 → x=82 SAĞ). Kullanıcı
+  // beklentisi: "soldaysam panelim solda, sağdaysam sağda olsun". Bu yüzden
+  // yerel oyuncu sağda doğduysa HUD'un oyuncu panellerini aynalarız
+  // (`hud-mirrored`), böylece "ben" paneli sağda, rakip paneli solda görünür.
+  const meOnLeft = (me?.x ?? 0) < 50
+
   return (
     <section
       ref={wrapRef}
       className={['battle-wrap', fullscreen ? 'is-fullscreen' : ''].join(' ')}
     >
-      <header className="hud">
+      <header className={['hud', meOnLeft ? '' : 'hud-mirrored'].filter(Boolean).join(' ')}>
         <div className="hud-player">
           <div className="hud-name">
             <span className="hud-badge me" aria-hidden>
