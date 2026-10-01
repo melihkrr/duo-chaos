@@ -62,7 +62,12 @@ export default function Page() {
     const { state, chaos, cosmetics, toast, progress } = bot
     return (
       <main className="game-shell">
-        <TopBar code={null} showLeave onLeave={() => setConfirmLeave(true)} />
+        <TopBar
+          code={null}
+          onLeave={() => setConfirmLeave(true)}
+          showLanguage={state.phase === 'home'}
+          showLeave
+        />
 
         {state.phase === 'home' && (
           <Home
@@ -133,7 +138,11 @@ export default function Page() {
 
   return (
     <main className="game-shell">
-      <TopBar code={room.code} onLeave={() => setConfirmLeave(true)} />
+      <TopBar
+        code={room.code}
+        onLeave={() => setConfirmLeave(true)}
+        showLanguage={state.phase === 'home'}
+      />
 
       {state.phase === 'home' && (
         <Home

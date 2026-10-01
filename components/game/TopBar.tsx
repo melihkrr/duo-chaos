@@ -14,6 +14,7 @@ type Props = {
    * bot modunda `true` geçirilir.
    */
   showLeave?: boolean
+  showLanguage?: boolean
 }
 
 /**
@@ -30,7 +31,7 @@ type Props = {
  * alabilir. Bu yüzden üç öğenin doğal genişliklerini ölçüp sığıp sığmadığına
  * KESİN karar veririz ve `topbar-wrapped` sınıfını buna göre uygularız.
  */
-export function TopBar({ code, onLeave, showLeave = false }: Props) {
+export function TopBar({ code, onLeave, showLeave = false, showLanguage = false }: Props) {
   const { language, setLanguage, t } = useI18n()
   const [muted, setMuted] = useState(() => isMuted())
   const [languageMenuOpen, setLanguageMenuOpen] = useState(false)
@@ -154,43 +155,45 @@ export function TopBar({ code, onLeave, showLeave = false }: Props) {
       )}
 
       <div className="topbar-actions" ref={actionsRef}>
-        <div className="language-picker" ref={languagePickerRef}>
-          <button
-            type="button"
-            className="language-trigger"
-            aria-label={t('Select language')}
-            aria-expanded={languageMenuOpen}
-            aria-haspopup="listbox"
-            onClick={() => setLanguageMenuOpen((open) => !open)}
-          >
-            <LanguageFlag language={language} />
-            <span>{language.toUpperCase()}</span>
-            <svg className="language-chevron" viewBox="0 0 12 8" aria-hidden="true">
-              <path d="m1 1 5 5 5-5" />
-            </svg>
-          </button>
-          {languageMenuOpen && (
-            <div className="language-menu" role="listbox" aria-label={t('Select language')}>
-              {(['tr', 'en'] as const).map((option) => (
-                <button
-                  key={option}
-                  type="button"
-                  role="option"
-                  aria-selected={language === option}
-                  className={`language-option${language === option ? ' selected' : ''}`}
-                  onClick={() => {
-                    setLanguage(option)
-                    setLanguageMenuOpen(false)
-                  }}
-                >
-                  <LanguageFlag language={option} />
-                  <span>{option === 'tr' ? t('Turkish') : t('English')}</span>
-                  <span className="language-option-code">{option.toUpperCase()}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        {showLanguage && (
+          <div className="language-picker" ref={languagePickerRef}>
+            <button
+              type="button"
+              className="language-trigger"
+              aria-label={t('Select language')}
+              aria-expanded={languageMenuOpen}
+              aria-haspopup="listbox"
+              onClick={() => setLanguageMenuOpen((open) => !open)}
+            >
+              <LanguageFlag language={language} />
+              <span>{language.toUpperCase()}</span>
+              <svg className="language-chevron" viewBox="0 0 12 8" aria-hidden="true">
+                <path d="m1 1 5 5 5-5" />
+              </svg>
+            </button>
+            {languageMenuOpen && (
+              <div className="language-menu" role="listbox" aria-label={t('Select language')}>
+                {(['tr', 'en'] as const).map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    role="option"
+                    aria-selected={language === option}
+                    className={`language-option${language === option ? ' selected' : ''}`}
+                    onClick={() => {
+                      setLanguage(option)
+                      setLanguageMenuOpen(false)
+                    }}
+                  >
+                    <LanguageFlag language={option} />
+                    <span>{option === 'tr' ? t('Turkish') : t('English')}</span>
+                    <span className="language-option-code">{option.toUpperCase()}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         <Button
           variant="ghost"
           className="icon-btn"

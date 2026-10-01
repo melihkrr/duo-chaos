@@ -62,16 +62,7 @@ const MISTAKE_CHANCE = 0.18
 const MISTAKE_MS = 900
 /** Botun hedefini yeniden değerlendirme aralığı (ms). */
 const RETARGET_MS = 420
-/** Bot, rakibi bu mesafedeyse ve uygun koşullar varsa çalmaya yönelir. */
-const STEAL_APPROACH_RADIUS = 26
-/**
- * ÇALMA YAKLAŞMA MESAFESİ (standoff). Bot, çalma menziline (`STEAL_RADIUS`)
- * girdikten sonra rakibin ÜZERİNE yürümeyi BIRAKIR; bu mesafede durur. Aksi
- * halde bot rakibin "içine giriyordu" ("bot beni takip edip içime giriyor").
- * `STEAL_RADIUS`'tan biraz büyük seçilir ki menzil içinde kalıp çalabilsin ama
- * çakışmasın.
- */
-const STEAL_STANDOFF_RADIUS = STEAL_RADIUS + 4
+const STEAL_APPROACH_DISTANCE = STEAL_RADIUS - 1
 /** Botun çalma denemesi için minimum bekleme (ms) — insanla aynı cooldown. */
 const BOT_STEAL_COOLDOWN_MS = 700
 const NAVIGATION_CLEARANCE = 0.75
@@ -237,15 +228,26 @@ const obstacleCorners = (obstacle: NavigationObstacle): NavigationPoint[] => {
  * The expanded rectangles match the player's collision radius, with a small
  * margin so collision resolution does not stop the bot at a corner.
  */
-const nextNavigationPoint = (
+const nextNavigationPointToAny = (
   from: NavigationPoint,
-  target: NavigationPoint,
-): NavigationPoint => {
-  if (segmentIsClear(from, target)) return target
+  targets: NavigationPoint[],
+): NavigationPoint | null => {
+  const safeTargets = targets.filter(
+    (point) =>
+      point.x >= ARENA.minX &&
+      point.x <= ARENA.maxX &&
+      point.y >= ARENA.minY &&
+      point.y <= ARENA.maxY &&
+      segmentIsClear(point, point),
+  )
+  if (safeTargets.length === 0) return null
+  const directTarget = safeTargets
+    .filter((point) => segmentIsClear(from, point))
+    .sort((a, b) => dist(from.x, from.y, a.x, a.y) - dist(from.x, from.y, b.x, b.y))[0]
+  if (directTarget) return directTarget
 
   const points = [
     from,
-    target,
     ...NAVIGATION_OBSTACLES.flatMap(obstacleCorners).filter(
       (point) =>
         point.x >= ARENA.minX &&
@@ -253,11 +255,14 @@ const nextNavigationPoint = (
         point.y >= ARENA.minY &&
         point.y <= ARENA.maxY,
     ),
+    ...safeTargets,
   ]
+  const firstTargetIndex = points.length - safeTargets.length
   const distances = points.map(() => Infinity)
   const previous = points.map(() => -1)
   const visited = points.map(() => false)
   distances[0] = 0
+  let reachedTarget = -1
 
   for (let iteration = 0; iteration < points.length; iteration += 1) {
     let current = -1
@@ -267,7 +272,10 @@ const nextNavigationPoint = (
       }
     }
     if (current < 0 || !Number.isFinite(distances[current])) break
-    if (current === 1) break
+    if (current >= firstTargetIndex) {
+      reachedTarget = current
+      break
+    }
     visited[current] = true
 
     for (let next = 1; next < points.length; next += 1) {
@@ -287,11 +295,23 @@ const nextNavigationPoint = (
     }
   }
 
-  if (previous[1] < 0) return target
-  let waypoint = 1
+  if (reachedTarget < 0 || previous[reachedTarget] < 0) return null
+  let waypoint = reachedTarget
   while (previous[waypoint] > 0) waypoint = previous[waypoint]
   return points[waypoint]
 }
+
+const nextNavigationPoint = (from: NavigationPoint, target: NavigationPoint) =>
+  nextNavigationPointToAny(from, [target]) ?? target
+
+const stealApproachPoints = (rival: NavigationPoint): NavigationPoint[] =>
+  Array.from({ length: 16 }, (_, index) => {
+    const angle = (index * Math.PI * 2) / 16
+    return {
+      x: rival.x + Math.cos(angle) * STEAL_APPROACH_DISTANCE,
+      y: rival.y + Math.sin(angle) * STEAL_APPROACH_DISTANCE,
+    }
+  })
 
 const approachWithNavigation = (
   fromX: number,
@@ -319,36 +339,36 @@ export const decideBot = (input: BotInput, memory: BotMemory): BotDecision => {
   const bx = memory.x
   const by = memory.y
 
-  // --- 1) ÇALMA DEĞERLENDİRMESİ ---
-  // Bot, çalma görevi varsa VEYA rakibi yakınındaysa çalmaya yönelir. Ancak
-  // insanla aynı kurallara tabidir: yalnızca `STEAL_RADIUS` içindeyken çalar ve
-  // aynı cooldown'ı bekler.
+  // --- 1) ÇALMA GÖREVİ ÖNCELİĞİ ---
   const stealObjective = objective?.kind === 'steal'
-  const stealNeeded = stealObjective && progress < target
-  let wantSteal = false
-  // Çalma YAKLAŞMASI (isteğe bağlı). ÖNEMLİ: Bu, coin toplamayı ASLA
-  // kısa devre yapmaz. Önceden burada erken `return` vardı; bot çalma görevi
-  // varken rakibi yakın olduğu sürece coin toplamayı tamamen bırakıp sürekli
-  // rakibi kovalıyordu ("bot skor üretmiyor" regresyonu). Artık yaklaşma
-  // yalnızca bir TERCİH'tir: uygun bir coin hedefi yoksa devreye girer.
-  let stealApproach = false
-  if (rival) {
-    const rivalDist = dist(bx, by, rival.x, rival.y)
-    const canStealNow = now - memory.lastStealAt >= BOT_STEAL_COOLDOWN_MS
-    // Çalma YALNIZCA gerçekten gerekliyse (çalma görevi + henüz tamamlanmadıysa)
-    // hedeflenir. Önceden bot, çalma görevi OLMAZSA BİLE rakip menzile girince
-    // fırsatçı olarak ona yürüyordu; bu yüzden "bot beni takip edip içime
-    // giriyordu". Artık fırsatçı takip YOKTUR.
-    if (stealNeeded && rivalDist <= STEAL_RADIUS && canStealNow) {
-      // Menzil içinde ve çalma hazır: çal.
-      wantSteal = true
-    } else if (stealNeeded && rivalDist <= STEAL_APPROACH_RADIUS && rivalDist > STEAL_STANDOFF_RADIUS) {
-      // Çalma görevi var, rakip yakın ama henüz menzilde değil: yaklaşmayı
-      // TERCİH et. STANDOFF: menzile yaklaşınca (STEAL_STANDOFF_RADIUS) dururuz;
-      // böylece rakibin üzerine yürüyüp "içine girmeyiz". Bu bayrak aşağıda
-      // yalnızca geçerli bir coin hedefi YOKSA kullanılır.
-      stealApproach = true
+  const stealsRemaining = objective?.stealTarget
+    ? Math.max(0, objective.stealTarget - (me.stolen ?? 0))
+    : Math.max(0, target - progress)
+  const stealNeeded = stealObjective && stealsRemaining > 0
+  const collectIds = coins
+    .filter((coin) => !coin.collectedBy && dist(bx, by, coin.x, coin.y) <= COLLECT_RADIUS)
+    .map((coin) => coin.id)
+
+  // While steal requirements remain, pursuing the rival takes precedence over
+  // coins and medium-difficulty detours. Navigation picks a reachable point
+  // inside the actual steal radius and routes around obstacles.
+  if (stealNeeded && rival) {
+    const rivalDistance = dist(bx, by, rival.x, rival.y)
+    if (rivalDistance <= STEAL_RADIUS) {
+      return {
+        dx: 0,
+        dy: 0,
+        collectIds,
+        steal: now - memory.lastStealAt >= BOT_STEAL_COOLDOWN_MS,
+      }
     }
+
+    const waypoint = nextNavigationPointToAny(
+      { x: bx, y: by },
+      stealApproachPoints(rival),
+    )
+    if (waypoint) return approach(bx, by, waypoint.x, waypoint.y, collectIds, false)
+    return { dx: 0, dy: 0, collectIds, steal: false }
   }
 
   // --- 2) HATA (MISTAKE) DURUMU ---
@@ -424,30 +444,12 @@ export const decideBot = (input: BotInput, memory: BotMemory): BotDecision => {
     }, undefined)
   }
 
-  // --- 4) TOPLAMA (menzil içindeki coinler) ---
-  // Bot, insanla aynı `COLLECT_RADIUS` içindeki TÜM coinleri toplar.
-  const collectIds = coins
-    .filter((c) => !c.collectedBy && dist(bx, by, c.x, c.y) <= COLLECT_RADIUS)
-    .map((c) => c.id)
-
-  // --- 5) HAREKET ---
-  // ÖNCELİK: Coin toplamak. Çalma YAKLAŞMASI yalnızca geçerli bir coin hedefi
-  // YOKSA devreye girer; böylece bot çalma görevi varken bile skor üretmeye
-  // devam eder (regresyon düzeltmesi).
-  //
-  // ÇALMA ANINDA ÜZERİNE YÜRÜME YOK: `wantSteal` true iken bot zaten
-  // `STEAL_RADIUS` içindedir; çalma bu karede gerçekleşir. Rakibin ÜZERİNE
-  // yürümek yerine normal coin hedefine devam eder (veya durur). Böylece bot
-  // rakibin "içine girmez". Çalma bayrağı yine de iletilir.
+  // --- 4) HAREKET ---
+  // Coin hunting resumes when no steal component remains.
   if (targetCoin) {
-    return approachWithNavigation(bx, by, targetCoin.x, targetCoin.y, collectIds, wantSteal)
+    return approachWithNavigation(bx, by, targetCoin.x, targetCoin.y, collectIds, false)
   }
-  // Coin hedefi yok ama çalma yaklaşması tercih ediliyorsa rakibe doğru ilerle
-  // (standoff mesafesinde durur; üzerine yürümez).
-  if (stealApproach && rival) {
-    return approachWithNavigation(bx, by, rival.x, rival.y, collectIds, wantSteal)
-  }
-  return { dx: 0, dy: 0, collectIds, steal: wantSteal }
+  return { dx: 0, dy: 0, collectIds, steal: false }
 }
 
 /** Bir hedefe doğru normalize edilmiş yön üretir. */
