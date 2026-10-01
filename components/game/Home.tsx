@@ -11,6 +11,8 @@ type Props = {
   progress: ProgressApi
   onCreate: (name: string) => void
   onJoin: (code: string, name: string) => void
+  /** Tek oyunculu "Play vs Bot" modunu başlatır. */
+  onPlayBot: (name: string) => void
   busy?: boolean
   error?: string | null
   /** Kayıtlı görünen ad (localStorage'dan). */
@@ -25,10 +27,12 @@ const STEPS = [
 ]
 const NAME_MAX = 16
 
-export function Home({ progress, onCreate, onJoin, busy, error, initialName = '' }: Props) {
+export function Home({ progress, onCreate, onJoin, onPlayBot, busy, error, initialName = '' }: Props) {
   const { profile, progress: raw, online } = progress
   const [joinOpen, setJoinOpen] = useState(false)
   const [name, setName] = useState(initialName)
+  // Oyun modu seçimi: "friend" (2 oyunculu) veya "bot" (tek oyunculu).
+  const [mode, setMode] = useState<'friend' | 'bot'>('friend')
 
   const trimmed = name.trim()
   const nameValid = trimmed.length >= 2
@@ -77,14 +81,50 @@ export function Home({ progress, onCreate, onJoin, busy, error, initialName = ''
             </label>
           </div>
 
-          <div className="hero-actions">
-            <Button onClick={() => onCreate(trimmed)} disabled={busy || !nameValid}>
-              {busy ? 'Creating…' : '🎉 Create a game'}
-            </Button>
-            <Button variant="ghost" onClick={() => setJoinOpen(true)} disabled={busy || !nameValid}>
-              🔗 Join with code
-            </Button>
+          <div className="mode-toggle" role="tablist" aria-label="Game mode">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === 'friend'}
+              className={['mode-tab', mode === 'friend' ? 'active' : ''].filter(Boolean).join(' ')}
+              onClick={() => setMode('friend')}
+              disabled={busy}
+            >
+              <span aria-hidden>👥</span> Play with a Friend
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === 'bot'}
+              className={['mode-tab', mode === 'bot' ? 'active' : ''].filter(Boolean).join(' ')}
+              onClick={() => setMode('bot')}
+              disabled={busy}
+            >
+              <span aria-hidden>🤖</span> Play vs Bot
+            </button>
           </div>
+
+          <div className="hero-actions">
+            {mode === 'friend' ? (
+              <>
+                <Button onClick={() => onCreate(trimmed)} disabled={busy || !nameValid}>
+                  {busy ? 'Creating…' : '🎉 Create a game'}
+                </Button>
+                <Button variant="ghost" onClick={() => setJoinOpen(true)} disabled={busy || !nameValid}>
+                  🔗 Join with code
+                </Button>
+              </>
+            ) : (
+              <Button onClick={() => onPlayBot(trimmed)} disabled={busy || !nameValid}>
+                {busy ? 'Starting…' : '🤖 Play vs Bot'}
+              </Button>
+            )}
+          </div>
+          {mode === 'bot' && (
+            <p className="muted">
+              Single-player match against a medium-difficulty bot. Same rules, same arena.
+            </p>
+          )}
           {!nameValid && <p className="muted">Pick a name (at least 2 characters) to start.</p>}
           {error && <p className="error">{error}</p>}
         </section>
