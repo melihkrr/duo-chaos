@@ -5,7 +5,7 @@ import { ChaosBanner } from './ChaosBanner'
 import { CosmeticsPicker } from './CosmeticsPicker'
 import { VirtualJoystick } from './VirtualJoystick'
 import { Button } from '../ui/Button'
-import { ARENA, OBSTACLES, avatarGlyph, trailById } from '../../lib/config'
+import { ARENA, OBSTACLES, avatarGlyph, emoteById, trailById } from '../../lib/config'
 import { SCORE_POP_MS } from '../../lib/useGameLoop'
 import { missionLabel, objectiveOf, progressOf, targetOf } from '../../lib/display'
 import type { ChaosApi } from '../../lib/useChaos'
@@ -575,7 +575,24 @@ export function Battle({
                 </span>
               </span>
               <span className="avatar-name">{isMe ? 'You' : player.name}</span>
-              {player.emote && <span className="avatar-emote">{player.emote}</span>}
+              {/*
+                RAKİP EMOTE ETİKETİ.
+                KÖK SORUN ("emote atmadım ama 'wave' yazısı ekranda kalıyor"):
+                Burada `player.emote` gösteriliyordu; bu alan SEÇİLİ (kalıcı)
+                emote tercihidir ve varsayılanı `'wave'`'tir. Dolayısıyla hiç
+                emote atılmasa bile oyuncunun üstünde kalıcı olarak "wave"
+                yazısı asılı kalıyordu. Ayrıca ham id (`wave`) gösteriliyordu,
+                animasyon glifi (👋) değil.
+                ÇÖZÜM: Etiket yalnızca RAKİP için ve yalnızca geçici bir uzak
+                emote aktifken gösterilir; içeriği de gliftir. Yerel oyuncunun
+                kendi emote'u zaten `cosmetics.activeGlyph` ile (aşağıda)
+                gösterilir; bu yüzden burada tekrar edilmez.
+              */}
+              {!isMe && player.emote && (
+                <span className="avatar-emote" aria-hidden>
+                  {emoteById(player.emote)?.glyph ?? ''}
+                </span>
+              )}
             </div>
           )
         })}
