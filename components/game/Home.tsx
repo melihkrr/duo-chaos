@@ -92,7 +92,6 @@ export function Home({ progress, onCreate, onJoin, busy, error, initialName = ''
         <aside className="home-side">
           <Panel
             title="Your profile"
-            subtitle={online ? 'Synced with server' : 'Offline — progress saved locally'}
             className="profile-card"
           >
             <div className="profile-row">
@@ -106,7 +105,7 @@ export function Home({ progress, onCreate, onJoin, busy, error, initialName = ''
                   <span style={{ width: `${Math.round(profile.progress * 100)}%` }} />
                 </div>
                 <small className="muted">
-                  {raw.xp} XP · {raw.wins}W / {raw.matches}M
+                  {raw.xp} XP
                 </small>
               </div>
             </div>
