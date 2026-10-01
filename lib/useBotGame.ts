@@ -147,6 +147,15 @@ export const useBotGame = (): BotGameApi => {
   const lastRound = useRef(1)
   const lastPhase = useRef(state.phase)
   const objectiveIdRef = useRef<string | null>(null)
+  // `chaos` nesnesi, canlı bir olay sürerken `secondsLeft` her 250 ms'de
+  // değiştiği için KARARSIZ bir kimliğe sahiptir. Chaos senkron interval'ini
+  // doğrudan `chaos`'a bağlarsak interval her 250 ms'de sıfırlanır ve olay
+  // hiçbir zaman uygulanmaz (banner görünmez). Bu yüzden güncel `chaos`'u bir
+  // ref üzerinden okuruz; interval yalnızca faz değişiminde yeniden kurulur.
+  const chaosRef = useRef(chaos)
+  useEffect(() => {
+    chaosRef.current = chaos
+  }, [chaos])
 
   const onJoystick = useCallback((dx: number, dy: number) => {
     joystick.current = { x: dx, y: dy }
@@ -641,6 +650,28 @@ export const useBotGame = (): BotGameApi => {
     })
   }, [])
 
+  // ANA DÖNGÜ (RAF): `step`'i her karede çağırır. Yalnızca aktif fazlarda
+  // (countdown/battle) çalışır; home/results/matchover'da tamamen durur.
+  //
+  // ÖNEMLİ: Bu döngü olmadan `step` HİÇ çağrılmaz → ne yerel oyuncu ne de bot
+  // hareket eder. Çok oyunculu `useGameLoop` ile aynı desen: `step` içindeki
+  // faz karşılaştırmaları mutlak epoch-ms olduğundan `Date.now()` geçiririz;
+  // `dt` ise monotonik `performance.now()` farkından gelir.
+  const loopActive = state.phase === 'countdown' || state.phase === 'battle'
+  useEffect(() => {
+    if (!loopActive) return
+    let raf = 0
+    let last = performance.now()
+    const tick = (perfNow: number) => {
+      const dt = Math.min(0.05, (perfNow - last) / 1000)
+      last = perfNow
+      step(Date.now(), dt)
+      raf = window.requestAnimationFrame(tick)
+    }
+    raf = window.requestAnimationFrame(tick)
+    return () => window.cancelAnimationFrame(raf)
+  }, [step, loopActive])
+
   // Faz değişiminde ses.
   useEffect(() => {
     if (state.phase !== lastPhase.current) {
@@ -651,6 +682,11 @@ export const useBotGame = (): BotGameApi => {
 
   // Chaos olayı: tek oyunculu modda da tur içinde bir chaos olayı gösterelim
   // (görsel çeşitlilik). Sunucu olmadığından basit bir periyodik seçim yaparız.
+  //
+  // ÖNEMLİ: Bağımlılık YALNIZCA `state.phase`. `chaos`'a bağlarsak (canlı olay
+  // sürerken `secondsLeft` her 250 ms'de değişir) interval sürekli sıfırlanır
+  // ve chaos olayı hiç uygulanmaz → banner görünmez. Güncel `chaos`'u ref'ten
+  // okuruz.
   useEffect(() => {
     if (state.phase !== 'battle') return
     const id = window.setInterval(() => {
@@ -661,20 +697,22 @@ export const useBotGame = (): BotGameApi => {
       const events = ['gold-rush', 'blackout', 'magnet', 'swap', 'jackpot'] as const
       const nextId = events[slot % events.length]
       if (s.chaosEvent?.id !== nextId) {
-        chaos.sync({ id: nextId, endsAt: Date.now() + 12_000 })
+        chaosRef.current.sync({ id: nextId, endsAt: Date.now() + 12_000 })
       }
     }, 3_000)
     return () => window.clearInterval(id)
-  }, [state.phase, chaos])
+  }, [state.phase])
 
-  // Chaos süresi dolunca temizle.
+  // Chaos süresi dolunca temizle. Bağımlılık YALNIZCA `state.phase`; güncel
+  // `chaos` ref'ten okunur (yukarıdaki ile aynı gerekçe).
   useEffect(() => {
-    if (!chaos.event) return
+    if (state.phase !== 'battle') return
     const id = window.setInterval(() => {
-      if (chaos.endsAt > 0 && Date.now() >= chaos.endsAt) chaos.clear()
+      const c = chaosRef.current
+      if (c.event && c.endsAt > 0 && Date.now() >= c.endsAt) c.clear()
     }, 500)
     return () => window.clearInterval(id)
-  }, [chaos])
+  }, [state.phase])
 
   // `objectiveIdRef` — görev değişimini izle (ileride genişletme için).
   useEffect(() => {

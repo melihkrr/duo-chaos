@@ -439,7 +439,7 @@ h3 {
 }
 
 .doodle-c {
-  bottom: 16.5%;
+  bottom: 9.5%;
   left: 10%;
   animation-delay: 1.6s;
 }
@@ -471,6 +471,14 @@ h3 {
   }
 
   .hero .lede {
+    margin-left: 0;
+    margin-right: 0;
+  }
+
+  /* Masaüstünde hero sola hizalanır. `name-row`, `mode-toggle` ve
+     `hero-actions` üçü de aynı sol kenardan başlamalı; aksi halde isim
+     alanı ortada kalırken mod seçici sola kayar ve hizasız görünür. */
+  .name-row {
     margin-left: 0;
     margin-right: 0;
   }
