@@ -92,7 +92,7 @@ export function Home({ progress, onCreate, onJoin, onPlayBot, busy, error, initi
                   nameDirtyRef.current = true
                   setName(event.target.value.slice(0, NAME_MAX))
                 }}
-                placeholder="e.g. Melih"
+                placeholder="e.g. Little Panda"
                 maxLength={NAME_MAX}
                 autoComplete="nickname"
                 spellCheck={false}
