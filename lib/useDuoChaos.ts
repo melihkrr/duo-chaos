@@ -17,6 +17,7 @@ import {
   createPositionActionQueue,
   isRpcSuccess,
   runAfterPositionSync,
+  shouldIgnoreStalePhaseSnapshot,
   shouldRetryRematch,
 } from './objectiveSync'
 import { playSound, unlockAudio } from './sound'
@@ -1547,8 +1548,19 @@ export const useDuoChaos = () => {
       const localCountdownEndsAt = toLocal(data.countdownEndsAt)
       setState((prev) => {
         const serverRound = typeof data.round === 'number' ? data.round : prev.round
-        if (serverRound < prev.round) return prev
         const serverPhase = data.phase as Phase
+        // A rematch resets round 3 -> 1 while transitioning matchover -> lobby.
+        // Do not mistake that authoritative reset for a stale public snapshot.
+        if (
+          shouldIgnoreStalePhaseSnapshot(
+            prev.phase,
+            prev.round,
+            serverPhase,
+            serverRound,
+          )
+        ) {
+          return prev
+        }
         // Faz geçişleri. Döngüsel bir akış vardır: bir tur bittiğinde
         // `results`'a, yeni tur başladığında TEKRAR `countdown`'a döneriz.
         // Bu yüzden düz bir "rank" karşılaştırması YETMEZ: `results` (rank 4)

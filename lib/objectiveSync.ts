@@ -3,6 +3,16 @@ import type { Phase, Player, State } from './types'
 export const shouldRetryRematch = (phase: Phase, locallyReady: boolean): boolean =>
   phase === 'matchover' && locallyReady
 
+export const shouldIgnoreStalePhaseSnapshot = (
+  currentPhase: Phase,
+  currentRound: number,
+  serverPhase: Phase,
+  serverRound: number,
+): boolean => {
+  if (serverRound >= currentRound) return false
+  return !(currentPhase === 'matchover' && serverPhase === 'lobby')
+}
+
 export type ObjectiveProgressFields = Pick<
   Player,
   'coins' | 'stolen' | 'roundCoins' | 'roundStolen' | 'collectedTypes' | 'objectiveProgress'

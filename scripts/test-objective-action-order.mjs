@@ -3,6 +3,7 @@ import {
   createPositionActionQueue,
   isRpcSuccess,
   runAfterPositionSync,
+  shouldIgnoreStalePhaseSnapshot,
   shouldRetryRematch,
 } from '../lib/objectiveSync.ts'
 
@@ -177,6 +178,16 @@ console.log('\nRematch RPC retries until server phase changes, regardless of riv
     !shouldRetryRematch('lobby', true))
   check('not-ready player does not submit rematch heartbeat',
     !shouldRetryRematch('matchover', false))
+}
+
+console.log('\nRematch phase reconciliation accepts the authoritative round reset')
+{
+  check('matchover round 3 -> lobby round 1 is not discarded as stale',
+    !shouldIgnoreStalePhaseSnapshot('matchover', 3, 'lobby', 1))
+  check('older round in the same phase remains stale',
+    shouldIgnoreStalePhaseSnapshot('matchover', 3, 'matchover', 2))
+  check('older battle snapshot cannot roll back a newer results round',
+    shouldIgnoreStalePhaseSnapshot('results', 2, 'battle', 1))
 }
 
 console.log('\nPosition updates and authoritative actions share one ordered queue')
