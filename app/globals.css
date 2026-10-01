@@ -1591,7 +1591,12 @@ h3 {
   inset: 0;
   display: block;
   pointer-events: none;
-  z-index: 5;
+  /* GÖREV/HUD katmanlarının ÜZERİNDE olmalı. `.hud` `backdrop-filter` ile
+     kendi yığın bağlamını oluşturur; bu yüzden joystick'in HUD'un üstünde
+     kalabilmesi için SARMALAYICI (`.battle-foot`) da HUD'un üstünde bir
+     z-index taşımalıdır. Aksi halde içerideki `z-index: 50` yalnızca bu
+     sarmalayıcının bağlamı içinde geçerli olur ve HUD yine üstte kalır. */
+  z-index: 45;
 }
 
 /* Diğer kontroller tam ekranda gizlenir. */
@@ -1604,6 +1609,9 @@ h3 {
   position: absolute;
   inset: 0;
   pointer-events: none;
+  /* Sarmalayıcı da HUD'un üstünde kalsın (içerideki joystick z-index'i bu
+     bağlam içinde değerlendirilir). */
+  z-index: 1;
 }
 
 /* Joystick sağ altta, yarı şeffaf. */
