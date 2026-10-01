@@ -161,6 +161,12 @@ export const useGameLoop = (deps: LoopDeps) => {
   // tabanından biriktirir; görev değiştiğinde taban hâlâ ESKİ görevin sayısını
   // taşır. Bu ref, görev `id`'si değiştiğinde iyimser tabanı sıfırlar.
   const objectiveIdRef = useRef<string | null>(null)
+  // İYİMSER İLERLEME SAYACI (görev başına): bu görev için iyimser olarak
+  // SAYILMIŞ coin id'leri. Aynı coin (respawn sonrası yeniden toplansa bile)
+  // ASLA iki kez sayılmaz. Görev değiştiğinde temizlenir. Bu, "3 topladım ama
+  // 2/3 gösteriyor" (çift sayma / kayma) hatasının kök çözümüdür: ilerleme,
+  // sunucu değeri + yalnızca HENÜZ sayılmamış yeni coinlerin katkısıdır.
+  const countedCoinIdsRef = useRef<Set<number>>(new Set())
 
   /**
    * Joystick vektörünü günceller. Ref'i doğrudan dışarı vermek yerine bir
@@ -545,53 +551,75 @@ export const useGameLoop = (deps: LoopDeps) => {
     }
     // Görev değiştiyse taban 0; aksi halde sunucudan gelen ilerlemeyi kullan.
     const baseProgress = objectiveChanged ? 0 : (me.objectiveProgress ?? 0)
-    // İYİMSER İLERLEME: bu karede toplanan coinlerin görev ilerlemesine katkısı.
-    // Sunucu `duo_mission_progress` ile AYNI mantığı izleriz:
-    //   - `requirements` varsa: her tür için min(toplam, required) toplamı
-    //   - `coinType` (mixed değil) varsa: o türün toplamı
-    //   - aksi halde: toplam coin (steal görevinde çalma ayrı sayılır)
-    // Böylece ilerleme, sayaçlardan YENİDEN İNŞA edilmez; doğrudan artırılır ve
-    // görev tamamlanmasında sayaçlar sıfırlansa bile "artıp geri düşmez".
-    const collectedTypes = state.coins
-      .filter((coin) => collectedSet.has(coin.id))
-      .reduce<Partial<Record<Coin['type'], number>>>(
-        (counts, coin) => ({ ...counts, [coin.type]: (counts[coin.type] ?? 0) + 1 }),
-        {},
-      )
+    // Görev değiştiyse iyimser sayacı SIFIRLA (yeni görev, yeni coinler).
+    if (objectiveChanged) countedCoinIdsRef.current = new Set()
+
     const objective = me.objective
     const collectedCount = collectedIds.length
+
+    // İYİMSER İLERLEME (ÇİFT SAYMA YOK):
+    // Yalnızca bu görev için HENÜZ sayılmamış coin id'lerini hesaba katarız.
+    // Aynı coin (respawn sonrası yeniden toplansa bile) bir kez sayılır. Böylece
+    // "3 topladım ama 2/3 gösteriyor" (çift sayma / kayma) hatası oluşmaz.
+    const counted = countedCoinIdsRef.current
+    const freshCoins = state.coins.filter(
+      (coin) => collectedSet.has(coin.id) && !counted.has(coin.id),
+    )
+    const freshTypes = freshCoins.reduce<Partial<Record<Coin['type'], number>>>(
+      (counts, coin) => ({ ...counts, [coin.type]: (counts[coin.type] ?? 0) + 1 }),
+      {},
+    )
+    // Sayılan id'leri işaretle (bir daha sayılmasınlar).
+    for (const coin of freshCoins) counted.add(coin.id)
+
     let progressDelta = 0
     if (objective?.requirements) {
-      // Her tür için: mevcut toplam + bu karede toplanan; min(., required).
-      // Taban ilerleme zaten min'lenmiş olduğundan, yalnızca bu karenin
-      // katkısını hesaplamak için tür bazında toplamı yeniden kurarız.
-      const totals: Partial<Record<Coin['type'], number>> = { ...(me.collectedTypes ?? {}) }
-      for (const [type, count] of Object.entries(collectedTypes)) {
-        totals[type as Coin['type']] = (totals[type as Coin['type']] ?? 0) + (count ?? 0)
-      }
+      // Tür bazlı: sunucu `duo_mission_progress` ile AYNI mantık. Taban, sunucu
+      // `collectedTypes`'ıdır; üzerine YALNIZCA yeni coinlerin katkısını ekleriz.
       progressDelta = Object.entries(objective.requirements).reduce((sum, [type, required]) => {
         const before = Math.min(me.collectedTypes?.[type as Coin['type']] ?? 0, required || 0)
-        const after = Math.min(totals[type as Coin['type']] ?? 0, required || 0)
+        const after = Math.min(
+          (me.collectedTypes?.[type as Coin['type']] ?? 0) + (freshTypes[type as Coin['type']] ?? 0),
+          required || 0,
+        )
         return sum + Math.max(0, after - before)
       }, 0)
     } else if (objective?.coinType && objective.coinType !== 'mixed') {
-      progressDelta = collectedTypes[objective.coinType] ?? 0
+      progressDelta = freshTypes[objective.coinType] ?? 0
     } else if (objective?.kind === 'steal') {
       progressDelta = stealing ? 1 : 0
     } else {
-      progressDelta = collectedCount
+      progressDelta = freshCoins.length
     }
-    const projectedProgress = baseProgress + progressDelta
+    // MONOTONİK: görev değişmediği sürece ilerleme ASLA geri düşmez. Sunucu
+    // snapshot'ı gecikmeli geldiğinde `baseProgress` eski (düşük) kalabilir;
+    // yerel değerin altına inmeyiz. Görev değiştiyse taban zaten 0'dır ve
+    // `objectiveChanged` dalı yeni değeri uygular.
+    const localProgress = me.objectiveProgress ?? 0
+    const projectedProgress = objectiveChanged
+      ? baseProgress + progressDelta
+      : Math.max(localProgress, baseProgress + progressDelta)
 
     // Görev tamamlanma kararı: sunucu ilerlemesi + iyimser katkı hedefi
     // karşılıyorsa tamamlanmış sayılır. `!me.missionDone` guard'ı şart: görev
     // tamamlandıktan sonra ilerleme yeni görev verilene kadar hedefi
     // karşılamaya devam eder; guard olmadan her karede tekrar tetiklenir.
+    //
+    // `collectedTypes`: sunucu toplamı + bu karede sayılan yeni coinler. Böylece
+    // `objectiveSatisfied`'ın `resourcesMet` kontrolü (tür bazlı hedef) doğru
+    // çalışır; yalnızca bu karenin coinleriyle sınırlı kalmaz.
+    const accumulatedTypes: Partial<Record<Coin['type'], number>> = {
+      ...(me.collectedTypes ?? {}),
+    }
+    for (const [type, count] of Object.entries(freshTypes)) {
+      accumulatedTypes[type as Coin['type']] =
+        (accumulatedTypes[type as Coin['type']] ?? 0) + (count ?? 0)
+    }
     const projected: Player = {
       ...me,
       coins: me.coins + collectedCount,
       stolen: me.stolen + (stealing ? 1 : 0),
-      collectedTypes,
+      collectedTypes: accumulatedTypes,
       objectiveProgress: projectedProgress,
     }
     const objectiveDone = !me.missionDone && objectiveSatisfied(projected)
@@ -661,7 +689,10 @@ export const useGameLoop = (deps: LoopDeps) => {
               // TUR TOPLAMI: sonuç ekranı `roundCoins` okur; sunucu yoklaması
               // gelene kadar iyimser artırırız (sunucu değeri yine otoritedir).
               roundCoins: (next.roundCoins ?? 0) + collectedIds.length,
-              collectedTypes,
+              // TOPLAM TÜRLER: sunucu toplamı + bu karede sayılan yeni coinler.
+              // Yalnızca bu karenin coinlerini yazmak, görev ilerlemesini
+              // "2/3"te takılı bırakıyordu; artık tam toplam yazılır.
+              collectedTypes: accumulatedTypes,
               // İYİMSER İLERLEME: sunucu yoklaması gelene kadar ilerlemeyi
               // doğrudan artırırız. Sunucu değeri (monotonik birleştirme ile)
               // geldiğinde otorite olur; asla geri düşmez.

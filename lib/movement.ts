@@ -12,10 +12,12 @@ import { ARENA, OBSTACLES, PLAYER_HIT_R } from './config'
  *    çarpışma tetiklenmiyordu ("fiziksel sınır görselin içinde kalıyor").
  *    Artık çarpışma yarıçapı = gerçek görsel yarıçap (`PLAYER_HIT_R`).
  *
- * 2) KENARLIK (BORDER) DAHİL
- *    Engel kutusu, CSS'teki 3px kenarlığı da kapsayacak şekilde
- *    genişletilir. Böylece "görünen engelin en dışı" ile "çarpışma
- *    kutusunun en dışı" aynı yere denk gelir; görselin dışında boşluk kalmaz.
+ * 2) GÖRSEL DİKDÖRTGENLE BİREBİR
+ *    Engel kutusu, `Battle.tsx`'te çizilen `w% × h%` dikdörtgenin TA KENDİSİDİR.
+ *    Kenarlık (border) ile GENİŞLETİLMEZ; aksi halde çarpışma, görünen
+ *    dikdörtgenin DIŞINA taşar ve oyuncu "görünmeyen bir duvara" çarpar.
+ *    Kullanıcı şikâyeti: "fiziksel olarak görünen kısmından fazla yerde engel
+ *    uyguluyoruz". Bu yüzden kutu, görselin nominal boyutuna birebir eşittir.
  *
  * 3) SÜPÜRMELİ (SWEPT) ÇARPIŞMA
  *    Hareket, en ince engelin yarısından küçük adımlara bölünerek ilerletilir.
@@ -29,29 +31,15 @@ import { ARENA, OBSTACLES, PLAYER_HIT_R } from './config'
  */
 
 /**
- * CSS'teki engel kenarlığı (px). `app/globals.css` → `.obstacle { border: 3px }`.
- * Engel kutusunu bu kadar genişletiriz ki görsel ile fiziksel birebir olsun.
+ * Engel kutusu — `Battle.tsx`'te çizilen `w% × h%` dikdörtgenle BİREBİR.
+ * Kenarlık ile GENİŞLETİLMEZ; çarpışma asla görünen dikdörtgenin dışına taşmaz.
  */
-const OBSTACLE_BORDER_PX = 3
-
-/**
- * 1 yüzde biriminin yaklaşık piksel karşılığı. Arena kare kabul edilir ve
- * oyuncu gövdesi 32px + 2*3px kenarlık = 38px çaptır (yarıçap ≈ 19px).
- * `PLAYER_HIT_R = 4.2` (%) → 1% ≈ 19 / 4.2 ≈ 4.52px.
- * Kenarlık düzeltmesi için yeterli hassasiyettedir.
- */
-const PX_PER_PERCENT = 19 / PLAYER_HIT_R
-
-/** Engel kenarlığının yüzde birimi cinsinden karşılığı. */
-const OBSTACLE_BORDER = OBSTACLE_BORDER_PX / PX_PER_PERCENT
-
-/** Kenarlık dahil edilmiş engel kutusu (yerel eksende yarı-genişlik/yarı-yükseklik). */
 type ObstacleBox = {
   cx: number
   cy: number
-  /** Yerel x ekseninde yarı-genişlik (kenarlık dahil). */
+  /** Yerel x ekseninde yarı-genişlik (görsel dikdörtgenle birebir). */
   hw: number
-  /** Yerel y ekseninde yarı-yükseklik (kenarlık dahil). */
+  /** Yerel y ekseninde yarı-yükseklik (görsel dikdörtgenle birebir). */
   hh: number
   cos: number
   sin: number
@@ -62,8 +50,8 @@ const OBSTACLE_BOXES: ObstacleBox[] = OBSTACLES.map((o) => {
   return {
     cx: o.cx,
     cy: o.cy,
-    hw: o.w / 2 + OBSTACLE_BORDER,
-    hh: o.h / 2 + OBSTACLE_BORDER,
+    hw: o.w / 2,
+    hh: o.h / 2,
     cos: Math.cos(rad),
     sin: Math.sin(rad),
   }

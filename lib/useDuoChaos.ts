@@ -866,27 +866,26 @@ export const useDuoChaos = () => {
               collectedTypes[type as Coin['type']] =
                 (collectedTypes[type as Coin['type']] ?? 0) + (count ?? 0)
             }
-            // İYİMSER İLERLEME: sunucu `duo_mission_progress` ile AYNI mantık.
-            // Rakip HUD'undaki görev ilerlemesi sunucu yoklaması gelene kadar
-            // anında artsın; sunucu değeri (monotonik birleştirme) otoritedir.
+            // İYİMSER İLERLEME: rakip HUD'undaki görev ilerlemesi sunucu
+            // yoklaması gelene kadar anında artsın. İlerlemeyi, birikmiş
+            // `collectedTypes`'tan DOĞRUDAN türetiriz (sunucu
+            // `duo_mission_progress` ile AYNI mantık). Böylece hem çift sayma
+            // olmaz hem de "artıp geri düşme" yaşanmaz; sunucu değeri geldiğinde
+            // monotonik birleştirme (`mergeProgress`) otorite olur.
             const objective = player.objective
-            let progressDelta = 0
+            let derivedProgress = player.objectiveProgress ?? 0
             if (objective?.requirements) {
-              progressDelta = Object.entries(objective.requirements).reduce(
-                (sum, [type, required]) => {
-                  const before = Math.min(
-                    player.collectedTypes?.[type as Coin['type']] ?? 0,
-                    required || 0,
-                  )
-                  const after = Math.min(collectedTypes[type as Coin['type']] ?? 0, required || 0)
-                  return sum + Math.max(0, after - before)
-                },
+              derivedProgress = Object.entries(objective.requirements).reduce(
+                (sum, [type, required]) =>
+                  sum + Math.min(collectedTypes[type as Coin['type']] ?? 0, required || 0),
                 0,
               )
             } else if (objective?.coinType && objective.coinType !== 'mixed') {
-              progressDelta = gainedTypes[objective.coinType] ?? 0
-            } else if (objective?.kind !== 'steal') {
-              progressDelta = newlyCollected
+              derivedProgress = collectedTypes[objective.coinType] ?? 0
+            } else if (objective?.kind === 'steal') {
+              derivedProgress = player.stolen ?? 0
+            } else {
+              derivedProgress = player.coins + newlyCollected
             }
             return {
               ...player,
@@ -896,7 +895,8 @@ export const useDuoChaos = () => {
               // sonucu görsün diye sunucu değeri yine otoritedir).
               roundCoins: (player.roundCoins ?? 0) + newlyCollected,
               collectedTypes,
-              objectiveProgress: (player.objectiveProgress ?? 0) + progressDelta,
+              // Monotonik: asla geri düşmez.
+              objectiveProgress: Math.max(player.objectiveProgress ?? 0, derivedProgress),
             }
           }),
         }
