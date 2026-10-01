@@ -545,13 +545,22 @@ export const useGameLoop = (deps: LoopDeps) => {
     // sayaçları sıfırladı) tabanı SIFIRLA. Aksi halde eski görevin sayıları
     // yeni göreve taşınır ve yoklama sıfırlayınca sayaç zıplar.
     const objectiveId = me.objective?.id ?? null
-    const objectiveChanged = objectiveIdRef.current !== objectiveId
-    if (objectiveChanged) {
+    const objectiveIdChanged = objectiveIdRef.current !== objectiveId
+    if (objectiveIdChanged) {
       objectiveIdRef.current = objectiveId
     }
-    // Görev değiştiyse taban 0; aksi halde sunucudan gelen ilerlemeyi kullan.
+    // ERTELENMİŞ REROLL (0032) İSTEMCİ UYUMU:
+    // Sunucu artık görev tamamlandığı ANDA reroll YAPMAZ; görev `missionDone`
+    // olarak KALIR (3/3 görünür). Reroll, oyuncunun BİR SONRAKİ eyleminde
+    // (collect/steal) sunucu tarafında yapılır. Bu yüzden görev `id`'si henüz
+    // değişmemiş olsa bile, görev TAMAMLANMIŞSA (`me.missionDone`) bir sonraki
+    // eylemi YENİ görevin başlangıcı sayarız: tabanı 0'a çekeriz. Aksi halde
+    // tamamlanmış görevin ilerlemesi (3) üzerine eklenir ve bar hedefi aşar.
+    const objectiveCompleted = Boolean(me.missionDone)
+    const objectiveChanged = objectiveIdChanged || objectiveCompleted
+    // Görev değiştiyse VEYA tamamlandıysa taban 0; aksi halde sunucu değeri.
     const baseProgress = objectiveChanged ? 0 : (me.objectiveProgress ?? 0)
-    // Görev değiştiyse iyimser sayacı SIFIRLA (yeni görev, yeni coinler).
+    // Görev değiştiyse/tamamlandıysa iyimser sayacı SIFIRLA (yeni görev, yeni coinler).
     if (objectiveChanged) countedCoinIdsRef.current = new Set()
 
     const objective = me.objective
