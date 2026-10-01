@@ -202,14 +202,22 @@ const toLocalCoins = (
  *     (henüz sunucuya ulaşmamış olabilir).
  *   * Konum ve renk HER ZAMAN sunucudan alınır (iki istemci birebir aynı görsün).
  */
-const mergeCoins = (local: Coin[], server: Coin[]): Coin[] => {
+const mergeCoins = (local: Coin[], server: Coin[], meId: string): Coin[] => {
   const byId = new Map(server.map((coin) => [coin.id, coin]))
   const localIds = new Set(local.map((coin) => coin.id))
   const merged = local.map((coin) => {
     const remote = byId.get(coin.id)
     if (!remote) return coin
+    // SLOT EŞLEME: Sunucu `collectedBy` alanını SUNUCU slotu (`'p1'`/`'p2'`)
+    // olarak döndürür; yerel state YEREL slot bekler (slot 0 = 'p1' = ben).
+    // Çevirmezsek p2 istemcisinde rakip tarafından toplanan coin "ben topladım"
+    // gibi işaretlenir. (Şu an yalnızca boolean olarak kullanılsa da tutarlılık
+    // için doğru slota çeviririz.)
+    const remoteCollectedBy = remote.collectedBy
+      ? mapPlayerId(String(remote.collectedBy), meId)
+      : undefined
     // Sunucu toplanmış diyorsa otoritedir; değilse yerel "toplandı" kararını koru.
-    const collectedBy = remote.collectedBy ?? coin.collectedBy
+    const collectedBy = remoteCollectedBy ?? coin.collectedBy
     const respawnAt = remote.collectedBy ? remote.respawnAt : coin.respawnAt
     return {
       ...coin,
@@ -233,7 +241,9 @@ const mergeCoins = (local: Coin[], server: Coin[]): Coin[] => {
       x: remote.x,
       y: remote.y,
       type: remote.type,
-      collectedBy: remote.collectedBy ?? undefined,
+      collectedBy: remote.collectedBy
+        ? mapPlayerId(String(remote.collectedBy), meId)
+        : undefined,
       respawnAt: remote.respawnAt ?? undefined,
     })
   }
@@ -986,7 +996,7 @@ export const useDuoChaos = () => {
             ? prev.coins
             : roundChanged
               ? serverCoins
-              : mergeCoins(prev.coins, serverCoins)
+              : mergeCoins(prev.coins, serverCoins, myId)
           // TUR SONU SKOR BİRİKİMİ: `battle`'dan çıkıyorsak (results/matchover)
           // o turun `roundScore`'larını kümülatif `matchScores`'a ekleriz. Bu
           // yol faz geçişini `advancePhase`'ten önce yakalayabilir; biriktirme
@@ -1136,7 +1146,7 @@ export const useDuoChaos = () => {
           ? prev.coins
           : roundChanged
             ? serverCoins
-            : mergeCoins(prev.coins, serverCoins)
+            : mergeCoins(prev.coins, serverCoins, myId)
         const phaseChanged = nextPhase !== prev.phase
         const coinsChanged = coins !== prev.coins
         if (!phaseChanged && !coinsChanged) return prev

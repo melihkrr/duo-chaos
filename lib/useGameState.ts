@@ -151,6 +151,11 @@ export const useGameState = (serverSlot: 'p1' | 'p2' = 'p1'): GameStateApi => {
       chaosEvent: undefined,
       chaosEventEndsAt: undefined,
       winner: undefined,
+      // TUR SKORU: Yeni turda `roundScores` sıfırlanır. Aksi halde yeni turun
+      // sonuç ekranı, sunucu anlık görüntüsü gelene kadar ÖNCEKİ turun skorunu
+      // gösterir ("skorlar bir tur geriden geliyor" hatası). `matchScores`
+      // KÜMÜLATİF olduğu için burada sıfırlanmaz (bkz. `resetMatch`).
+      roundScores: { p1: 0, p2: 0 },
       players: prev.players.map((player, index) => {
         // Yerel slot 0 = "ben" → GERÇEK spawn'ı sunucu slotundan alır.
         // Yerel slot 1 = "rakip" → karşı slotun spawn'ı.
