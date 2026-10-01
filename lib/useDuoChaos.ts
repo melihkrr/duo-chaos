@@ -917,19 +917,27 @@ export const useDuoChaos = () => {
             // olmaz hem de "artıp geri düşme" yaşanmaz; sunucu değeri geldiğinde
             // monotonik birleştirme (`mergeProgress`) otorite olur.
             const objective = player.objective
+            // HEDEF SINIRI (0037): türetilen ilerleme hedefi ASLA aşamaz.
+            // Sunucu `duo_mission_progress` ile BİREBİR aynı: her dal
+            // `least(progress, target)` uygular. Böylece "5/3" gibi aşırı
+            // değerler istemcide de üretilemez.
+            const target = objective?.target ?? 0
+            const cap = (value: number) => (target > 0 ? Math.min(value, target) : value)
             let derivedProgress = player.objectiveProgress ?? 0
             if (objective?.requirements) {
-              derivedProgress = Object.entries(objective.requirements).reduce(
-                (sum, [type, required]) =>
-                  sum + Math.min(collectedTypes[type as Coin['type']] ?? 0, required || 0),
-                0,
+              derivedProgress = cap(
+                Object.entries(objective.requirements).reduce(
+                  (sum, [type, required]) =>
+                    sum + Math.min(collectedTypes[type as Coin['type']] ?? 0, required || 0),
+                  0,
+                ),
               )
             } else if (objective?.coinType && objective.coinType !== 'mixed') {
-              derivedProgress = collectedTypes[objective.coinType] ?? 0
+              derivedProgress = cap(collectedTypes[objective.coinType] ?? 0)
             } else if (objective?.kind === 'steal') {
-              derivedProgress = player.stolen ?? 0
+              derivedProgress = cap(player.stolen ?? 0)
             } else {
-              derivedProgress = player.coins + newlyCollected
+              derivedProgress = cap(player.coins + newlyCollected)
             }
             return {
               ...player,

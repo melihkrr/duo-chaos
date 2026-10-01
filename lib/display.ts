@@ -83,21 +83,27 @@ export const targetOf = (o?: Objective | null) => {
 export const progressOf = (
   p: Pick<Player, 'id' | 'objective' | 'coins' | 'stolen' | 'collectedTypes' | 'objectiveProgress'>,
 ) => {
-  // SUNUCU OTORİTESİ: sunucu ilerlemeyi hesapladıysa AYNEN göster.
-  if (typeof p.objectiveProgress === 'number' && Number.isFinite(p.objectiveProgress)) {
-    return Math.max(0, p.objectiveProgress)
-  }
   const objective = objectiveOf(p)
+  // HEDEF SINIRI (0037): ilerleme hedefi ASLA aşamaz. Sunucu değeri de
+  // sınırlanır; böylece "5/3" / "6/4" gibi aşırı değerler gösterilmez.
+  const target = targetOf(objective)
+  const cap = (value: number) => (target > 0 ? Math.min(value, target) : value)
+  // SUNUCU OTORİTESİ: sunucu ilerlemeyi hesapladıysa AYNEN göster (sınırlı).
+  if (typeof p.objectiveProgress === 'number' && Number.isFinite(p.objectiveProgress)) {
+    return cap(Math.max(0, p.objectiveProgress))
+  }
   if (objective?.requirements) {
-    return Object.entries(objective.requirements).reduce(
-      (sum, [type, required]) => Math.min(p.collectedTypes?.[type as CoinType] || 0, required || 0) + sum,
-      0,
+    return cap(
+      Object.entries(objective.requirements).reduce(
+        (sum, [type, required]) => Math.min(p.collectedTypes?.[type as CoinType] || 0, required || 0) + sum,
+        0,
+      ),
     )
   }
   if (objective?.coinType && objective.coinType !== 'mixed') {
-    return p.collectedTypes?.[objective.coinType] || 0
+    return cap(p.collectedTypes?.[objective.coinType] || 0)
   }
-  return objective?.kind === 'steal' ? p.stolen || 0 : p.coins || 0
+  return cap(objective?.kind === 'steal' ? p.stolen || 0 : p.coins || 0)
 }
 
 /**
