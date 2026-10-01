@@ -62,23 +62,31 @@ export const targetOf = (o?: Objective | null) => {
 }
 
 /**
- * Görev ilerlemesi (HAM sayı). Sunucudaki `duo_mission_satisfied` ile BİREBİR
- * aynı mantığı izlemelidir; aksi halde istemci "tamamlandı" derken sunucu
- * demez (veya tersi) ve sayaç tutarsız görünür.
+ * Görev ilerlemesi (HAM sayı).
  *
- * SUNUCU MANTIĞI (0002_helpers.sql):
+ * ÖNCELİK: Sunucunun `objectiveProgress` alanı (0029_objective_progress_authority).
+ * Sunucu bu değeri `duo_mission_progress` ile hesaplar ve `duo_public_state`
+ * ile döndürür. İstemci bunu DOĞRUDAN gösterir; sayaçlardan yeniden inşa
+ * ETMEZ. Böylece görev tamamlanmasında sayaçlar sıfırlansa bile ilerleme
+ * "artıp geri düşmez".
+ *
+ * YEDEK (sunucu değeri yoksa — eski oda / geçiş anı): `duo_mission_satisfied`
+ * (0002_helpers.sql) ile BİREBİR aynı mantık:
  *   - `requirements` varsa: progress = Σ min(collected[key], required)
  *   - `coinType` (mixed değil) varsa: progress = collected[coinType]
  *   - aksi halde: progress = stolen (steal) veya coins
  *
  * ÖNEMLİ: `requirements` + `steal` görevlerinde (ör. "Steal 2 and secure 1
  * Gold") sunucu `progress`e ÇALMAYI EKLEMEZ; çalma ayrı bir `steals_met`
- * koşuludur. Eski istemci kodu burada `stolen`'ı progress'e ekliyordu; bu
- * yüzden sayaç sunucudan farklı (şişkin) görünüyordu.
+ * koşuludur.
  */
 export const progressOf = (
-  p: Pick<Player, 'id' | 'objective' | 'coins' | 'stolen' | 'collectedTypes'>,
+  p: Pick<Player, 'id' | 'objective' | 'coins' | 'stolen' | 'collectedTypes' | 'objectiveProgress'>,
 ) => {
+  // SUNUCU OTORİTESİ: sunucu ilerlemeyi hesapladıysa AYNEN göster.
+  if (typeof p.objectiveProgress === 'number' && Number.isFinite(p.objectiveProgress)) {
+    return Math.max(0, p.objectiveProgress)
+  }
   const objective = objectiveOf(p)
   if (objective?.requirements) {
     return Object.entries(objective.requirements).reduce(

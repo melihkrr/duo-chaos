@@ -157,10 +157,9 @@ export const useGameLoop = (deps: LoopDeps) => {
   // böylece her pointer hareketinde React render tetiklenmez (yalnızca RAF okur).
   const joystick = useRef<JoystickVector>({ x: 0, y: 0 })
   // GÖREV KİMLİĞİ: sunucu bir görev tamamlanınca yeni bir görev atar ve
-  // `collected_types`'ı SIFIRLAR. İstemci iyimser sayacı `me.collectedTypes`
-  // tabanından biriktirdiği için, görev değiştiğinde taban hâlâ ESKİ görevin
-  // sayılarını taşır; bir sonraki yoklama sıfırlayınca sayaç "bir artıp bir
-  // azalır". Bu ref, görev `id`'si değiştiğinde iyimser tabanı sıfırlar.
+  // `collected_types`'ı SIFIRLAR. İstemci iyimser ilerlemeyi `me.objectiveProgress`
+  // tabanından biriktirir; görev değiştiğinde taban hâlâ ESKİ görevin sayısını
+  // taşır. Bu ref, görev `id`'si değiştiğinde iyimser tabanı sıfırlar.
   const objectiveIdRef = useRef<string | null>(null)
 
   /**
@@ -537,31 +536,63 @@ export const useGameLoop = (deps: LoopDeps) => {
     // güncelleyicinin DIŞINDA, mevcut `state` üzerinden hesaplıyoruz; güncelleyici
     // yalnızca saf bir dönüşüm yapar. SKOR ise tamamen sunucuya aittir.
     // İYİMSER TABAN: görev `id`'si değiştiyse (sunucu yeni görev atadı ve
-    // `collected_types`'ı sıfırladı) tabanı SIFIRLA. Aksi halde eski görevin
-    // sayıları yeni göreve taşınır ve yoklama sıfırlayınca sayaç zıplar.
+    // sayaçları sıfırladı) tabanı SIFIRLA. Aksi halde eski görevin sayıları
+    // yeni göreve taşınır ve yoklama sıfırlayınca sayaç zıplar.
     const objectiveId = me.objective?.id ?? null
     const objectiveChanged = objectiveIdRef.current !== objectiveId
     if (objectiveChanged) {
       objectiveIdRef.current = objectiveId
     }
-    // Görev değiştiyse taban BOŞ; aksi halde sunucudan gelen birikimi kullan.
-    const baseCollected = objectiveChanged ? {} : (me.collectedTypes ?? {})
+    // Görev değiştiyse taban 0; aksi halde sunucudan gelen ilerlemeyi kullan.
+    const baseProgress = objectiveChanged ? 0 : (me.objectiveProgress ?? 0)
+    // İYİMSER İLERLEME: bu karede toplanan coinlerin görev ilerlemesine katkısı.
+    // Sunucu `duo_mission_progress` ile AYNI mantığı izleriz:
+    //   - `requirements` varsa: her tür için min(toplam, required) toplamı
+    //   - `coinType` (mixed değil) varsa: o türün toplamı
+    //   - aksi halde: toplam coin (steal görevinde çalma ayrı sayılır)
+    // Böylece ilerleme, sayaçlardan YENİDEN İNŞA edilmez; doğrudan artırılır ve
+    // görev tamamlanmasında sayaçlar sıfırlansa bile "artıp geri düşmez".
     const collectedTypes = state.coins
       .filter((coin) => collectedSet.has(coin.id))
       .reduce<Partial<Record<Coin['type'], number>>>(
         (counts, coin) => ({ ...counts, [coin.type]: (counts[coin.type] ?? 0) + 1 }),
-        { ...baseCollected },
+        {},
       )
+    const objective = me.objective
+    const collectedCount = collectedIds.length
+    let progressDelta = 0
+    if (objective?.requirements) {
+      // Her tür için: mevcut toplam + bu karede toplanan; min(., required).
+      // Taban ilerleme zaten min'lenmiş olduğundan, yalnızca bu karenin
+      // katkısını hesaplamak için tür bazında toplamı yeniden kurarız.
+      const totals: Partial<Record<Coin['type'], number>> = { ...(me.collectedTypes ?? {}) }
+      for (const [type, count] of Object.entries(collectedTypes)) {
+        totals[type as Coin['type']] = (totals[type as Coin['type']] ?? 0) + (count ?? 0)
+      }
+      progressDelta = Object.entries(objective.requirements).reduce((sum, [type, required]) => {
+        const before = Math.min(me.collectedTypes?.[type as Coin['type']] ?? 0, required || 0)
+        const after = Math.min(totals[type as Coin['type']] ?? 0, required || 0)
+        return sum + Math.max(0, after - before)
+      }, 0)
+    } else if (objective?.coinType && objective.coinType !== 'mixed') {
+      progressDelta = collectedTypes[objective.coinType] ?? 0
+    } else if (objective?.kind === 'steal') {
+      progressDelta = stealing ? 1 : 0
+    } else {
+      progressDelta = collectedCount
+    }
+    const projectedProgress = baseProgress + progressDelta
 
-    // Görev tamamlanma kararı: toplama/çalma uygulandıktan SONRAKİ varsayımsal
-    // duruma göre değerlendirilir. `!me.missionDone` guard'ı şart: görev
-    // tamamlandıktan sonra `collectedTypes` yeni görev verilene kadar hedefi
+    // Görev tamamlanma kararı: sunucu ilerlemesi + iyimser katkı hedefi
+    // karşılıyorsa tamamlanmış sayılır. `!me.missionDone` guard'ı şart: görev
+    // tamamlandıktan sonra ilerleme yeni görev verilene kadar hedefi
     // karşılamaya devam eder; guard olmadan her karede tekrar tetiklenir.
     const projected: Player = {
       ...me,
-      coins: me.coins + collectedIds.length,
+      coins: me.coins + collectedCount,
       stolen: me.stolen + (stealing ? 1 : 0),
       collectedTypes,
+      objectiveProgress: projectedProgress,
     }
     const objectiveDone = !me.missionDone && objectiveSatisfied(projected)
 
@@ -631,6 +662,10 @@ export const useGameLoop = (deps: LoopDeps) => {
               // gelene kadar iyimser artırırız (sunucu değeri yine otoritedir).
               roundCoins: (next.roundCoins ?? 0) + collectedIds.length,
               collectedTypes,
+              // İYİMSER İLERLEME: sunucu yoklaması gelene kadar ilerlemeyi
+              // doğrudan artırırız. Sunucu değeri (monotonik birleştirme ile)
+              // geldiğinde otorite olur; asla geri düşmez.
+              objectiveProgress: projectedProgress,
             }
           }
           if (stealing) {
@@ -640,6 +675,8 @@ export const useGameLoop = (deps: LoopDeps) => {
               stolen: next.stolen + 1,
               // TUR TOPLAMI: sonuç ekranı `roundStolen` okur; iyimser artır.
               roundStolen: (next.roundStolen ?? 0) + 1,
+              // Çalma görevi ilerlemesi (steal kind) iyimser artırılır.
+              objectiveProgress: projectedProgress,
             }
           }
           // Görev tamamlandıysa: yalnızca YEREL kutlama durumunu işaretle.

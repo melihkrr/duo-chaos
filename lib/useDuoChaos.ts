@@ -235,7 +235,10 @@ const mergeProgress = (
   local: Player,
   server: Partial<Player>,
   objectiveChanged: boolean,
-): Pick<Player, 'coins' | 'stolen' | 'roundCoins' | 'roundStolen' | 'collectedTypes'> => {
+): Pick<
+  Player,
+  'coins' | 'stolen' | 'roundCoins' | 'roundStolen' | 'collectedTypes' | 'objectiveProgress'
+> => {
   // Görev değiştiyse sunucu sayaçları sıfırlamıştır; sunucu değerini AYNEN al.
   if (objectiveChanged) {
     return {
@@ -244,16 +247,33 @@ const mergeProgress = (
       roundCoins: server.roundCoins ?? local.roundCoins,
       roundStolen: server.roundStolen ?? local.roundStolen,
       collectedTypes: server.collectedTypes ?? {},
+      // Yeni görev: ilerleme 0'dan başlar; sunucu değerini AYNEN al.
+      objectiveProgress: server.objectiveProgress ?? 0,
     }
   }
   // SUNUCU OTORİTESİ: sunucu bir değer döndürdüyse AYNEN uygula (max YOK).
   // Sunucu alanı yoksa (eski oda / geçiş anı) yerel değeri koru.
+  //
+  // İLERLEME (MONOTONİK): görev değişmediği sürece ilerleme ASLA geri düşmez.
+  // Sunucu snapshot'ı gecikmeli geldiğinde (yerel iyimser artırım henüz
+  // işlenmemişken) eski/düşük değeri uygulamak "artıp geri düşme" hatasına yol
+  // açardı. Bu yüzden görev aynıyken `max(yerel, sunucu)` kullanırız; görev
+  // değiştiğinde (yukarıdaki dal) sunucu değeri (0) geçerlidir.
+  const serverProgress =
+    typeof server.objectiveProgress === 'number' && Number.isFinite(server.objectiveProgress)
+      ? server.objectiveProgress
+      : undefined
+  const localProgress =
+    typeof local.objectiveProgress === 'number' && Number.isFinite(local.objectiveProgress)
+      ? local.objectiveProgress
+      : 0
   return {
     coins: server.coins ?? local.coins,
     stolen: server.stolen ?? local.stolen,
     roundCoins: server.roundCoins ?? local.roundCoins,
     roundStolen: server.roundStolen ?? local.roundStolen,
     collectedTypes: server.collectedTypes ?? local.collectedTypes ?? {},
+    objectiveProgress: serverProgress === undefined ? localProgress : Math.max(localProgress, serverProgress),
   }
 }
 
@@ -846,6 +866,28 @@ export const useDuoChaos = () => {
               collectedTypes[type as Coin['type']] =
                 (collectedTypes[type as Coin['type']] ?? 0) + (count ?? 0)
             }
+            // İYİMSER İLERLEME: sunucu `duo_mission_progress` ile AYNI mantık.
+            // Rakip HUD'undaki görev ilerlemesi sunucu yoklaması gelene kadar
+            // anında artsın; sunucu değeri (monotonik birleştirme) otoritedir.
+            const objective = player.objective
+            let progressDelta = 0
+            if (objective?.requirements) {
+              progressDelta = Object.entries(objective.requirements).reduce(
+                (sum, [type, required]) => {
+                  const before = Math.min(
+                    player.collectedTypes?.[type as Coin['type']] ?? 0,
+                    required || 0,
+                  )
+                  const after = Math.min(collectedTypes[type as Coin['type']] ?? 0, required || 0)
+                  return sum + Math.max(0, after - before)
+                },
+                0,
+              )
+            } else if (objective?.coinType && objective.coinType !== 'mixed') {
+              progressDelta = gainedTypes[objective.coinType] ?? 0
+            } else if (objective?.kind !== 'steal') {
+              progressDelta = newlyCollected
+            }
             return {
               ...player,
               coins: player.coins + newlyCollected,
@@ -854,6 +896,7 @@ export const useDuoChaos = () => {
               // sonucu görsün diye sunucu değeri yine otoritedir).
               roundCoins: (player.roundCoins ?? 0) + newlyCollected,
               collectedTypes,
+              objectiveProgress: (player.objectiveProgress ?? 0) + progressDelta,
             }
           }),
         }
@@ -877,16 +920,20 @@ export const useDuoChaos = () => {
       // düşürürsek düşüş İKİ KEZ olur ("puanlar tutmuyor" hatası).
       setState((prev) => ({
         ...prev,
-        players: prev.players.map((player, index) =>
-          index === 0
-            ? player
-            : {
-                ...player,
-                stolen: player.stolen + 1,
-                // TUR TOPLAMI: sonuç ekranı `roundStolen` okur; iyimser artır.
-                roundStolen: (player.roundStolen ?? 0) + 1,
-              },
-        ),
+        players: prev.players.map((player, index) => {
+          if (index === 0) return player
+          // İYİMSER İLERLEME: yalnızca `steal` görevlerinde çalma ilerlemeyi
+          // artırır (sunucu `duo_mission_progress` ile aynı). `requirements`
+          // görevlerinde çalma progress'e EKLENMEZ.
+          const stealDelta = player.objective?.kind === 'steal' ? 1 : 0
+          return {
+            ...player,
+            stolen: player.stolen + 1,
+            // TUR TOPLAMI: sonuç ekranı `roundStolen` okur; iyimser artır.
+            roundStolen: (player.roundStolen ?? 0) + 1,
+            objectiveProgress: (player.objectiveProgress ?? 0) + stealDelta,
+          }
+        }),
       }))
     })
 
@@ -1137,6 +1184,7 @@ export const useDuoChaos = () => {
             merged.roundCoins = progress.roundCoins
             merged.roundStolen = progress.roundStolen
             merged.collectedTypes = progress.collectedTypes
+            merged.objectiveProgress = progress.objectiveProgress
             // `missionDone` MONOTONİK: görev değişmediyse sunucunun bayat
             // `false` değeri yerel `true`'yu EZEMEZ (kutlama bayrağı geri
             // alınırsa "Mission complete" tekrar tekrar tetiklenir). Görev
@@ -1218,6 +1266,7 @@ export const useDuoChaos = () => {
             merged.roundCoins = rivalProgress.roundCoins
             merged.roundStolen = rivalProgress.roundStolen
             merged.collectedTypes = rivalProgress.collectedTypes
+            merged.objectiveProgress = rivalProgress.objectiveProgress
             if (!rivalObjectiveChanged) {
               merged.missionDone = Boolean(player.missionDone || server.missionDone)
             }
@@ -1481,6 +1530,11 @@ export const useDuoChaos = () => {
                 if (typeof server.coins === 'number') next.coins = server.coins
                 if (typeof server.stolen === 'number') next.stolen = server.stolen
                 if (server.collectedTypes) next.collectedTypes = server.collectedTypes
+                // GÖREV İLERLEMESİ (SUNUCU OTORİTESİ): sonuç ekranı da doğru
+                // ilerlemeyi gösterir; sunucu değeri geldiğinde AYNEN uygula.
+                if (typeof server.objectiveProgress === 'number') {
+                  next.objectiveProgress = server.objectiveProgress
+                }
                 if (typeof server.objectivesDone === 'number') {
                   next.objectivesDone = server.objectivesDone
                 }

@@ -28,6 +28,8 @@ export const blankPlayer = (id: 'p1' | 'p2', spawnId: string = id): Player => ({
   coins: 0,
   stolen: 0,
   collectedTypes: {},
+  // Sunucu-hesaplı görev ilerlemesi; tur başında 0'dan başlar.
+  objectiveProgress: 0,
   score: 0,
   roundScore: 0,
   totalScore: 0,

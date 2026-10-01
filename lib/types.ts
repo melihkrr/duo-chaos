@@ -89,6 +89,16 @@ export type Player = {
   roundStolen?: number
   collectedTypes?: Partial<Record<CoinType, number>>
   /**
+   * SUNUCU-hesaplı görev ilerlemesi (HAM sayı, 0..target). `duo_public_state`
+   * tarafından doldurulur ve `duo_mission_progress` ile birebir aynı mantığı
+   * izler. İstemci bu değeri DOĞRUDAN gösterir; `collectedTypes`/`coins`/
+   * `stolen` sayaçlarından yeniden inşa ETMEZ (bu sayaçlar görev
+   * tamamlanmasında sıfırlandığı için "artıp geri düşme" hatasına yol
+   * açıyordu). Sunucu değeri yoksa (eski oda / geçiş anı) `progressOf`
+   * sayaçlardan türetmeye geri düşer.
+   */
+  objectiveProgress?: number
+  /**
    * PUAN TABANLI SKOR. Coin toplama + çalma + görev ödüllerinin TOPLAMI.
    * Sunucu otoritesidir (`duo_collect`/`duo_steal`/`duo_reroll_objective`).
    * Karşılaştırma kıstası budur — görev sayısı DEĞİL.
