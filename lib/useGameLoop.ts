@@ -241,6 +241,18 @@ export const useGameLoop = (deps: LoopDeps) => {
           : serverProgress === undefined
             ? localProgress
             : Math.max(localProgress, serverProgress)
+        // SKOR MONOTONİKLİĞİ (KÖK SORUN DÜZELTMESİ: "1080 → 1030").
+        //
+        // Gecikmiş bir RPC yanıtı (ör. daha eski bir collect) YENİ skoru
+        // EZMEMELİ. Skor, maç boyunca MONOTONİKTİR; yalnızca ARTABİLİR. Tek
+        // meşru sıfırlama yeni maçtadır (`resetMatch`/`blankPlayer`), bu yol
+        // değil. Bu yüzden `Math.max` uygularız.
+        const serverScore =
+          typeof s.score === 'number' && Number.isFinite(s.score) ? s.score : undefined
+        const serverRoundScore =
+          typeof s.roundScore === 'number' && Number.isFinite(s.roundScore)
+            ? s.roundScore
+            : undefined
         return {
           ...player,
           objective: nextObjective,
@@ -252,8 +264,11 @@ export const useGameLoop = (deps: LoopDeps) => {
           roundStolen: s.roundStolen ?? player.roundStolen,
           missionDone: s.missionDone ?? player.missionDone,
           objectivesDone: s.objectivesDone ?? player.objectivesDone,
-          score: s.score ?? player.score,
-          roundScore: s.roundScore ?? player.roundScore,
+          score: serverScore === undefined ? player.score : Math.max(player.score ?? 0, serverScore),
+          roundScore:
+            serverRoundScore === undefined
+              ? player.roundScore
+              : Math.max(player.roundScore ?? 0, serverRoundScore),
         }
       })
       return { ...prev, players }

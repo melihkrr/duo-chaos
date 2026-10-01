@@ -925,13 +925,19 @@ export const useDuoChaos = () => {
             const cap = (value: number) => (target > 0 ? Math.min(value, target) : value)
             let derivedProgress = player.objectiveProgress ?? 0
             if (objective?.requirements) {
-              derivedProgress = cap(
-                Object.entries(objective.requirements).reduce(
-                  (sum, [type, required]) =>
-                    sum + Math.min(collectedTypes[type as Coin['type']] ?? 0, required || 0),
-                  0,
-                ),
+              // KAYNAK BİLEŞENİ + ÇALMA BİLEŞENİ (0038): sunucu
+              // `duo_mission_progress` ile BİREBİR aynı. "Steal 2 and secure 1
+              // Gold" gibi HEM kaynak HEM çalma gerektiren görevlerde çalma da
+              // ilerlemeye eklenir. Bu bileşen eksikse iyimser türetim sunucudan
+              // DÜŞÜK kalır ve iki istemci farklı ilerleme gösterir.
+              const resources = Object.entries(objective.requirements).reduce(
+                (sum, [type, required]) =>
+                  sum + Math.min(collectedTypes[type as Coin['type']] ?? 0, required || 0),
+                0,
               )
+              const stealTarget = objective.stealTarget || 0
+              const steals = stealTarget > 0 ? Math.min(player.stolen ?? 0, stealTarget) : 0
+              derivedProgress = cap(resources + steals)
             } else if (objective?.coinType && objective.coinType !== 'mixed') {
               derivedProgress = cap(collectedTypes[objective.coinType] ?? 0)
             } else if (objective?.kind === 'steal') {
@@ -1242,7 +1248,23 @@ export const useDuoChaos = () => {
           if (!server) return player
           // Sunucudan gelen adı koru; boşsa mevcut adı bırak.
           const serverName = typeof server.name === 'string' && server.name.trim() ? server.name : player.name
+          // KÖK SORUN DÜZELTMESİ (İKİ İSTEMCİ FARKLI İLERLEME GÖRÜYOR):
+          // `{ ...player, ...server }` ham yayılımı sunucunun `objective`,
+          // `objectiveProgress` ve `objectivesDone` alanlarını KOŞULSUZ uygular.
+          // Bu alanlar birbirine BAĞLI bir üçlüdür (görev kimliği + ilerleme +
+          // sürüm damgası); ham yayılım bunları AYRIŞTIRIR. Örneğin sunucu
+          // görevi reroll ettiyse `objective` yeni görev olur ama
+          // `objectiveProgress` aşağıdaki `mergeProgress` ile ESKİ göreve göre
+          // hesaplanır → "görev A ama ilerleme B" uyumsuzluğu. Ayrıca
+          // `objectivesDone` ham yayılımla uygulanınca `mergeProgress`'in bayat
+          // snapshot koruması devre dışı kalır. Bu üç alanı yayılımdan ÇIKARIR,
+          // yalnızca aşağıdaki atomik mantıkla uygularız.
           const merged = { ...player, ...server, id: player.id, name: serverName } as Player
+          // Görev üçlüsünü yerel değerlere GERİ AL; aşağıda atomik olarak
+          // (kimlik + ilerleme + damga birlikte) uygulanır.
+          merged.objective = player.objective
+          merged.objectiveProgress = player.objectiveProgress
+          merged.objectivesDone = player.objectivesDone
           // İYİMSER İLERLEME (MONOTONİK): Yerel oyuncu (index 0) için
           // `collectedTypes`/`coins`/`roundCoins`/`stolen`/`roundStolen` alanları
           // sunucu snapshot'ı ile EZİLMEZ; yalnızca ARTABİLİR. Sunucu `duo_collect`
@@ -1253,8 +1275,16 @@ export const useDuoChaos = () => {
           if (player.id === 'p1') {
             const localObjectiveId = player.objective?.id ?? null
             const serverObjectiveId = server.objective?.id ?? null
+            // BAYAT SNAPSHOT KORUMASI (KÖK SORUN): `objectivesDone` monotonik
+            // sürüm damgasıdır. Sunucu snapshot'ı yerelden GERİDE ise (ör. gecikmiş
+            // bir yanıt) görev KİMLİĞİNİ de uygulamamalıyız; aksi halde eski görev
+            // diriltilir ve kimlik/ilerleme ayrışır ("görev A ama ilerleme B").
+            const serverDone =
+              typeof server.objectivesDone === 'number' ? server.objectivesDone : undefined
+            const localDone = typeof player.objectivesDone === 'number' ? player.objectivesDone : 0
+            const staleSnapshot = serverDone !== undefined && serverDone < localDone
             const objectiveChanged =
-              serverObjectiveId !== null && serverObjectiveId !== localObjectiveId
+              !staleSnapshot && serverObjectiveId !== null && serverObjectiveId !== localObjectiveId
             const progress = mergeProgress(player, server, objectiveChanged)
             merged.coins = progress.coins
             merged.stolen = progress.stolen
@@ -1262,6 +1292,20 @@ export const useDuoChaos = () => {
             merged.roundStolen = progress.roundStolen
             merged.collectedTypes = progress.collectedTypes
             merged.objectiveProgress = progress.objectiveProgress
+            // GÖREV KİMLİĞİ (ATOMİK): sunucu görevi GERÇEKTEN değiştirdiyse
+            // (reroll) yeni görevi AYNI anda uygularız. `mergeProgress` bu
+            // durumda ilerlemeyi sunucudan AYNEN aldığı için kimlik + ilerleme
+            // tutarlı kalır. Görev değişmediyse ya da snapshot BAYATSA yerel
+            // kimliği koruruz (ham yayılım zaten geri alındı).
+            if (objectiveChanged && server.objective) {
+              merged.objective = server.objective
+            }
+            // `objectivesDone` MONOTONİK sürüm damgası: yalnızca İLERİ alınır.
+            // Bayat snapshot geride kalırsa yerel değeri koruruz; aksi halde
+            // `mergeProgress`'in bayat koruması bir sonraki yoklamada bozulur.
+            if (serverDone !== undefined && serverDone >= localDone) {
+              merged.objectivesDone = serverDone
+            }
             // `missionDone` MONOTONİK: görev değişmediyse sunucunun bayat
             // `false` değeri yerel `true`'yu EZEMEZ (kutlama bayrağı geri
             // alınırsa "Mission complete" tekrar tekrar tetiklenir). Görev
@@ -1335,8 +1379,18 @@ export const useDuoChaos = () => {
             // Yerel oyuncuyla aynı monotonik birleştirmeyi uygularız.
             const rivalLocalObjectiveId = player.objective?.id ?? null
             const rivalServerObjectiveId = server.objective?.id ?? null
+            // BAYAT SNAPSHOT KORUMASI (rakip): yerel `objectivesDone` sunucudan
+            // İLERİDE ise snapshot bayattır; görev kimliğini de uygulamayız.
+            const rivalServerDone =
+              typeof server.objectivesDone === 'number' ? server.objectivesDone : undefined
+            const rivalLocalDone =
+              typeof player.objectivesDone === 'number' ? player.objectivesDone : 0
+            const rivalStaleSnapshot =
+              rivalServerDone !== undefined && rivalServerDone < rivalLocalDone
             const rivalObjectiveChanged =
-              rivalServerObjectiveId !== null && rivalServerObjectiveId !== rivalLocalObjectiveId
+              !rivalStaleSnapshot &&
+              rivalServerObjectiveId !== null &&
+              rivalServerObjectiveId !== rivalLocalObjectiveId
             const rivalProgress = mergeProgress(player, server, rivalObjectiveChanged)
             merged.coins = rivalProgress.coins
             merged.stolen = rivalProgress.stolen
@@ -1344,6 +1398,20 @@ export const useDuoChaos = () => {
             merged.roundStolen = rivalProgress.roundStolen
             merged.collectedTypes = rivalProgress.collectedTypes
             merged.objectiveProgress = rivalProgress.objectiveProgress
+            // GÖREV KİMLİĞİ (ATOMİK) — RAKİP: sunucu rakibin görevini
+            // değiştirdiyse yeni görevi AYNI anda uygularız; böylece rakip
+            // HUD'unda "görev A ama ilerleme B" uyumsuzluğu oluşmaz. Bu,
+            // "aynı görev iki oyuncuda farklı ilerleme gösteriyor" hatasının
+            // kök nedenidir: ham yayılım `objective`'i sunucudan alırken
+            // `objectiveProgress` yerel göreve göre hesaplanıyordu. Snapshot
+            // BAYATSA kimliği de uygulamayız (eski görev diriltilmesin).
+            if (rivalObjectiveChanged && server.objective) {
+              merged.objective = server.objective
+            }
+            // `objectivesDone` MONOTONİK sürüm damgası (rakip): yalnızca İLERİ.
+            if (rivalServerDone !== undefined && rivalServerDone >= rivalLocalDone) {
+              merged.objectivesDone = rivalServerDone
+            }
             if (!rivalObjectiveChanged) {
               merged.missionDone = Boolean(player.missionDone || server.missionDone)
             }
@@ -1597,9 +1665,25 @@ export const useDuoChaos = () => {
                 )
                 if (!server) return player
                 const next = { ...player }
-                if (typeof server.score === 'number') next.score = server.score
-                if (typeof server.roundScore === 'number') next.roundScore = server.roundScore
-                if (typeof server.totalScore === 'number') next.totalScore = server.totalScore
+                // SKOR MONOTONİKLİĞİ (KÖK SORUN DÜZELTMESİ: "1080 → 1030").
+                //
+                // Bu yoklama BAYAT olabilir (replica gecikmesi / yazma öncesi
+                // okuma). Eski kod `next.score = server.score` ile KOŞULSUZ
+                // uyguluyordu; bayat bir snapshot (eski skor) yeni skoru EZİYOR
+                // ve skor GERİ DÜŞÜYORDU. Skor, MAÇ boyunca MONOTONİKTİR:
+                // hiçbir yazar (bayat snapshot, gecikmiş RPC, yoklama) değeri
+                // DÜŞÜREMEZ. Tek meşru sıfırlama YENİ MAÇTADIR; o da
+                // `resetMatch`/`blankPlayer` ile yapılır (bu yoklama değil).
+                // Bu yüzden `Math.max` uygularız.
+                if (typeof server.score === 'number') {
+                  next.score = Math.max(player.score ?? 0, server.score)
+                }
+                if (typeof server.roundScore === 'number') {
+                  next.roundScore = Math.max(player.roundScore ?? 0, server.roundScore)
+                }
+                if (typeof server.totalScore === 'number') {
+                  next.totalScore = Math.max(player.totalScore ?? 0, server.totalScore)
+                }
                 // TUR İSTATİSTİKLERİ (SUNUCU OTORİTESİ): sonuç ekranı bunları
                 // okur; sunucu değeri geldiğinde AYNEN uygula (max YOK).
                 if (typeof server.roundCoins === 'number') next.roundCoins = server.roundCoins
@@ -1630,8 +1714,12 @@ export const useDuoChaos = () => {
                   }
                   if (objectiveChanged && server.objective) next.objective = server.objective
                 }
-                if (typeof server.objectivesDone === 'number') {
-                  next.objectivesDone = server.objectivesDone
+                // `objectivesDone` MONOTONİK sürüm damgası: yalnızca İLERİ alınır.
+                // Koşulsuz uygulanırsa bayat bir snapshot (geride kalan damga)
+                // yerel değeri DÜŞÜRÜR ve bir sonraki yoklamada `staleSnapshot`
+                // koruması YANLIŞ çalışır (gerçek bayat snapshot'ı taze sanır).
+                if (serverDone !== undefined && serverDone >= localDone) {
+                  next.objectivesDone = serverDone
                 }
                 return next
               })
@@ -1825,6 +1913,16 @@ export const useDuoChaos = () => {
                 const serverName =
                   typeof server.name === 'string' && server.name.trim() ? server.name : player.name
                 const merged = { ...player, ...server, id: player.id, name: serverName } as Player
+                // GÖREV ÜÇLÜSÜNÜ GERİ AL (ATOMİK): ham yayılım sunucunun
+                // `objective`/`objectiveProgress`/`objectivesDone` alanlarını
+                // KOŞULSUZ uygular. Bu üç alan birbirine BAĞLIDIR; ham yayılım
+                // bunları AYRIŞTIRIR ("görev A ama ilerleme B"). Aşağıda
+                // `objective`'i yerel değerle koruruz; `objectiveProgress` ve
+                // `objectivesDone` de yerel değerlerinde kalır (lobi yoklaması
+                // bunları güncellemez; savaş/sonuç yoklamaları günceller).
+                merged.objective = player.objective
+                merged.objectiveProgress = player.objectiveProgress
+                merged.objectivesDone = player.objectivesDone
                 // SKOR OTORİTESİ (ÇELİŞKİLİ MAÇ SONU SKORU DÜZELTMESİ):
                 // Sunucu `duo_tick` tur bitişinde `score`/`round_score`/
                 // `total_score` alanlarını GERÇEKTEN hesaplar ve `duo_public_state`
@@ -1844,15 +1942,20 @@ export const useDuoChaos = () => {
                 // korumak için yerel değeri tutarız. Maç başladıktan sonra
                 // (countdown/battle/results/matchover) sunucu değeri otoritedir.
                 const scoresAreAuthoritative = nextPhase !== 'lobby'
+                // SKOR MONOTONİKLİĞİ (KÖK SORUN DÜZELTMESİ: "1080 → 1030"):
+                // otoriter olduğunda bile BAYAT bir snapshot skoru DÜŞÜREMEZ.
+                // `Math.max` uygularız; tek meşru sıfırlama yeni maçtadır.
                 merged.score =
-                  scoresAreAuthoritative && serverScore !== undefined ? serverScore : player.score
+                  scoresAreAuthoritative && serverScore !== undefined
+                    ? Math.max(player.score ?? 0, serverScore)
+                    : player.score
                 merged.roundScore =
                   scoresAreAuthoritative && serverRoundScore !== undefined
-                    ? serverRoundScore
+                    ? Math.max(player.roundScore ?? 0, serverRoundScore)
                     : player.roundScore
                 merged.totalScore =
                   scoresAreAuthoritative && serverTotalScore !== undefined
-                    ? serverTotalScore
+                    ? Math.max(player.totalScore ?? 0, serverTotalScore)
                     : player.totalScore
                 merged.trail = player.trail
                 merged.emote = player.emote
