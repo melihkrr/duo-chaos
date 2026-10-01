@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { profileForXp, type ProfileProgress } from './config'
 import { getSupabase, hasSupabase, rpc } from './supabase'
 import type { AvatarId, EmoteId, Progress, TrailId } from './types'
@@ -72,9 +72,19 @@ export type ProgressApi = {
  * Supabase varsa sunucu otoritesi; yoksa localStorage'a düşer.
  */
 export const useProgress = (): ProgressApi => {
-  const [clientId] = useState<string>(() => readClientId())
-  const [progress, setProgress] = useState<Progress>(() => readLocal() ?? blank(readClientId()))
+  // HİDRASYON GÜVENLİĞİ: `clientId` ve `progress` localStorage'dan okunur.
+  // Sunucuda localStorage yoktur; bu yüzden sunucu render'ı ile istemcinin İLK
+  // render'ı AYNI olmalıdır, aksi halde React #418 (metin uyuşmazlığı) oluşur.
+  //
+  // Çözüm: ilk render'da HER ZAMAN deterministik "boş" değerleri kullanırız
+  // (sunucuyla birebir aynı). Gerçek localStorage değerlerini yalnızca mount
+  // SONRASI (effect içinde) yükleriz. Böylece hydration eşleşir; ardından
+  // değerler sorunsuz şekilde güncellenir.
+  const [clientId, setClientId] = useState<string>('local')
+  const [progress, setProgress] = useState<Progress>(() => blank('local'))
   const [online, setOnline] = useState(false)
+  // localStorage okuması yalnızca bir kez, mount sonrası yapılır.
+  const hydratedRef = useRef(false)
 
   const applyServer = useCallback((raw: unknown) => {
     if (!raw || typeof raw !== 'object') return
@@ -114,6 +124,25 @@ export const useProgress = (): ProgressApi => {
     }
   }, [applyServer, clientId])
 
+  // HİDRASYON: localStorage'dan gerçek `clientId` ve `progress` değerlerini
+  // YALNIZCA mount sonrası yükleriz. İlk render sunucuyla birebir aynı olduğu
+  // için hydration uyuşur; ardından bu efekt gerçek değerleri uygular.
+  //
+  // NOT: setState'i mikro-görev (setTimeout 0) içinde yaparız; efekt
+  // gövdesinde senkron setState lint kuralı (`react-hooks/set-state-in-effect`)
+  // tarafından yasaklanmıştır.
+  useEffect(() => {
+    if (hydratedRef.current) return
+    hydratedRef.current = true
+    const id = window.setTimeout(() => {
+      const realId = readClientId()
+      setClientId(realId)
+      const local = readLocal()
+      if (local) setProgress((prev) => ({ ...prev, ...local, clientId: realId }))
+    }, 0)
+    return () => window.clearTimeout(id)
+  }, [])
+
   useEffect(() => {
     // Mikro-görev: efekt gövdesinde senkron setState'ten kaçın.
     const id = window.setTimeout(() => void refresh(), 0)
@@ -121,17 +150,30 @@ export const useProgress = (): ProgressApi => {
   }, [refresh])
 
   // Realtime: başka sekmede/cihazda ilerleme değişirse yakala.
+  //
+  // ÖNEMLİ: Supabase `.channel(name)` AYNI isimli kanal zaten varsa onu
+  // döndürür. Efekt yeniden çalıştığında (StrictMode çift çağrısı veya
+  // `clientId` değişimi) temizlikteki `removeChannel` asenkron olduğundan,
+  // ikinci `.channel(...)` hâlâ ABONE (subscribed) kanalı döndürebilir ve
+  // ardından `.on('postgres_changes', ...)` çağrısı "cannot add
+  // postgres_changes callbacks after subscribe()" hatası verir.
+  //
+  // Çözüm: (1) kanal adına benzersiz bir sonek ekleyerek her kurulumda YENİ
+  // bir kanal oluştururuz; (2) `clientId` henüz çözülmemişken ('local')
+  // abone OLMAYIZ; (3) tüm `.on(...)` kayıtları `.subscribe()`'tan ÖNCE
+  // zincirlenir.
   useEffect(() => {
+    if (clientId === 'local') return
     const supabase = getSupabase()
     if (!supabase) return
-    const channel = supabase
-      .channel(`duo-progress-${clientId}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'duo_progression', filter: `client_id=eq.${clientId}` },
-        (payload) => applyServer(payload.new),
-      )
-      .subscribe()
+    const channelName = `duo-progress-${clientId}-${Math.random().toString(36).slice(2)}`
+    const channel = supabase.channel(channelName)
+    channel.on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'duo_progression', filter: `client_id=eq.${clientId}` },
+      (payload) => applyServer(payload.new),
+    )
+    channel.subscribe()
     return () => {
       void supabase.removeChannel(channel)
     }

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '../ui/Button'
 import { Panel } from '../ui/Panel'
 import { AvatarPicker } from './AvatarPicker'
@@ -33,6 +33,24 @@ export function Home({ progress, onCreate, onJoin, onPlayBot, busy, error, initi
   const [name, setName] = useState(initialName)
   // Oyun modu seçimi: "friend" (2 oyunculu) veya "bot" (tek oyunculu).
   const [mode, setMode] = useState<'friend' | 'bot'>('friend')
+
+  // HİDRASYON: `initialName` localStorage'dan mount SONRASI gelir (bkz.
+  // `useRoom`). Kullanıcı henüz yazmaya başlamadıysa gelen kayıtlı adı input'a
+  // yansıtırız. Kullanıcı yazmaya başladıysa (dirty) üzerine YAZMAYIZ.
+  //
+  // NOT: setState'i mikro-görev (setTimeout 0) içinde yaparız; efekt
+  // gövdesinde senkron setState lint kuralı (`react-hooks/set-state-in-effect`)
+  // tarafından yasaklanmıştır.
+  const nameDirtyRef = useRef(false)
+  useEffect(() => {
+    if (nameDirtyRef.current) return
+    if (!initialName) return
+    const id = window.setTimeout(() => {
+      if (nameDirtyRef.current) return
+      setName((current) => (current === initialName ? current : initialName))
+    }, 0)
+    return () => window.clearTimeout(id)
+  }, [initialName])
 
   const trimmed = name.trim()
   const nameValid = trimmed.length >= 2
@@ -70,7 +88,10 @@ export function Home({ progress, onCreate, onJoin, onPlayBot, busy, error, initi
               <input
                 className="name-input"
                 value={name}
-                onChange={(event) => setName(event.target.value.slice(0, NAME_MAX))}
+                onChange={(event) => {
+                  nameDirtyRef.current = true
+                  setName(event.target.value.slice(0, NAME_MAX))
+                }}
                 placeholder="e.g. Melih"
                 maxLength={NAME_MAX}
                 autoComplete="nickname"

@@ -85,10 +85,15 @@ export const useRoom = (): RoomApi => {
   const [code, setCode] = useState<string | null>(null)
   const [playerId, setPlayerId] = useState<'p1' | 'p2'>('p1')
   const [token, setToken] = useState<string | null>(null)
-  const [name, setNameState] = useState<string>(() => readName())
+  // HİDRASYON GÜVENLİĞİ: `readName()` localStorage okur; sunucuda boş döner.
+  // İlk render'da daima boş başlarız (sunucuyla birebir aynı) ve gerçek adı
+  // yalnızca mount sonrası yükleriz. Aksi halde isim input'u sunucu/istemci
+  // arasında farklı olur ve React #418 (metin uyuşmazlığı) oluşur.
+  const [name, setNameState] = useState<string>('')
   const [status, setStatus] = useState<RoomStatus>('idle')
   const [opponentPresent, setOpponentPresent] = useState(false)
   const [presenceReady, setPresenceReady] = useState(false)
+  const hydratedRef = useRef(false)
 
   const channelRef = useRef<ReturnType<NonNullable<ReturnType<typeof getSupabase>>['channel']> | null>(null)
   const handlers = useRef<Map<string, Set<(payload: unknown) => void>>>(new Map())
@@ -109,6 +114,23 @@ export const useRoom = (): RoomApi => {
   useEffect(() => {
     playerIdRef.current = playerId
   }, [playerId])
+
+  // HİDRASYON: kayıtlı adı YALNIZCA mount sonrası yükleriz (bkz. yukarıdaki
+  // `name` state açıklaması). İlk render sunucuyla aynı (boş) kaldığı için
+  // hydration uyuşur.
+  //
+  // NOT: setState'i mikro-görev (setTimeout 0) içinde yaparız; efekt
+  // gövdesinde senkron setState lint kuralı (`react-hooks/set-state-in-effect`)
+  // tarafından yasaklanmıştır.
+  useEffect(() => {
+    if (hydratedRef.current) return
+    hydratedRef.current = true
+    const id = window.setTimeout(() => {
+      const saved = readName()
+      if (saved) setNameState(saved)
+    }, 0)
+    return () => window.clearTimeout(id)
+  }, [])
 
   const disconnect = useCallback(async () => {
     const supabase = getSupabase()
