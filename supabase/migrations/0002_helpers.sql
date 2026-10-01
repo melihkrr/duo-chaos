@@ -35,15 +35,17 @@ returns jsonb
 language sql
 immutable
 as $$
+  -- `points` = görev tamamlanınca kazanılan PUAN ödülü. lib/config.ts
+  -- OBJECTIVE_POOL ile BİREBİR aynı olmalıdır (puan dengesi).
   select '[
-    {"id":"gold-rush","kind":"collect","label":"Collect 3 Gold","shortLabel":"3 Gold","target":3,"coinType":"gold"},
-    {"id":"blue-raid","kind":"collect","label":"Collect 2 Blue + 2 Red","shortLabel":"2 Blue + 2 Red","target":4,"coinType":"mixed","requirements":{"blue":2,"red":2}},
-    {"id":"emerald-hunt","kind":"collect","label":"Collect 3 Emerald","shortLabel":"3 Emerald","target":3,"coinType":"emerald"},
-    {"id":"resource-control","kind":"steal","label":"Steal 3 from your rival","shortLabel":"3 stolen","target":3,"coinType":"mixed"},
-    {"id":"jackpot-run","kind":"collect","label":"Collect 1 Gold + 2 Blue","shortLabel":"1 Gold + 2 Blue","target":3,"coinType":"mixed","requirements":{"gold":1,"blue":2}},
-    {"id":"red-burn","kind":"collect","label":"Collect 2 Red + 1 Emerald","shortLabel":"2 Red + 1 Emerald","target":3,"coinType":"mixed","requirements":{"red":2,"emerald":1}},
-    {"id":"blue-pressure","kind":"collect","label":"Collect 4 Blue","shortLabel":"4 Blue","target":4,"coinType":"blue"},
-    {"id":"gold-robbery","kind":"steal","label":"Steal 2 and secure 1 Gold","shortLabel":"2 stolen + 1 Gold","target":3,"coinType":"mixed","requirements":{"gold":1},"stealTarget":2}
+    {"id":"gold-rush","kind":"collect","label":"Collect 3 Gold","shortLabel":"3 Gold","target":3,"coinType":"gold","points":45},
+    {"id":"blue-raid","kind":"collect","label":"Collect 2 Blue + 2 Red","shortLabel":"2 Blue + 2 Red","target":4,"coinType":"mixed","requirements":{"blue":2,"red":2},"points":60},
+    {"id":"emerald-hunt","kind":"collect","label":"Collect 3 Emerald","shortLabel":"3 Emerald","target":3,"coinType":"emerald","points":55},
+    {"id":"resource-control","kind":"steal","label":"Steal 3 from your rival","shortLabel":"3 stolen","target":3,"coinType":"mixed","points":60},
+    {"id":"jackpot-run","kind":"collect","label":"Collect 1 Gold + 2 Blue","shortLabel":"1 Gold + 2 Blue","target":3,"coinType":"mixed","requirements":{"gold":1,"blue":2},"points":50},
+    {"id":"red-burn","kind":"collect","label":"Collect 2 Red + 1 Emerald","shortLabel":"2 Red + 1 Emerald","target":3,"coinType":"mixed","requirements":{"red":2,"emerald":1},"points":55},
+    {"id":"blue-pressure","kind":"collect","label":"Collect 4 Blue","shortLabel":"4 Blue","target":4,"coinType":"blue","points":50},
+    {"id":"gold-robbery","kind":"steal","label":"Steal 2 and secure 1 Gold","shortLabel":"2 stolen + 1 Gold","target":3,"coinType":"mixed","requirements":{"gold":1},"stealTarget":2,"points":70}
   ]'::jsonb;
 $$;
 

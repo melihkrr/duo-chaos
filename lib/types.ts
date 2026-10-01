@@ -32,6 +32,16 @@ export type Objective = {
   coinType?: CoinType | 'mixed'
   requirements?: Partial<Record<CoinType, number>>
   stealTarget?: number
+  /**
+   * Görev tamamlandığında kazanılan PUAN ödülü.
+   *
+   * ÖNEMLİ: Skor artık "tamamlanan görev sayısı" DEĞİL, toplanan PUAN'dır.
+   * Puan; coin toplama + çalma + bu görev ödülünden birikir. Görevlerin
+   * önemini yitirmemesi için ödül, birkaç coin değerinden yüksek tutulur
+   * (bkz. OBJECTIVE_POOL). Sunucu `duo_objective_pool` ile birebir aynı
+   * olmalıdır.
+   */
+  points?: number
 }
 
 export type ChaosEvent = {
@@ -49,12 +59,19 @@ export type Player = {
   coins: number
   stolen: number
   collectedTypes?: Partial<Record<CoinType, number>>
+  /**
+   * PUAN TABANLI SKOR. Coin toplama + çalma + görev ödüllerinin TOPLAMI.
+   * Sunucu otoritesidir (`duo_collect`/`duo_steal`/`duo_reroll_objective`).
+   * Karşılaştırma kıstası budur — görev sayısı DEĞİL.
+   */
   score: number
   roundScore?: number
   totalScore?: number
   /**
-   * Tamamlanan görev sayısı. Kullanıcının SKORU budur: her görev
-   * tamamlandığında 1 artar ve yerine rastgele yeni bir görev verilir.
+   * Tamamlanan görev sayısı — yalnızca İSTATİSTİK. Skor DEĞİLDİR (skor
+   * `score` alanıdır ve puan tabanlıdır). Her görev tamamlandığında 1 artar,
+   * yerine rastgele yeni bir görev verilir ve görevin `points` ödülü skora
+   * eklenir.
    */
   objectivesDone?: number
   xp?: number
