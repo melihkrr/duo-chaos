@@ -441,8 +441,6 @@ export function Battle({
         </div>
       </header>
 
-      <ChaosBanner chaos={chaos} />
-
       <div
         className={[
           'arena',
@@ -452,6 +450,9 @@ export function Battle({
           .filter(Boolean)
           .join(' ')}
       >
+        {/* Chaos banner: arena'nın üstünde mutlak konumlu overlay. Normal
+            akışta olmadığı için görünüp kaybolduğunda arena'yı itmez. */}
+        <ChaosBanner chaos={chaos} />
         {combo >= 2 && (
           <div className="combo-badge" role="status" aria-live="polite">
             <span className="combo-x">x{combo}</span>

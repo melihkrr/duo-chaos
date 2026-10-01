@@ -1882,32 +1882,47 @@ h3 {
    Chaos banner
    ============================================================ */
 
+/* Chaos banner: oyun alanının ÜSTÜNDE, normal akıştan bağımsız bir overlay.
+   `position: absolute` olduğu için görünüp kaybolduğunda arena'yı aşağı/yukarı
+   itmez (kayma yok). Arka planı hafif şeffaf + blur ile altındaki oyunu
+   tamamen kapatmaz. */
 .chaos-banner {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  width: min(92%, 560px);
   display: flex;
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
-  padding: 12px 16px;
+  padding: 10px 16px;
   border: 2px solid var(--ink);
   border-radius: var(--r-lg);
-  background: #fff;
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   box-shadow: 0 5px 0 rgba(43, 36, 64, 0.16);
+  pointer-events: none;
   /* Chaos olayı başladığında dikkat çeken, hafif "sarsıntılı" giriş. */
   animation: chaos-in 0.5s var(--ease-soft) both;
 }
 
+/* `translateX(-50%)` yatay ortalama korunmalı; aksi halde animasyon
+   banner'ı sağa kaydırır. Bu yüzden her karede translateX(-50%) tekrarlanır. */
 @keyframes chaos-in {
   0% {
     opacity: 0;
-    transform: translateY(-14px) scale(0.94) rotate(-1.5deg);
+    transform: translateX(-50%) translateY(-14px) scale(0.94) rotate(-1.5deg);
   }
   55% {
     opacity: 1;
-    transform: translateY(2px) scale(1.02) rotate(0.6deg);
+    transform: translateX(-50%) translateY(2px) scale(1.02) rotate(0.6deg);
   }
   100% {
     opacity: 1;
-    transform: translateY(0) scale(1) rotate(0);
+    transform: translateX(-50%) translateY(0) scale(1) rotate(0);
   }
 }
 
@@ -1944,12 +1959,14 @@ h3 {
   }
 }
 
+/* Olay bazlı renkler de yarı şeffaf tutulur; böylece banner her zaman
+   altındaki oyunu hafifçe gösterir (overlay hissi korunur). */
 .chaos-gold-rush {
-  background: var(--yellow-soft);
+  background: rgba(255, 240, 178, 0.82);
 }
 
 .chaos-blackout {
-  background: linear-gradient(150deg, #3a3350, #2b2440);
+  background: linear-gradient(150deg, rgba(58, 51, 80, 0.86), rgba(43, 36, 64, 0.86));
   color: #fff;
 }
 
@@ -1959,15 +1976,15 @@ h3 {
 }
 
 .chaos-magnet {
-  background: var(--purple-soft);
+  background: rgba(226, 214, 255, 0.82);
 }
 
 .chaos-swap {
-  background: var(--pink-soft);
+  background: rgba(255, 214, 232, 0.82);
 }
 
 .chaos-jackpot {
-  background: var(--mint-soft);
+  background: rgba(200, 245, 224, 0.82);
 }
 
 /* Chaos olayı sürerken arenaya olayın "ruhunu" yansıtan hafif renk tonu.
@@ -2403,7 +2420,10 @@ h3 {
   }
 
   .chaos-banner {
-    padding: 11px 13px;
+    top: 6px;
+    width: 94%;
+    padding: 9px 12px;
+    gap: 8px;
   }
 
   .chaos-timer {
