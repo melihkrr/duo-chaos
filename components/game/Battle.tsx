@@ -5,7 +5,7 @@ import { ChaosBanner } from './ChaosBanner'
 import { CosmeticsPicker } from './CosmeticsPicker'
 import { VirtualJoystick } from './VirtualJoystick'
 import { Button } from '../ui/Button'
-import { ARENA, OBSTACLES, trailById } from '../../lib/config'
+import { ARENA, OBSTACLES, avatarGlyph, trailById } from '../../lib/config'
 import { SCORE_POP_MS } from '../../lib/useGameLoop'
 import { missionLabel, objectiveOf, progressOf, targetOf } from '../../lib/display'
 import type { ChaosApi } from '../../lib/useChaos'
@@ -385,7 +385,7 @@ export function Battle({
         <div className="hud-player">
           <div className="hud-name">
             <span className="hud-badge me" aria-hidden>
-              🐰
+              {avatarGlyph(cosmetics.avatar, 'rabbit')}
             </span>
             <strong>{me?.name ?? 'You'}</strong>
             {/* Skor = kümülatif puan (coin + çalma + görev bonusları). */}
@@ -425,7 +425,7 @@ export function Battle({
               <AnimatedScore value={rival?.score ?? 0} />
             </span>
             <span className="hud-badge rival" aria-hidden>
-              🐻
+              {avatarGlyph(rival?.avatar, 'bear')}
             </span>
           </div>
           <small>
@@ -570,7 +570,7 @@ export function Battle({
               )}
               <span className="avatar-body">
                 <span className="avatar-face" aria-hidden>
-                  {isMe ? '🐰' : '🐻'}
+                  {avatarGlyph(isMe ? cosmetics.avatar : player.avatar, isMe ? 'rabbit' : 'bear')}
                 </span>
               </span>
               <span className="avatar-name">{isMe ? 'You' : player.name}</span>

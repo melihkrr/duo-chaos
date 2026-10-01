@@ -1,4 +1,4 @@
-import type { ChaosEvent, Coin, CoinType, EmoteId, Objective, TrailId } from './types'
+import type { AvatarId, ChaosEvent, Coin, CoinType, EmoteId, Objective, TrailId } from './types'
 
 // --- Süreler ---
 export const BATTLE_MS = 90_000
@@ -302,6 +302,47 @@ export const TRAILS: Array<{ id: TrailId; label: string; color: string; minLevel
 
 export const emoteById = (id?: EmoteId | null) => EMOTES.find((item) => item.id === id) ?? null
 export const trailById = (id?: TrailId | null) => TRAILS.find((item) => item.id === id) ?? TRAILS[0]
+
+/**
+ * HAYVAN AVATARLARI — kullanıcının seçebileceği yüz emojileri.
+ *
+ * İsim nasıl serbestçe seçilebiliyorsa, oyuncunun arena/HUD/sonuç ekranlarında
+ * görünen hayvan yüzü de buradan seçilir. `minLevel` ile seviye kilidi uygulanır
+ * (emote/trail ile aynı desen). `id` değerleri sunucudaki `duo_avatar_ids()`
+ * ile BİREBİR aynı olmalıdır; aksi halde seçim sunucuda reddedilir.
+ *
+ * Varsayılanlar: p1 → 'rabbit' (🐰), p2 → 'bear' (🐻). Böylece avatar
+ * seçmeyen oyuncular eski görünümü korur.
+ */
+export const AVATARS: Array<{ id: AvatarId; label: string; glyph: string; minLevel: number }> = [
+  { id: 'rabbit', label: 'Rabbit', glyph: '🐰', minLevel: 1 },
+  { id: 'bear', label: 'Bear', glyph: '🐻', minLevel: 1 },
+  { id: 'fox', label: 'Fox', glyph: '🦊', minLevel: 1 },
+  { id: 'panda', label: 'Panda', glyph: '🐼', minLevel: 1 },
+  { id: 'cat', label: 'Cat', glyph: '🐱', minLevel: 1 },
+  { id: 'dog', label: 'Dog', glyph: '🐶', minLevel: 1 },
+  { id: 'frog', label: 'Frog', glyph: '🐸', minLevel: 2 },
+  { id: 'penguin', label: 'Penguin', glyph: '🐧', minLevel: 2 },
+  { id: 'koala', label: 'Koala', glyph: '🐨', minLevel: 3 },
+  { id: 'tiger', label: 'Tiger', glyph: '🐯', minLevel: 3 },
+  { id: 'unicorn', label: 'Unicorn', glyph: '🦄', minLevel: 4 },
+  { id: 'dragon', label: 'Dragon', glyph: '🐲', minLevel: 5 },
+]
+
+/** Slot bazlı VARSAYILAN avatar (seçim yapılmamışsa). */
+export const DEFAULT_AVATAR: Record<'p1' | 'p2', AvatarId> = { p1: 'rabbit', p2: 'bear' }
+
+export const avatarById = (id?: AvatarId | null) =>
+  AVATARS.find((item) => item.id === id) ?? null
+
+/**
+ * Bir avatar id'sini güvenli biçimde çözer: geçerliyse glifini, değilse
+ * `fallback` (slot bazlı varsayılan) glifini döndürür. UI'da ham emoji
+ * göstermek yerine bunu kullanırız; böylece sunucudan boş/geçersiz değer
+ * gelse bile ekranda her zaman bir hayvan yüzü olur.
+ */
+export const avatarGlyph = (id?: AvatarId | null, fallback: AvatarId = 'rabbit'): string =>
+  avatarById(id)?.glyph ?? avatarById(fallback)?.glyph ?? '🐰'
 
 // --- İlerleme (XP) ---
 export const XP_PER_WIN = 120

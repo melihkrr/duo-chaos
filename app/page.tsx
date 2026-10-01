@@ -71,6 +71,9 @@ export default function Page() {
           onCopy={() => void game.copyInvite()}
           onStart={() => void game.startGame()}
           onRename={game.setName}
+          avatar={progress.progress.avatar}
+          level={progress.profile.level}
+          onSelectAvatar={game.setAvatar}
           busy={game.busy}
           error={game.error}
         />

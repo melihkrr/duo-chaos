@@ -11,6 +11,28 @@ export type EmoteId = 'wave' | 'taunt' | 'shock' | 'gg' | 'fire'
 /** Oyuncunun arkasında bıraktığı iz efekti. */
 export type TrailId = 'none' | 'spark' | 'frost' | 'ember' | 'shadow'
 
+/**
+ * Oyuncunun seçebileceği HAYVAN AVATARI (yüz emojisi).
+ *
+ * İsim nasıl kullanıcı tarafından seçilebiliyorsa, arena/HUD/sonuç
+ * ekranlarında görünen hayvan yüzü de kullanıcı tarafından seçilebilir.
+ * Değerler `lib/config.ts` içindeki `AVATARS` ile ve sunucudaki
+ * `duo_avatar_ids()` ile BİREBİR aynı olmalıdır.
+ */
+export type AvatarId =
+  | 'rabbit'
+  | 'bear'
+  | 'fox'
+  | 'panda'
+  | 'cat'
+  | 'dog'
+  | 'frog'
+  | 'penguin'
+  | 'koala'
+  | 'tiger'
+  | 'unicorn'
+  | 'dragon'
+
 /** Sunucudan gelen kısmi ipucu (Guess/Read mekaniği). */
 export type ScoutHint = {
   /** Rakibin görevinin türü: toplama mı, çalma mı. */
@@ -98,6 +120,11 @@ export type Player = {
   emoteUntil?: number
   /** Seçili iz efekti (cosmetic). */
   trail?: TrailId
+  /**
+   * Seçili hayvan avatarı (cosmetic). Sunucu `duo_players.avatar` sütunundan
+   * gelir; boşsa istemci varsayılana (slot bazlı) düşer.
+   */
+  avatar?: AvatarId
   /** Sunucudan gelen seviye/ünvan (progression). */
   level?: number
   title?: string
@@ -148,6 +175,8 @@ export type Progress = {
   title: string
   emote: EmoteId
   trail: TrailId
+  /** Seçili hayvan avatarı (kalıcı kozmetik). */
+  avatar: AvatarId
   wins: number
   matches: number
 }

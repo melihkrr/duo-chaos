@@ -20,7 +20,7 @@ import { blankPlayer, useGameState } from './useGameState'
 import { useProgress } from './useProgress'
 import { useRoom, readToken, saveToken } from './useRoom'
 import { useToast } from './useToast'
-import type { Coin, EmoteId, Phase, Player, State, TrailId } from './types'
+import type { AvatarId, Coin, EmoteId, Phase, Player, State, TrailId } from './types'
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 
@@ -456,12 +456,19 @@ export const useDuoChaos = () => {
   // görünüyor" sorunu kökten çözülür (tek doğruluk kaynağı sunucu).
 
   const cosmetics = useCosmetics(
-    { emote: progress.progress.emote, trail: progress.progress.trail },
+    {
+      emote: progress.progress.emote,
+      trail: progress.progress.trail,
+      avatar: progress.progress.avatar,
+    },
     (input) => void progress.setCosmetics(input),
     (id) => room.broadcast('emote', { by: room.playerId, id }),
     // İz (trail) seçimi değişince rakibe bildir; rakip `state.players[1].trail`
     // üzerinden bizim izimizi görsün.
     (id) => room.broadcast('trail', { by: room.playerId, id }),
+    // Avatar seçimi değişince rakibe bildir; rakip `state.players[1].avatar`
+    // üzerinden bizim hayvan yüzümüzü görsün.
+    (id) => room.broadcast('avatar', { by: room.playerId, id }),
   )
 
   // `cosmetics` nesnesi `activeEmote` değişince (her emote animasyonunda) yeni
@@ -489,11 +496,21 @@ export const useDuoChaos = () => {
     trailRef.current = cosmetics.trail
   }, [cosmetics.trail])
 
+  // AVATAR SENKRONU (iz ile aynı desen). Rakip, oyun başında/yeni turda kendi
+  // avatarını "değiştirmez"; bu yüzden seçimi bağlantı kurulduğunda, tur
+  // başladığında ve periyodik olarak yayınlarız. Böylece rakip her zaman
+  // OTORİTE avatar değerini görür.
+  const avatarRef = useRef(cosmetics.avatar)
+  useEffect(() => {
+    avatarRef.current = cosmetics.avatar
+  }, [cosmetics.avatar])
+
   useEffect(() => {
     if (!room.code) return
     const publish = () => {
       if (typeof document !== 'undefined' && document.hidden) return
       room.broadcast('trail', { by: room.playerId, id: trailRef.current })
+      room.broadcast('avatar', { by: room.playerId, id: avatarRef.current })
     }
     // Bağlanır bağlanmaz ve her tur başlangıcında yayınla.
     publish()
@@ -869,6 +886,20 @@ export const useDuoChaos = () => {
       }))
     })
 
+    // Rakip avatarını değiştirdiğinde anında yansıt. `avatar` da periyodik
+    // heartbeat olarak yayınlanır; bu yüzden CANLILIK sinyali sayarız.
+    const offAvatar = room.on('avatar', (payload) => {
+      const data = payload as { by?: string; id?: AvatarId }
+      if (!data || data.by === room.playerId || !data.id) return
+      noteRivalAlive()
+      setState((prev) => ({
+        ...prev,
+        players: prev.players.map((player, index) =>
+          index === 1 ? { ...player, avatar: data.id } : player,
+        ),
+      }))
+    })
+
     // Rakip adını değiştirdiğinde anında yansıt.
     const offName = room.on('name', (payload) => {
       const data = payload as { by?: string; name?: string }
@@ -980,6 +1011,7 @@ export const useDuoChaos = () => {
       offSteal()
       offEmote()
       offTrail()
+      offAvatar()
       offName()
       offLeave()
       offScore()
@@ -1086,10 +1118,11 @@ export const useDuoChaos = () => {
               merged.x = player.x
               merged.y = player.y
             }
-            // Kozmetikler (trail/emote) broadcast ile gelir; sunucu bunları
-            // güncellemez, bu yüzden yerel değerleri koruruz.
+            // Kozmetikler (trail/emote/avatar) broadcast ile gelir; sunucu
+            // bunları güncellemez, bu yüzden yerel değerleri koruruz.
             merged.trail = player.trail
             merged.emote = player.emote
+            merged.avatar = player.avatar
           }
           return merged
         })
@@ -1552,6 +1585,11 @@ export const useDuoChaos = () => {
                     : player.totalScore
                 merged.trail = player.trail
                 merged.emote = player.emote
+                // AVATAR: yerel oyuncunun avatarı `cosmetics.avatar`'dan
+                // (anlık seçim), rakibinki broadcast'ten gelir. Sunucu
+                // snapshot'ı yalnızca tur başında tohumlanan değeri taşır;
+                // bu yüzden yerel değeri koruruz.
+                merged.avatar = player.avatar
                 merged.coins = player.coins
                 merged.stolen = player.stolen
                 merged.collectedTypes = player.collectedTypes
@@ -2124,6 +2162,35 @@ export const useDuoChaos = () => {
     [room, updatePlayer],
   )
 
+  /**
+   * AVATAR SEÇİMİ (isim değiştirme ile aynı desen).
+   *
+   * 1. `cosmetics.setAvatar` → yerel seçim + `duo_set_cosmetics` (kalıcı) +
+   *    rakibe `avatar` broadcast'i.
+   * 2. Yerel oyuncu satırını (index 0) hemen güncelle ki arena/HUD anında
+   *    yeni hayvan yüzünü göstersin.
+   * 3. Oda içindeyse seçimi oyuncu satırına da kopyala (`duo_apply_cosmetics`)
+   *    ki rakip, sunucu snapshot'ından da doğru avatarı görsün.
+   */
+  const setAvatar = useCallback(
+    (id: AvatarId) => {
+      cosmetics.setAvatar(id)
+      updatePlayer('p1', { avatar: id })
+      if (room.code) {
+        void room
+          .call('duo_apply_cosmetics', {
+            p_code: room.code,
+            p_token: room.token ?? room.playerId,
+            p_emote: cosmetics.emote,
+            p_trail: cosmetics.trail,
+            p_avatar: id,
+          })
+          .catch(() => undefined)
+      }
+    },
+    [cosmetics, room, updatePlayer],
+  )
+
   const copyInvite = useCallback(async () => {
     if (!room.code) return
     const url = `${window.location.origin}/play/${room.code}`
@@ -2219,6 +2286,7 @@ export const useDuoChaos = () => {
     rivalRematchReady,
     leaveGame,
     setName,
+    setAvatar,
     copyInvite,
     triggerEmote: () => cosmetics.triggerEmote(),
   }

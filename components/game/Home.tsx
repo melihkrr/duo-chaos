@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { Button } from '../ui/Button'
 import { Panel } from '../ui/Panel'
+import { AvatarPicker } from './AvatarPicker'
 import { JoinDialog } from './JoinDialog'
 import type { ProgressApi } from '../../lib/useProgress'
 
@@ -66,6 +67,12 @@ export function Home({ progress, onCreate, onJoin, busy, error, initialName = ''
             />
             <small className="muted">Your rival will see this name.</small>
           </label>
+
+          <AvatarPicker
+            avatar={raw.avatar}
+            level={profile.level}
+            onSelect={(id) => void progress.setCosmetics({ avatar: id })}
+          />
 
           <div className="hero-actions">
             <Button onClick={() => onCreate(trimmed)} disabled={busy || !nameValid}>

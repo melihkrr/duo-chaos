@@ -2,6 +2,7 @@
 
 import { Button } from '../ui/Button'
 import { Panel } from '../ui/Panel'
+import { avatarGlyph } from '../../lib/config'
 import type { State } from '../../lib/types'
 
 type Props = {
@@ -85,8 +86,9 @@ export function Results({
           return (
             <div key={player.id} className={['score-row', isWinner ? 'winner' : ''].join(' ')}>
               <div className="score-id">
-                <span className="score-avatar" aria-hidden>
-                  {isWinner ? '👑' : index === 0 ? '🐰' : '🐻'}
+                <span className={['score-avatar', isWinner ? 'crowned' : ''].filter(Boolean).join(' ')} aria-hidden>
+                  {avatarGlyph(player.avatar, index === 0 ? 'rabbit' : 'bear')}
+                  {isWinner ? <span className="score-crown">👑</span> : null}
                 </span>
                 <div>
                   <strong>{player.name}</strong>

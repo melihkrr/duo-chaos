@@ -3,7 +3,9 @@
 import { useState } from 'react'
 import { Button } from '../ui/Button'
 import { Panel } from '../ui/Panel'
-import type { Player } from '../../lib/types'
+import { AvatarPicker } from './AvatarPicker'
+import { avatarGlyph } from '../../lib/config'
+import type { AvatarId, Player } from '../../lib/types'
 
 type Props = {
   code: string
@@ -15,6 +17,12 @@ type Props = {
   onCopy: () => void
   onStart: () => void
   onRename: (name: string) => void
+  /** Oyuncunun seçili avatarı (kendi koltuğu). */
+  avatar: AvatarId
+  /** Oyuncunun seviyesi — avatar kilidi için. */
+  level: number
+  /** Yeni avatar seçildiğinde çağrılır. */
+  onSelectAvatar: (id: AvatarId) => void
   busy?: boolean
   error?: string | null
 }
@@ -30,6 +38,9 @@ export function Lobby({
   onCopy,
   onStart,
   onRename,
+  avatar,
+  level,
+  onSelectAvatar,
   busy,
   error,
 }: Props) {
@@ -63,7 +74,7 @@ export function Lobby({
           return (
             <div key={index} className={['seat', filled ? 'filled' : 'empty'].join(' ')}>
               <span className="seat-avatar" aria-hidden>
-                {filled ? (index === 0 ? '🐰' : '🐻') : '❓'}
+                {filled ? avatarGlyph(player?.avatar, index === 0 ? 'rabbit' : 'bear') : '❓'}
               </span>
               <div className="seat-info">
                 {isMe && editing ? (
@@ -104,6 +115,8 @@ export function Lobby({
           )
         })}
       </div>
+
+      <AvatarPicker avatar={avatar} level={level} onSelect={onSelectAvatar} compact />
 
       <div className="lobby-foot">
         {isHost ? (

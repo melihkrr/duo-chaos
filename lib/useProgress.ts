@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { profileForXp, type ProfileProgress } from './config'
 import { getSupabase, hasSupabase, rpc } from './supabase'
-import type { EmoteId, Progress, TrailId } from './types'
+import type { AvatarId, EmoteId, Progress, TrailId } from './types'
 
 const CLIENT_KEY = 'duo-chaos:client-id'
 const LOCAL_KEY = 'duo-chaos:progress'
@@ -50,6 +50,7 @@ const blank = (clientId: string): Progress => ({
   title: 'Rookie',
   emote: 'wave',
   trail: 'spark',
+  avatar: 'rabbit',
   wins: 0,
   matches: 0,
 })
@@ -62,7 +63,7 @@ export type ProgressApi = {
   /** Maç sonucunu sunucuya bildirir ve XP'yi günceller. */
   award: (input: { won: boolean; rounds?: number; missions?: number }) => Promise<void>
   /** Kozmetik seçimini sunucuya kaydeder. */
-  setCosmetics: (input: { emote?: EmoteId; trail?: TrailId }) => Promise<void>
+  setCosmetics: (input: { emote?: EmoteId; trail?: TrailId; avatar?: AvatarId }) => Promise<void>
   refresh: () => Promise<void>
 }
 
@@ -88,6 +89,10 @@ export const useProgress = (): ProgressApi => {
         // sayıp mevcut (varsayılan) değeri koruruz.
         emote: typeof data.emote === 'string' && data.emote ? (data.emote as EmoteId) : prev.emote,
         trail: typeof data.trail === 'string' && data.trail ? (data.trail as TrailId) : prev.trail,
+        avatar:
+          typeof data.avatar === 'string' && data.avatar
+            ? (data.avatar as AvatarId)
+            : prev.avatar,
         wins: typeof data.wins === 'number' ? data.wins : prev.wins,
         matches: typeof data.matches === 'number' ? data.matches : prev.matches,
       }
@@ -165,7 +170,7 @@ export const useProgress = (): ProgressApi => {
   )
 
   const setCosmetics = useCallback(
-    async (input: { emote?: EmoteId; trail?: TrailId }) => {
+    async (input: { emote?: EmoteId; trail?: TrailId; avatar?: AvatarId }) => {
       setProgress((prev) => {
         const next = { ...prev, ...input }
         writeLocal(next)
@@ -177,6 +182,7 @@ export const useProgress = (): ProgressApi => {
           p_client_id: clientId,
           p_emote: input.emote ?? null,
           p_trail: input.trail ?? null,
+          p_avatar: input.avatar ?? null,
         })
         if (data) applyServer(data)
       } catch {

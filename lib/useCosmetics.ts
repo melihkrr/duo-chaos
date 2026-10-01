@@ -1,9 +1,9 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { EMOTES, TRAILS, emoteById, trailById } from './config'
+import { AVATARS, EMOTES, TRAILS, avatarById, emoteById, trailById } from './config'
 import { playSound } from './sound'
-import type { EmoteId, TrailId } from './types'
+import type { AvatarId, EmoteId, TrailId } from './types'
 
 const EMOTE_MS = 1_600
 /**
@@ -16,15 +16,20 @@ const EMOTE_COOLDOWN_MS = 2_500
 export type CosmeticsApi = {
   emote: EmoteId
   trail: TrailId
+  avatar: AvatarId
   activeEmote: EmoteId | null
   activeGlyph: string | null
   emoteOptions: typeof EMOTES
   trailOptions: typeof TRAILS
+  avatarOptions: typeof AVATARS
   trailColor: string
+  /** Seçili avatarın glifi (UI'da doğrudan gösterilir). */
+  avatarGlyph: string
   /** Emote spam kilidi aktif mi? (buton disabled göstergesi için) */
   emoteOnCooldown: boolean
   setEmote: (id: EmoteId) => void
   setTrail: (id: TrailId) => void
+  setAvatar: (id: AvatarId) => void
   /** Bir emote tetikler (yerel + yayın için callback). */
   triggerEmote: (id?: EmoteId) => void
   /** Rakibin emote'unu gösterir (yayından geldiğinde). */
@@ -36,14 +41,17 @@ export type CosmeticsApi = {
  * Seçim sunucuya `onPersist` ile bildirilir.
  */
 export const useCosmetics = (
-  initial: { emote?: EmoteId; trail?: TrailId },
-  onPersist?: (input: { emote?: EmoteId; trail?: TrailId }) => void,
+  initial: { emote?: EmoteId; trail?: TrailId; avatar?: AvatarId },
+  onPersist?: (input: { emote?: EmoteId; trail?: TrailId; avatar?: AvatarId }) => void,
   onBroadcast?: (id: EmoteId) => void,
   /** İz (trail) seçimi değiştiğinde rakibe yayınlamak için. */
   onBroadcastTrail?: (id: TrailId) => void,
+  /** Avatar seçimi değiştiğinde rakibe yayınlamak için. */
+  onBroadcastAvatar?: (id: AvatarId) => void,
 ): CosmeticsApi => {
   const [emoteOverride, setEmoteState] = useState<EmoteId | null>(null)
   const [trailOverride, setTrailState] = useState<TrailId | null>(null)
+  const [avatarOverride, setAvatarState] = useState<AvatarId | null>(null)
   const [activeEmote, setActiveEmote] = useState<EmoteId | null>(null)
   const [emoteOnCooldown, setEmoteOnCooldown] = useState(false)
   const timer = useRef<number | null>(null)
@@ -60,11 +68,13 @@ export const useCosmetics = (
   const onPersistRef = useRef(onPersist)
   const onBroadcastRef = useRef(onBroadcast)
   const onBroadcastTrailRef = useRef(onBroadcastTrail)
+  const onBroadcastAvatarRef = useRef(onBroadcastAvatar)
   useEffect(() => {
     onPersistRef.current = onPersist
     onBroadcastRef.current = onBroadcast
     onBroadcastTrailRef.current = onBroadcastTrail
-  }, [onPersist, onBroadcast, onBroadcastTrail])
+    onBroadcastAvatarRef.current = onBroadcastAvatar
+  }, [onPersist, onBroadcast, onBroadcastTrail, onBroadcastAvatar])
 
   // Sunucudan gelen kozmetikler varsayılan; yerel seçim onu geçersiz kılar.
   // Sunucu, seçim yapılmamışsa boş string ('') döndürür; bunu "ayarlanmamış"
@@ -72,6 +82,7 @@ export const useCosmetics = (
   // emote glifi hiç görünmez).
   const emote = emoteOverride || initial.emote || 'wave'
   const trail = trailOverride || initial.trail || 'spark'
+  const avatar = avatarOverride || initial.avatar || 'rabbit'
 
   useEffect(
     () => () => {
@@ -98,6 +109,13 @@ export const useCosmetics = (
     onPersistRef.current?.({ trail: id })
     // Rakibe de bildir; o da bizim izimizi görsün.
     onBroadcastTrailRef.current?.(id)
+  }, [])
+
+  const setAvatar = useCallback((id: AvatarId) => {
+    setAvatarState(id)
+    onPersistRef.current?.({ avatar: id })
+    // Rakibe de bildir; o da bizim hayvan yüzümüzü görsün.
+    onBroadcastAvatarRef.current?.(id)
   }, [])
 
   const triggerEmote = useCallback(
@@ -136,24 +154,30 @@ export const useCosmetics = (
     () => ({
       emote,
       trail,
+      avatar,
       activeEmote,
       activeGlyph: emoteById(activeEmote)?.glyph ?? null,
       emoteOptions: EMOTES,
       trailOptions: TRAILS,
+      avatarOptions: AVATARS,
       trailColor: trailById(trail).color,
+      avatarGlyph: avatarById(avatar)?.glyph ?? '🐰',
       emoteOnCooldown,
       setEmote,
       setTrail,
+      setAvatar,
       triggerEmote,
       showRemoteEmote,
     }),
     [
       emote,
       trail,
+      avatar,
       activeEmote,
       emoteOnCooldown,
       setEmote,
       setTrail,
+      setAvatar,
       triggerEmote,
       showRemoteEmote,
     ],
