@@ -833,10 +833,19 @@ export const useDuoChaos = () => {
       // bakıyordu; önceki turdan GECİKMİŞ bir `next-ready` paketi (veya
       // heartbeat) yeni turun sonuç ekranında `rivalNextReady`'yi yeniden
       // `true` yapıyor ve host, rakip hiç onay vermeden turu başlatıyordu
-      // ("bir oyuncu next round demeden tur başladı" hatası). Artık paketin
-      // `round` alanı yerel tur ile eşleşmiyorsa YOK SAYARIZ.
+      // ("bir oyuncu next round demeden tur başladı" hatası).
+      //
+      // KÖK SORUN ("Waiting for your rival to accept… ikiside kabul ettiği
+      // halde"): Eski kontrol TAM EŞİTLİK istiyordu (`data.round !== currentRound`
+      // → yok say). Ancak iki istemcinin tur sayacı, yoklama gecikmesi yüzünden
+      // KISA SÜRE farklı olabiliyor (biri N, diğeri N+1). Bu durumda geçerli bir
+      // onay paketi "eski tur" sanılıp reddediliyor ve İKİ taraf da birbirini
+      // bekliyordu. Doğru kural: yalnızca GERÇEKTEN ESKİ turdan gelen paketleri
+      // (data.round < currentRound) yok sayarız; aynı VEYA daha yeni turdan gelen
+      // onayı kabul ederiz. Böylece gecikmiş ama geçerli onay el sıkışmayı
+      // tamamlar; önceki turdan sızan paket yine engellenir.
       const currentRound = roundRef.current
-      if (typeof data.round === 'number' && data.round !== currentRound) return
+      if (typeof data.round === 'number' && data.round < currentRound) return
       setRivalNextReady(true)
       // Host, rakibin onayını alınca ve kendisi de onaylamışsa turu başlatır.
       // (Effect yerine olay işleyicisinde başlatırız; lint kuralı gereği.)
@@ -1773,15 +1782,25 @@ export const useDuoChaos = () => {
   // onayımızı periyodik olarak yeniden yayınlarız. Tek bir `next-ready` paketi
   // kaybolursa host turu hiç başlatmaz ve bir oyuncu "waiting for rival"
   // ekranında takılı kalırdı. Heartbeat bu el sıkışmayı yakınsar.
+  //
+  // KÖK SORUN ("Waiting for your rival to accept… ikiside kabul ettiği halde"):
+  // Bu effect'in bağımlılığında `room` vardı. `room` her render'da YENİ bir nesne
+  // kimliği taşır (useRoom dönüşü memoize edilmemiş — bkz. yukarıdaki `callRef`
+  // notu). Bu yüzden effect HER render'da sökülüp yeniden kuruluyor ve interval
+  // 1.5 sn'ye ulaşmadan sıfırlanıyordu → heartbeat HİÇ ateşlenmiyordu. Tek bir
+  // `next-ready` broadcast'i kaybolduğunda (Supabase broadcast best-effort'tur)
+  // el sıkışma asla tamamlanmıyor ve İKİ taraf da "rakip bekleniyor" ekranında
+  // takılı kalıyordu. Çözüm: `broadcastRef` kullanıp `room`'u bağımlılıktan
+  // çıkarırız; böylece interval kararlı kalır ve gerçekten periyodik çalışır.
   useEffect(() => {
     if (!nextReady || rivalNextReady) return
     if (state.phase !== 'results') return
     const id = window.setInterval(() => {
       if (typeof document !== 'undefined' && document.hidden) return
-      room.broadcast('next-ready', { by: room.playerId, round: state.round })
+      broadcastRef.current('next-ready', { by: room.playerId, round: state.round })
     }, 1_500)
     return () => window.clearInterval(id)
-  }, [nextReady, rivalNextReady, room, state.phase, state.round])
+  }, [nextReady, rivalNextReady, room.playerId, state.phase, state.round])
 
   /**
    * RÖVANŞ (rematch) — İKİ OYUNCUNUN DA ONAYI GEREKİR.
@@ -1812,15 +1831,19 @@ export const useDuoChaos = () => {
   // RÖVANŞ ONAY HEARTBEAT: Yerel onay verildiyse ama rakip hâlâ onaylamadıysa
   // onayımızı periyodik olarak yeniden yayınlarız (tek paket kaybolursa
   // el sıkışma yakınsasın diye).
+  //
+  // NOT: `next-ready` heartbeat'iyle AYNI düzeltme — `room` bağımlılığı her
+  // render'da interval'i sıfırlayıp heartbeat'i ölü bırakıyordu. `broadcastRef`
+  // kullanırız ve `room`'u bağımlılıktan çıkarırız.
   useEffect(() => {
     if (!rematchReady || rivalRematchReady) return
     if (state.phase !== 'matchover') return
     const id = window.setInterval(() => {
       if (typeof document !== 'undefined' && document.hidden) return
-      room.broadcast('rematch-ready', { by: room.playerId })
+      broadcastRef.current('rematch-ready', { by: room.playerId })
     }, 1_500)
     return () => window.clearInterval(id)
-  }, [rematchReady, rivalRematchReady, room, state.phase])
+  }, [rematchReady, rivalRematchReady, room.playerId, state.phase])
 
   // RÖVANŞ BAYRAKLARINI SIFIRLA: Sonuç ekranı her yeni maç için göründüğünde
   // onay bayraklarını temizle. (Aynı desen `readyRoundRef` için de kullanılır.)
