@@ -538,6 +538,11 @@ h3 {
   margin: 0 auto;
 }
 
+.name-hint {
+  margin: 12px auto 0;
+  text-align: center;
+}
+
 .mode-toggle {
   display: flex;
   gap: 8px;
@@ -1631,7 +1636,7 @@ h3 {
      olsa bile) başka bir kompozit katmanın arkasına çizemez. */
   transform: translateZ(0);
   will-change: transform;
-  opacity: 0.42;
+  opacity: 0.85;
   background: rgba(255, 255, 255, 0.28);
   border-color: rgba(43, 36, 64, 0.45);
   box-shadow: 0 4px 0 rgba(43, 36, 64, 0.12);

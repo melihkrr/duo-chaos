@@ -6,6 +6,7 @@ import { Panel } from '../ui/Panel'
 import { AvatarPicker } from './AvatarPicker'
 import { JoinDialog } from './JoinDialog'
 import type { ProgressApi } from '../../lib/useProgress'
+import { saveName } from '../../lib/useRoom'
 
 type Props = {
   progress: ProgressApi
@@ -90,7 +91,9 @@ export function Home({ progress, onCreate, onJoin, onPlayBot, busy, error, initi
                 value={name}
                 onChange={(event) => {
                   nameDirtyRef.current = true
-                  setName(event.target.value.slice(0, NAME_MAX))
+                  const nextName = event.target.value.slice(0, NAME_MAX)
+                  setName(nextName)
+                  saveName(nextName)
                 }}
                 placeholder="e.g. Little Panda"
                 maxLength={NAME_MAX}
@@ -146,7 +149,9 @@ export function Home({ progress, onCreate, onJoin, onPlayBot, busy, error, initi
               Single-player match against a medium-difficulty bot. Same rules, same arena.
             </p>
           )}
-          {!nameValid && <p className="muted">Pick a name (at least 2 characters) to start.</p>}
+          {!nameValid && (
+            <p className="muted name-hint">Pick a name (at least 2 characters) to start.</p>
+          )}
           {error && <p className="error">{error}</p>}
         </section>
 
