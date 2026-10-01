@@ -76,9 +76,10 @@ export const targetOf = (o?: Objective | null) => {
  *   - `coinType` (mixed değil) varsa: progress = collected[coinType]
  *   - aksi halde: progress = stolen (steal) veya coins
  *
- * ÖNEMLİ: `requirements` + `steal` görevlerinde (ör. "Steal 2 and secure 1
- * Gold") sunucu `progress`e ÇALMAYI EKLEMEZ; çalma ayrı bir `steals_met`
- * koşuludur.
+ * ÖNEMLİ (0038): `requirements` + `stealTarget` birlikte olan görevlerde (ör.
+ * "Steal 2 and secure 1 Gold") ilerleme = Σ min(collected, required) +
+ * min(stolen, stealTarget). Çalma ayrıca `steals_met` koşuludur; görev yalnızca
+ * HEM kaynak HEM çalma sağlandığında tamamlanır.
  */
 export const progressOf = (
   p: Pick<Player, 'id' | 'objective' | 'coins' | 'stolen' | 'collectedTypes' | 'objectiveProgress'>,
@@ -93,12 +94,14 @@ export const progressOf = (
     return cap(Math.max(0, p.objectiveProgress))
   }
   if (objective?.requirements) {
-    return cap(
-      Object.entries(objective.requirements).reduce(
-        (sum, [type, required]) => Math.min(p.collectedTypes?.[type as CoinType] || 0, required || 0) + sum,
-        0,
-      ),
+    const resources = Object.entries(objective.requirements).reduce(
+      (sum, [type, required]) => Math.min(p.collectedTypes?.[type as CoinType] || 0, required || 0) + sum,
+      0,
     )
+    // ÇALMA BİLEŞENİ (0038): kaynak + çalma görevlerinde çalma da sayılır.
+    const stealTarget = objective.stealTarget || 0
+    const steals = stealTarget > 0 ? Math.min(p.stolen || 0, stealTarget) : 0
+    return cap(resources + steals)
   }
   if (objective?.coinType && objective.coinType !== 'mixed') {
     return cap(p.collectedTypes?.[objective.coinType] || 0)

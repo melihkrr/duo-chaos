@@ -974,9 +974,10 @@ export const useDuoChaos = () => {
         ...prev,
         players: prev.players.map((player, index) => {
           if (index === 0) return player
-          // İYİMSER İLERLEME: yalnızca `steal` görevlerinde çalma ilerlemeyi
-          // artırır (sunucu `duo_mission_progress` ile aynı). `requirements`
-          // görevlerinde çalma progress'e EKLENMEZ.
+          // İYİMSER İLERLEME: çalma, ilerlemeyi şu durumlarda artırır:
+          //   - `kind === 'steal'` (ör. "Steal 3 from your rival")
+          //   - `requirements` + `stealTarget` (ör. "Steal 2 and secure 1 Gold")
+          // Sunucu `duo_mission_progress` (0038) ile BİREBİR aynı mantık.
           //
           // KÖK SORUN DÜZELTMESİ: Eskiden `objectiveProgress + 1` şeklinde
           // EKLENİYORDU. Aynı `steal` yayını iki kez gelirse (veya sunucu
@@ -984,10 +985,24 @@ export const useDuoChaos = () => {
           // ilerlemeyi otoriter `stolen` sayacından TÜRETİRİZ (monotonik) —
           // `offCollect`'in `collectedTypes`'tan türetmesiyle aynı mantık.
           const stolen = player.stolen + 1
-          const objectiveProgress =
-            player.objective?.kind === 'steal'
-              ? Math.max(player.objectiveProgress ?? 0, stolen)
-              : player.objectiveProgress ?? 0
+          const objective = player.objective
+          const target = objective?.target ?? 0
+          const cap = (value: number) => (target > 0 ? Math.min(value, target) : value)
+          let derivedProgress = player.objectiveProgress ?? 0
+          if (objective?.requirements) {
+            // Kaynak bileşeni + çalma bileşeni (varsa).
+            const resources = Object.entries(objective.requirements).reduce(
+              (sum, [type, required]) =>
+                sum + Math.min(player.collectedTypes?.[type as Coin['type']] ?? 0, required || 0),
+              0,
+            )
+            const stealTarget = objective.stealTarget || 0
+            const steals = stealTarget > 0 ? Math.min(stolen, stealTarget) : 0
+            derivedProgress = cap(resources + steals)
+          } else if (objective?.kind === 'steal') {
+            derivedProgress = cap(stolen)
+          }
+          const objectiveProgress = Math.max(player.objectiveProgress ?? 0, derivedProgress)
           return {
             ...player,
             stolen,

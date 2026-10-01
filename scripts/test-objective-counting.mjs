@@ -32,6 +32,9 @@ const serverProgress = (objective, collected, stolen, coins) => {
     for (const [key, required] of Object.entries(reqs)) {
       progress += Math.min(collected?.[key] ?? 0, required ?? 0)
     }
+    // STEAL COMPONENT (0038): "Steal 2 and secure 1 Gold" needs BOTH.
+    const stealTarget = objective.stealTarget ?? 0
+    if (stealTarget > 0) progress += Math.min(stolen ?? 0, stealTarget)
   } else if (objective.coinType && objective.coinType !== 'mixed') {
     progress = collected?.[objective.coinType] ?? 0
   } else {
@@ -57,6 +60,9 @@ const serverSatisfied = (objective, collected, stolen, coins) => {
       if ((collected?.[key] ?? 0) < (required ?? 0)) resourcesMet = false
       progress += Math.min(collected?.[key] ?? 0, required ?? 0)
     }
+    // STEAL COMPONENT (0038): resource + steal objectives count steals too.
+    const stealTarget = objective.stealTarget ?? 0
+    if (stealTarget > 0) progress += Math.min(stolen ?? 0, stealTarget)
   } else if (objective.coinType && objective.coinType !== 'mixed') {
     progress = collected?.[objective.coinType] ?? 0
   } else {
@@ -80,6 +86,9 @@ const clientProgress = (objective, collected, stolen, coins) => {
     for (const [type, required] of Object.entries(objective.requirements)) {
       sum += Math.min(collected?.[type] ?? 0, required ?? 0)
     }
+    // STEAL COMPONENT (0038).
+    const stealTarget = objective.stealTarget ?? 0
+    if (stealTarget > 0) sum += Math.min(stolen ?? 0, stealTarget)
     return cap(sum)
   }
   if (objective.coinType && objective.coinType !== 'mixed') {
@@ -99,6 +108,9 @@ const clientOptimistic = (objective, collected, stolen, coins) => {
     for (const [type, required] of Object.entries(objective.requirements)) {
       sum += Math.min(collected?.[type] ?? 0, required ?? 0)
     }
+    // STEAL COMPONENT (0038).
+    const stealTarget = objective.stealTarget ?? 0
+    if (stealTarget > 0) sum += Math.min(stolen ?? 0, stealTarget)
     return cap(sum)
   }
   if (objective?.coinType && objective.coinType !== 'mixed') {
@@ -139,6 +151,16 @@ const GOLD3 = { id: 'gold-rush', kind: 'collect', label: 'Collect 3 Gold', targe
 const BLUE4 = { id: 'blue-pressure', kind: 'collect', label: 'Collect 4 Blue', target: 4, coinType: 'blue' }
 const BLUE2RED2 = { id: 'blue-raid', kind: 'collect', label: 'Collect 2 Blue + 2 Red', target: 4, coinType: 'mixed', requirements: { blue: 2, red: 2 } }
 const STEAL3 = { id: 'resource-control', kind: 'steal', label: 'Steal 3 from your rival', target: 3, coinType: 'mixed' }
+// "Steal 2 and secure 1 Gold" — HEM kaynak (1 Gold) HEM çalma (2 steal).
+const GOLD_ROBBERY = {
+  id: 'gold-robbery',
+  kind: 'steal',
+  label: 'Steal 2 and secure 1 Gold',
+  target: 3,
+  coinType: 'mixed',
+  requirements: { gold: 1 },
+  stealTarget: 2,
+}
 
 console.log('\nScenario A: "Collect 2 Red + 1 Emerald" — collect 2 Red then 1 Emerald')
 {
@@ -203,6 +225,27 @@ console.log('\nScenario I: completion detection is exact')
   check('2 Red + 0 Emerald does NOT satisfy', serverSatisfied(RED_EMERALD, { red: 2 }, 0, 2) === false)
   check('3 Red + 0 Emerald does NOT satisfy (missing Emerald)', serverSatisfied(RED_EMERALD, { red: 3 }, 0, 3) === false)
   check('2 Red + 1 Emerald + 5 Blue satisfies', serverSatisfied(RED_EMERALD, { red: 2, emerald: 1, blue: 5 }, 0, 8) === true)
+}
+
+console.log('\nScenario J: "Steal 2 and secure 1 Gold" — steals MUST count (0038)')
+{
+  // The exact user-reported flow: steal twice, then collect 1 Gold.
+  check('0 stolen, 0 gold → 0/3', serverProgress(GOLD_ROBBERY, {}, 0, 0) === 0)
+  check('1 steal → 1/3 (steal counts!)', serverProgress(GOLD_ROBBERY, {}, 1, 0) === 1)
+  check('2 steals → 2/3', serverProgress(GOLD_ROBBERY, {}, 2, 0) === 2)
+  check('2 steals + 1 Gold → 3/3', serverProgress(GOLD_ROBBERY, { gold: 1 }, 2, 1) === 3)
+  check('1 Gold only (no steals) → 1/3', serverProgress(GOLD_ROBBERY, { gold: 1 }, 0, 1) === 1)
+  check('extra steals capped at stealTarget (5 steals → 2/3)', serverProgress(GOLD_ROBBERY, {}, 5, 0) === 2)
+  check('extra Gold capped at requirement (3 Gold + 2 steals → 3/3)', serverProgress(GOLD_ROBBERY, { gold: 3 }, 2, 3) === 3)
+  check('server == client == optimistic at every step', [
+    [serverProgress(GOLD_ROBBERY, {}, 1, 0), clientProgress(GOLD_ROBBERY, {}, 1, 0), clientOptimistic(GOLD_ROBBERY, {}, 1, 0)],
+    [serverProgress(GOLD_ROBBERY, {}, 2, 0), clientProgress(GOLD_ROBBERY, {}, 2, 0), clientOptimistic(GOLD_ROBBERY, {}, 2, 0)],
+    [serverProgress(GOLD_ROBBERY, { gold: 1 }, 2, 1), clientProgress(GOLD_ROBBERY, { gold: 1 }, 2, 1), clientOptimistic(GOLD_ROBBERY, { gold: 1 }, 2, 1)],
+  ].every(([s, c, o]) => s === c && c === o))
+  check('NOT satisfied with 2 steals but 0 Gold', serverSatisfied(GOLD_ROBBERY, {}, 2, 0) === false)
+  check('NOT satisfied with 1 Gold but 1 steal', serverSatisfied(GOLD_ROBBERY, { gold: 1 }, 1, 1) === false)
+  check('satisfied with 2 steals + 1 Gold', serverSatisfied(GOLD_ROBBERY, { gold: 1 }, 2, 1) === true)
+  check('satisfied with 3 steals + 1 Gold', serverSatisfied(GOLD_ROBBERY, { gold: 1 }, 3, 1) === true)
 }
 
 console.log(`\n${failed === 0 ? '✔ ALL CHECKS PASSED' : '✖ FAILURES'} — ${passed} passed, ${failed} failed`)
