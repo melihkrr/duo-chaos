@@ -25,6 +25,15 @@ import type { Coin, EmoteId, Phase, Player, State, TrailId } from './types'
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 
+/**
+ * Rakibin "canlı" sayılması için son yayınından bu yana geçebilecek azami süre.
+ * Rakip bu süre içinde bir `move`/`collect`/`steal`/`score` yayını gönderdiyse
+ * kesinlikle oyundadır; presence düşse bile "rakip ayrıldı" uyarısını
+ * GÖSTERMEYİZ. Skor heartbeat'i 2 sn'de bir, trail heartbeat'i 3 sn'de bir
+ * yayınlandığı için 6 sn güvenli bir tampon.
+ */
+const RIVAL_ALIVE_TTL_MS = 6_000
+
 const makeCode = () =>
   Array.from({ length: 6 }, () => CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)]).join('')
 
@@ -303,6 +312,15 @@ export const useDuoChaos = () => {
   // render tetikleyip "rakip ayrıldı" uyarısının doğru anda görünmesini
   // sağlar.
   const [matchStartAt, setMatchStartAt] = useState(0)
+  // Rakibin EN SON canlı yayın (move/collect/steal/score) gönderdiği yerel
+  // zaman. Presence düşse bile bu damga tazeyse rakip OYUNDADIR; "rakip
+  // ayrıldı" kararını buna göre yumuşatırız (bkz. `rivalGone`).
+  //
+  // NOT: Bu bir REF değil STATE'tir; çünkü `rivalGone` RENDER sırasında
+  // hesaplanır ve lint kuralı (`react-hooks/refs`) render'da ref okumayı
+  // yasaklar. State kullanmak ayrıca TTL dolduğunda yeniden render tetikleyip
+  // uyarının doğru anda görünmesini sağlar.
+  const [rivalAliveAt, setRivalAliveAt] = useState(0)
   // Sunucudan gelen EN SON yerel-saat deadline'ları. Misafir yeni turda
   // `resetRound` çağırdığında bu değerler `0`'lanır (resetRound `endsAt` ve
   // `countdownEndsAt`'i sıfırlar). Bu yüzden resetten HEMEN sonra sunucu
@@ -350,9 +368,13 @@ export const useDuoChaos = () => {
     if (state.phase !== 'countdown' && state.phase !== 'battle') return
     const id = window.setInterval(() => {
       if (typeof document !== 'undefined' && document.hidden) return
-      const myScore = stateRef.current.players[0]?.score ?? 0
-      room.broadcast('score', { by: room.playerId, score: myScore })
-    }, 2_000)
+      const me = stateRef.current.players[0]
+      const myScore = me?.score ?? 0
+      const myRoundScore = me?.roundScore ?? 0
+      // MUTLAK skor + tur skoru yayınlanır; rakip her heartbeat'te kendini
+      // düzeltir. Böylece kaçan bir paket kalıcı sapma yaratmaz.
+      room.broadcast('score', { by: room.playerId, score: myScore, roundScore: myRoundScore })
+    }, 1_500)
     return () => window.clearInterval(id)
   }, [room, state.phase])
 
@@ -573,6 +595,8 @@ export const useDuoChaos = () => {
       const slot = data.by ?? 'rival'
       remotePos.current.set(slot, { x: data.x, y: data.y, at })
       remotePos.current.set('rival', { x: data.x, y: data.y, at })
+      // Rakip canlı hareket ediyor → "ayrıldı" bayrağını kesin temizle.
+      noteRivalAlive()
       // Bu turda rakipten canlı konum aldık: artık sunucu snapshot'ı rakip
       // konumunu GERİYE ÇEKEMEZ (aşağıdaki poll merge'e bakınız).
       rivalBroadcastSeenRef.current = true
@@ -585,6 +609,7 @@ export const useDuoChaos = () => {
       const data = payload as { ids?: number[]; by?: string; respawnAt?: number }
       if (!data || data.by === room.playerId || !data.ids || data.ids.length === 0) return
       const ids = new Set(data.ids)
+      noteRivalAlive()
       // Rakip topladığında da coin AYNI konumda, 3 sn sonra yeniden doğar.
       // `respawnAt` yazmazsak coin sonsuza dek toplanmış kalır ve bir daha
       // görünmez; bu da "coin kayboldu" hissi verir.
@@ -633,6 +658,7 @@ export const useDuoChaos = () => {
     const offSteal = room.on('steal', (payload) => {
       const data = payload as { by?: string }
       if (!data || data.by === room.playerId) return
+      noteRivalAlive()
       playSound('bump')
       setState((prev) => ({
         ...prev,
@@ -690,6 +716,17 @@ export const useDuoChaos = () => {
       playSound('lose')
     })
 
+    // RAKİP HÂLÂ OYNUYOR SİNYALİ: Rakip her `move`/`collect`/`steal`/`score`
+    // yayınında "buradayım" damgasını günceller. Presence (Supabase) güvenilmez
+    // olduğundan — sekme arka plana düşünce veya kanal yeniden abone olurken
+    // `sync` boş dönebiliyor — "rakip ayrıldı" kararını presence'a TEK BAŞINA
+    // bırakmayız. Rakip canlı yayın gönderiyorsa kesinlikle oyundadır.
+    const noteRivalAlive = () => {
+      setRivalAliveAt(Date.now())
+      // Canlı sinyal geldiyse "ayrıldı" bayrağını da temizle.
+      setRivalLeft(false)
+    }
+
     // SKOR SENKRONU: `duo_tick` çağrılmadığı için sunucu skoru güncellemez.
     // Rakip, kendi skor değişimini `score` olayıyla yayınlar; burada onu
     // rakibin (index 1) skoruna ekleriz. Böylece iki taraf da aynı puanı görür.
@@ -738,8 +775,9 @@ export const useDuoChaos = () => {
     // paketin kalıcı sapmaya yol açmasını engeller (her yayın kendini düzeltir).
     // Geriye dönük uyumluluk için `delta` alanı da desteklenir.
     const offScore = room.on('score', (payload) => {
-      const data = payload as { by?: string; score?: number; delta?: number }
+      const data = payload as { by?: string; score?: number; delta?: number; roundScore?: number }
       if (!data || data.by === room.playerId) return
+      noteRivalAlive()
       const absolute = typeof data.score === 'number' ? data.score : null
       const delta = typeof data.delta === 'number' ? data.delta : 0
       if (absolute === null && !delta) return
@@ -749,10 +787,19 @@ export const useDuoChaos = () => {
           if (index !== 1) return player
           const nextScore = absolute !== null ? absolute : player.score + delta
           const diff = nextScore - player.score
+          // `roundScore`'u da MUTLAK değerle eşitleyebiliriz (varsa). Aksi halde
+          // diff ile ilerletiriz. Böylece kaçan bir paket kalıcı sapma yaratmaz.
+          const nextRoundScore =
+            typeof data.roundScore === 'number'
+              ? data.roundScore
+              : Math.max(0, (player.roundScore ?? 0) + diff)
           return {
             ...player,
             score: nextScore,
-            roundScore: Math.max(0, (player.roundScore ?? 0) + diff),
+            roundScore: nextRoundScore,
+            // `totalScore` (maç toplamı) da mutlak skorla birlikte güncellenir;
+            // aksi halde sonuç ekranındaki toplamlar iki tarafta tutmuyordu.
+            totalScore: (player.totalScore ?? 0) + diff,
           }
         }),
       }))
@@ -1718,10 +1765,17 @@ export const useDuoChaos = () => {
   const presenceTrusted = room.presenceReady
   const withinMatchGrace =
     matchStartAt > 0 && now - matchStartAt < MATCH_PRESENCE_GRACE_MS
+  // RAKİP CANLI MI? Rakip son `RIVAL_ALIVE_TTL_MS` içinde bir yayın
+  // (move/collect/steal/score) gönderdiyse KESİNLİKLE oyundadır. Presence
+  // (Supabase) sekme arka plana düşünce veya kanal yeniden abone olurken boş
+  // `sync` döndürebiliyor; bu yüzden "rakip ayrıldı" kararını presence'a tek
+  // başına bırakmayız. Canlı yayın varsa uyarıyı GÖSTERMEYİZ.
+  const rivalAliveRecently = rivalAliveAt > 0 && now - rivalAliveAt < RIVAL_ALIVE_TTL_MS
   const rivalGone =
     Boolean(room.code) &&
     presenceTrusted &&
     !withinMatchGrace &&
+    !rivalAliveRecently &&
     !room.opponentPresent &&
     (rivalLeft || inActiveMatch)
 

@@ -579,12 +579,18 @@ export const useGameLoop = (deps: LoopDeps) => {
     // düşmesi) rakip sonsuza dek yanlış puan görür ve düzeltilemez. Mutlak
     // değer gönderdiğimizde her yayın kendi kendini düzeltir; ayrıca snapshot
     // yoklaması da aynı mutlak değeri periyodik olarak teyit eder.
+    //
+    // DİKKAT: `depsRef.current.state` bu karede HENÜZ commit edilmemiş olabilir
+    // (setState asenkron). Bu yüzden `score`'u `me.score + scoreDelta` ile
+    // hesaplarız; `roundScore`'u da aynı şekilde ilerletip MUTLAK olarak
+    // yayınlarız. Böylece rakip hem toplam hem tur skorunu doğru görür.
     if (scoreDelta !== 0) {
-      const myScore = depsRef.current.state.players[0]?.score ?? 0
+      const myScore = me.score + scoreDelta
+      const myRoundScore = (me.roundScore ?? 0) + scoreDelta
       // `by` alanı YEREL oyuncunun sunucu slotu olmalı. Sabit `'p1'` yazarsak
       // misafir (`p2`) kendi skor yayınını "rakipten geldi" sanıp kendi
       // skorunu rakip slotuna yazar (skorların karşılıklı yanlış görünmesi).
-      broadcast('score', { by: playerId, score: myScore + scoreDelta })
+      broadcast('score', { by: playerId, score: myScore, roundScore: myRoundScore })
     }
   }, [])
 
