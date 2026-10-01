@@ -1276,6 +1276,19 @@ export const useDuoChaos = () => {
           roundScores !== prev.roundScores ||
           winner !== prev.winner
         if (!phaseChanged && !coinsChanged && !scoresChanged) return prev
+        // GERİ SAYIM GÜVENCESİ: Faz `countdown`'a geçtiği halde sunucu
+        // deadline'ı yoksa/geçmişse yerel bir 3 sn'lik pencere kurarız. Aksi
+        // halde `countdownLeft <= 0` olur ve 3-2-1 hiç görünmez (yalnızca bir
+        // oyuncuda geri sayım görünmesinin bir diğer nedeni).
+        const enteringCountdown = nextPhase === 'countdown' && prev.phase !== 'countdown'
+        const nowMs = Date.now()
+        const effectiveCountdown = enteringCountdown
+          ? localCountdownEndsAt > nowMs
+            ? localCountdownEndsAt
+            : nowMs + COUNTDOWN_MS
+          : localCountdownEndsAt > 0
+            ? localCountdownEndsAt
+            : prev.countdownEndsAt
         return {
           ...prev,
           phase: nextPhase,
@@ -1284,7 +1297,7 @@ export const useDuoChaos = () => {
           matchScores,
           round: nextRound,
           endsAt: localEndsAt > 0 ? localEndsAt : prev.endsAt,
-          countdownEndsAt: localCountdownEndsAt > 0 ? localCountdownEndsAt : prev.countdownEndsAt,
+          countdownEndsAt: effectiveCountdown,
           coins,
         }
       })
@@ -1330,18 +1343,33 @@ export const useDuoChaos = () => {
       // henüz hareket etmemişse eski konumda "asılı" kalır ve iki oyuncu aynı
       // noktada başlıyormuş gibi görünür. Sunucu spawn konumu devralır.
       remotePos.current.clear()
-      // ÖNEMLİ: `resetRound` `countdownEndsAt`/`endsAt`'i sıfırlar. Misafirin
-      // geri sayımı silinmesin diye sunucudan gelen EN SON deadline'ları
-      // hemen geri yazarız. Aksi halde misafir "3-2-1" görmeden ya da geç
-      // başlıyordu. `setState` ile tek seferde uygularız (yarış yok).
+      // ÖNEMLİ: `resetRound` `countdownEndsAt`/`endsAt`'i SIFIRLAR. Misafirin
+      // geri sayımı silinmesin diye sunucudan gelen EN SON deadline'ları hemen
+      // geri yazarız. Aksi halde misafir "3-2-1" görmeden tur başlıyordu.
+      //
+      // KÖK SORUN ("bir oyuncuda geri sayım var, diğerinde yok"): Bu effect
+      // `state.round` değiştiği ANDA çalışır. Ancak `serverDeadlineRef` yalnızca
+      // `duo_public_state` yanıtı geldiğinde doldurulur. Faz uzlaşması turu
+      // ilerlettiği anda yeni turun `countdown_ends_at` değeri henüz ref'e
+      // yazılmamış olabilir (özellikle host `duo_next_round` çağırıp sunucu
+      // `countdown`'a geçtiğinde, misafirin bir sonraki poll'u 1.5 sn sonradır).
+      // Bu durumda `countdownEndsAt` 0 kalır → misafir `countdown` fazına girer
+      // ama `countdownLeft <= 0` olduğu için 3-2-1 HİÇ görünmez ve doğrudan
+      // battle'a düşer. Host ise `duo_next_round` yanıtındaki deadline ile
+      // sayar → "birinde geri sayım var, birinde yok" hatası.
+      //
+      // ÇÖZÜM: Sunucu deadline'ı yoksa/geçmişse YEREL bir 3 sn'lik pencere
+      // kurarız. Böylece misafir de HER ZAMAN 3-2-1 görür. Sunucu deadline'ı
+      // mevcutsa (normal durum) onu kullanırız; iki taraf senkron kalır.
       const { countdownEndsAt, endsAt } = serverDeadlineRef.current
-      if (countdownEndsAt > 0 || endsAt > 0) {
-        setState((prev) => ({
-          ...prev,
-          countdownEndsAt: countdownEndsAt > 0 ? countdownEndsAt : prev.countdownEndsAt,
-          endsAt: endsAt > 0 ? endsAt : prev.endsAt,
-        }))
-      }
+      const now = Date.now()
+      const effectiveCountdown =
+        countdownEndsAt > now ? countdownEndsAt : now + COUNTDOWN_MS
+      setState((prev) => ({
+        ...prev,
+        countdownEndsAt: effectiveCountdown,
+        endsAt: endsAt > now ? endsAt : prev.endsAt,
+      }))
     }
   }, [resetRound, room.code, setState, state.phase, state.round])
 
