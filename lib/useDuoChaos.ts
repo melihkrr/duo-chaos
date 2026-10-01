@@ -526,9 +526,17 @@ export const useDuoChaos = () => {
           if (serverRound) roundScores = serverRound as Record<string, number>
           if (serverMatch) matchScores = serverMatch as Record<string, number>
           // KAZANAN: Sunucu artık skoru tuttuğu için `winner` alanı güvenilirdir.
+          //
+          // ÖNEMLİ (SLOT EŞLEME): Sunucunun `winner` alanı SUNUCU slotudur
+          // (`player_id` = 'p1'/'p2'). Yerel state'te `winner` ise YEREL slottur
+          // (slot 0 = 'p1' = ben, slot 1 = 'p2' = rakip). Bu yüzden sunucu
+          // değerini `mapPlayerId` ile yerel slota çeviririz; aksi halde p2
+          // istemcisi sunucunun 'p1' (yani RAKİP) değerini "ben kazandım" sanar
+          // ve iki oyuncu da "Victory!" görür.
           const nextPhase = data.phase as Phase
           const winner =
-            data.winner ?? (nextPhase === 'matchover' ? winnerFromScores(matchScores) : prev.winner)
+            (data.winner ? mapPlayerId(data.winner, room.playerId) : undefined) ??
+            (nextPhase === 'matchover' ? winnerFromScores(matchScores) : prev.winner)
           return {
             ...prev,
             phase: nextPhase,
@@ -973,8 +981,14 @@ export const useDuoChaos = () => {
           // KAZANAN: Sunucunun `winner` alanı artık güvenilirdir (skor sunucuda
           // tutulur). Sunucu bir kazanan döndürdüyse onu kullanırız; yoksa
           // `matchover`'da yerel skorlardan hesaplarız.
+          //
+          // ÖNEMLİ (SLOT EŞLEME): Sunucu `winner`'ı SUNUCU slotuyla döndürür
+          // ('p1'/'p2'); yerel state ise YEREL slot bekler. `mapPlayerId` ile
+          // çeviririz; aksi halde p2 istemcisi rakibin kazandığını "ben
+          // kazandım" sanar (iki taraf da "Victory!").
           const winner =
-            data.winner ?? (phase === 'matchover' ? winnerFromScores(matchScores) : prev.winner)
+            (data.winner ? mapPlayerId(data.winner, myId) : undefined) ??
+            (phase === 'matchover' ? winnerFromScores(matchScores) : prev.winner)
           return {
             ...prev,
             phase,
@@ -1108,8 +1122,11 @@ export const useDuoChaos = () => {
         const matchScores =
           serverMatchScores ??
           (leavingBattle ? accumulateMatchScores(prev.matchScores, prev.players) : prev.matchScores)
+        // ÖNEMLİ (SLOT EŞLEME): Sunucu `winner`'ı SUNUCU slotuyla döndürür;
+        // yerel state YEREL slot bekler. `mapPlayerId` ile çeviririz.
         const winner =
-          data.winner ?? (nextPhase === 'matchover' ? winnerFromScores(matchScores) : prev.winner)
+          (data.winner ? mapPlayerId(data.winner, myId) : undefined) ??
+          (nextPhase === 'matchover' ? winnerFromScores(matchScores) : prev.winner)
         return {
           ...prev,
           phase: nextPhase,
