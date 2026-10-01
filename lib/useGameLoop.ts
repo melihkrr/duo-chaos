@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useRef } from 'react'
 import {
-  ACTION_MS,
   BATTLE_MS,
   BUMP_SLOW_MS,
   BUMP_SPEED_MULTIPLIER,
@@ -106,7 +105,6 @@ export const useGameLoop = (deps: LoopDeps) => {
 
   const lastSend = useRef(0)
   const lastHeartbeat = useRef(0)
-  const lastAction = useRef(0)
   const lastSteal = useRef(0)
   const lastPhase = useRef<State['phase']>('home')
   const lastRound = useRef<number>(-1)
@@ -560,13 +558,26 @@ export const useGameLoop = (deps: LoopDeps) => {
       }
     }
 
-    // --- Toplama (zaman kapılı). ---
+    // --- Toplama (ZAMAN KAPISI YOK — KÖK SORUN DÜZELTMESİ). ---
     // Puan hesabı YOK: yalnızca hangi coinlerin toplandığını belirler ve
     // sunucuya bildiririz. Değer/çeşitlilik sunucuda (`duo_collect`) işlenir.
+    //
+    // KÖK SORUN ("Collect 2 Red → 1/2"): Burada eskiden `now - lastAction >=
+    // ACTION_MS` (90 ms) GLOBAL bir zaman kapısı vardı. İki geçerli toplama
+    // FARKLI karelerde ama 90 ms içinde gerçekleştiğinde (ör. iki kırmızı coin
+    // neredeyse aynı anda), ikinci karenin `collectedIds`'i ZORLA boş kalıyordu:
+    // coin ne "toplandı" olarak işaretleniyor ne de sunucuya gönderiliyordu →
+    // geçerli bir toplama KAYBOLUYORDU ve görev 1/2'de takılıyordu.
+    //
+    // Kapı GEREKSİZDİ: aynı coini her karede yeniden toplamayı zaten
+    // `!coin.collectedBy` filtresi (aşağıda) ve `collectedSet` işaretlemesi
+    // engeller. Kapı yalnızca GEÇERLİ toplamaları düşürüyordu. Bu yüzden
+    // kaldırıldı: HER kare yakındaki toplanmamış coinleri değerlendirir.
+    // Sunucu eşzamanlı toplamaları atomik serileştirir (0039), bu yüzden aynı
+    // karede birden fazla coin göndermek güvenlidir.
     let collectedIds: number[] = []
     let collectedDiamond = false
-    if (now - lastAction.current >= ACTION_MS) {
-      lastAction.current = now
+    {
       const nearby = state.coins.filter(
         (coin) => !coin.collectedBy && Math.hypot(coin.x - nextX, coin.y - nextY) <= COLLECT_RADIUS,
       )
