@@ -13,9 +13,9 @@ import {
   MOVE_SEND_MS,
   MOVE_SPEED,
   PHASE_TICK_MS,
+  REMOTE_HARD_TTL_MS,
   REMOTE_POS_TTL,
   REMOTE_SMOOTHING_K,
-  REMOTE_SNAP_DISTANCE,
   STEAL_COOLDOWN_MS,
   STEAL_RADIUS,
 } from './config'
@@ -319,23 +319,22 @@ export const useGameLoop = (deps: LoopDeps) => {
         remotePos.current?.get('rival') ??
         remotePos.current?.get(rivalSlot === 'p1' ? 'p2' : 'p1')
       const fresh = rivalBroadcast && now - rivalBroadcast.at < REMOTE_POS_TTL
-      // HEDEF SEÇİMİ (KÖK SORUN: "bir süre sonra rakip sabit/donuk görünüyor"):
-      // Eskiden `hasBroadcast = rivalBroadcast !== undefined` idi; yani BAYAT bir
-      // broadcast bile sunucu snapshot'ına tercih ediliyordu. Supabase broadcast
-      // "best-effort"tur ve uzun ömürlü kanallarda sessizce durabilir; o anda
-      // hedef SON BİLİNEN konuma çakılı kalıyor ve rakip DONUYORDU — sunucu
-      // snapshot'ına hiç düşmüyorduk.
+      // HEDEF SEÇİMİ — İKİ KADEMELİ (KÖK SORUNLAR: "rakip donuyor" VE "rakip
+      // ışınlanıyor"):
       //
-      // ÇÖZÜM: Hedefi yalnızca broadcast TAZE iken broadcast'ten alırız. Bayatsa
-      // sunucu snapshot'ına (`rivalTarget.x/y`) düşeriz. Sunucu artık `duo_move`
-      // heartbeat'i sayesinde en fazla ~1 sn bayattır; bu yüzden spawn'a zıplama
-      // riski yoktur, ama donma da olmaz.
+      //  1. TAZE broadcast (≤ REMOTE_POS_TTL): hedef = broadcast konumu. Akıcı.
+      //  2. KISA kopma (REMOTE_POS_TTL < yaş ≤ REMOTE_HARD_TTL_MS): hedef = SON
+      //     BİLİNEN broadcast konumu. Rakip kısa süre durur ama IŞINLANMAZ.
+      //     (Sunucu snapshot'ı ~1 sn gecikmeli olduğu için burada ona düşmek
+      //     rakibi geriye çekip ileri-geri zıplatıyordu.)
+      //  3. UZUN kopma (> REMOTE_HARD_TTL_MS): hedef = sunucu snapshot'ı. Gerçek
+      //     kopma/yeniden bağlanma; sunucunun son bildiği konuma yumuşakça oturur.
       //
-      // NOT: `fresh` yukarıda `now - rivalBroadcast.at < REMOTE_POS_TTL` olarak
-      // hesaplanır. Bayat veriyle dead-reckoning YAPMAYIZ (aşağıda `vel` zaten
-      // `fresh`'e bağlı); hedef de sunucuya düşer.
-      const goalX = fresh && rivalBroadcast ? rivalBroadcast.x : rivalTarget.x
-      const goalY = fresh && rivalBroadcast ? rivalBroadcast.y : rivalTarget.y
+      // NOT: Bayat veriyle dead-reckoning YAPMAYIZ (aşağıda `vel` `fresh`'e bağlı).
+      const broadcastAge = rivalBroadcast ? now - rivalBroadcast.at : Infinity
+      const hardStale = broadcastAge > REMOTE_HARD_TTL_MS
+      const goalX = rivalBroadcast && !hardStale ? rivalBroadcast.x : rivalTarget.x
+      const goalY = rivalBroadcast && !hardStale ? rivalBroadcast.y : rivalTarget.y
       const remote = remoteTarget.current
       if (!remote) {
         remoteTarget.current = { x: goalX, y: goalY }
@@ -364,17 +363,22 @@ export const useGameLoop = (deps: LoopDeps) => {
         const leadX = goalX + vel.x * dt
         const leadY = goalY + vel.y * dt
         const dist = Math.hypot(remote.x - leadX, remote.y - leadY)
-        // ANİ ZIPLAMA YALNIZCA GERÇEK IŞINLANMADA: Taze broadcast varken büyük
-        // fark, dead-reckoning aşırı sapmasından (paket kaybı) kaynaklanır;
-        // anında hizalamak rakibi ileri-geri zıplatır ("birden başlangıç
-        // konumuna gidiyor" hissi). Bu yüzden taze veri varken asla anında
-        // atlamayız; yalnızca veri YOKKEN (yeniden bağlanma / respawn) hizalarız.
-        if (dist > REMOTE_SNAP_DISTANCE && !fresh) {
-          // Çok büyük fark + taze veri yok: ışınlanma / yeniden bağlanma.
-          remote.x = leadX
-          remote.y = leadY
-          remoteVel.current = { x: 0, y: 0 }
-        } else if (dist > REMOTE_SETTLE) {
+        // KÖK SORUN ("bazen rakip bir başka konuma ışınlanıyor"):
+        // Eskiden `dist > REMOTE_SNAP_DISTANCE && !fresh` iken rakibi ANINDA
+        // hedefe zıplatıyorduk. Bu, "gerçek respawn/yeniden bağlanma" için
+        // düşünülmüştü; ancak artık bayat broadcast'te hedef SUNUCU snapshot'ına
+        // düştüğü için (bkz. yukarıdaki HEDEF SEÇİMİ), sunucu konumu bir an
+        // geride kaldığında bu dal NORMAL HAREKET sırasında tetikleniyor ve
+        // rakibi ileri-geri IŞINLIYORDU. Sunucu snapshot'ı ~1 sn gecikmeli
+        // olduğundan fark kolayca 18 birimi aşıyordu.
+        //
+        // ÇÖZÜM: Ani zıplamayı TAMAMEN kaldırırız; her zaman yumuşak yaklaşırız.
+        // Gerçek respawn/yeni tur zaten `remoteTarget.current = null` ile
+        // sıfırlanır (aşağıdaki tur değişimi bloğu) ve bir sonraki kare hedefi
+        // doğrudan tohumlar — yani ışınlanma orada, doğru yerde olur. Burada
+        // yumuşatma (`REMOTE_SMOOTHING_K = 12`) büyük düzeltmeleri bile ~250 ms'de
+        // sindirir; kullanıcı zıplama değil hızlı bir kayma görür.
+        if (dist > REMOTE_SETTLE) {
           // Kare hızından bağımsız üstel yumuşatma.
           const alpha = 1 - Math.exp(-REMOTE_SMOOTHING_K * dt)
           remote.x += (leadX - remote.x) * alpha

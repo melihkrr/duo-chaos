@@ -8,7 +8,7 @@ import {
   MATCH_PRESENCE_GRACE_MS,
   MATCH_ROUNDS,
   POLL_MS,
-  REMOTE_POS_TTL,
+  REMOTE_HARD_TTL_MS,
   generateObjectivePair,
   spawnCoins,
 } from './config'
@@ -973,12 +973,14 @@ export const useDuoChaos = () => {
             // durabilir; o anda rakip son bilinen konumda DONUYORDU ve hiçbir
             // kurtarma yolu yoktu.
             //
-            // ÇÖZÜM: Mandalı ZAMAN SINIRLI yaparız. Rakibin konumu yalnızca
-            // broadcast TAZE olduğu sürece broadcast'ten alınır. Broadcast
-            // bayatladığında (paket kaybı / kanal düşüşü) sunucu snapshot'ı
-            // devreye girer. Sunucu artık `duo_move`'u 1 sn'lik heartbeat ile de
-            // çağırdığı için x/y en fazla ~1 sn bayattır — spawn'a zıplama
-            // riski yok, ama donma da olmaz.
+            // ÇÖZÜM (İKİ KADEMELİ): Mandalı ZAMAN SINIRLI yaparız.
+            //   - Broadcast TAZE (≤ REMOTE_POS_TTL) VEYA KISA kopma
+            //     (≤ REMOTE_HARD_TTL_MS): yerel (broadcast türevli) konumu KORU.
+            //     Kısa kopmada sunucu snapshot'ına düşmek, ~1 sn gecikmeli sunucu
+            //     konumu yüzünden rakibi geriye çekip ileri-geri zıplatıyordu
+            //     ("bazen rakip bir başka konuma ışınlanıyor").
+            //   - UZUN kopma (> REMOTE_HARD_TTL_MS): sunucu snapshot'ı devralır
+            //     (gerçek kopma / yeniden bağlanma).
             //
             // Rakibin GERÇEK slotunu kullanırız (yerel `p2` isek rakip `p1`'dir);
             // eski kod sabit `'p2'` okuduğu için yanlış anahtara bakabiliyordu.
@@ -987,8 +989,8 @@ export const useDuoChaos = () => {
               remotePos.current.get(rivalSlot) ??
               remotePos.current.get('rival') ??
               remotePos.current.get('p2')
-            const broadcastFresh = Boolean(remote && Date.now() - remote.at < REMOTE_POS_TTL)
-            if (broadcastFresh) {
+            const broadcastAge = remote ? Date.now() - remote.at : Infinity
+            if (broadcastAge <= REMOTE_HARD_TTL_MS) {
               merged.x = player.x
               merged.y = player.y
             }

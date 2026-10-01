@@ -38,6 +38,22 @@ export const CLOCK_TICK_MS = 150
  * gerçek bir kopmada (sekme kapandı) 1.5 sn içinde sunucu snapshot'ına düşer.
  */
 export const REMOTE_POS_TTL = 1_500
+/**
+ * Rakip broadcast'i bu süreden uzun süre gelmezse, konumu SUNUCU snapshot'ına
+ * bırakırız (sert devralma).
+ *
+ * KÖK SORUN ("bazen rakip bir başka konuma ışınlanıyor"): Sunucu snapshot'ı
+ * ~1 sn GECİKMELİDİR. `REMOTE_POS_TTL` (1.5 sn) dolduğu anda sunucuya
+ * düşersek, sunucu konumu rakibin GERÇEK konumunun gerisinde kalır; yumuşatma
+ * rakibi geriye çeker, sonra broadcast dönünce ileri atar → ileri-geri
+ * "ışınlanma" hissi. Kısa paket kayıplarında (1.5–3 sn) hedefi SON BİLİNEN
+ * broadcast konumunda tutmak (kısa donma) ışınlanmadan çok daha iyidir.
+ *
+ * 3 sn, 1 sn'lik heartbeat'in üst üste ~3 kez kaybına denk gelir; bu noktadan
+ * sonra gerçek bir kopma varsayıp sunucuya devrederiz (rakip spawn'da değil,
+ * sunucunun son bildiği konumda belirir).
+ */
+export const REMOTE_HARD_TTL_MS = 3_000
 export const POLL_MS = { lobby: 700, countdown: 500, battle: RECONCILE_MS, other: 1500 }
 /**
  * Maç başladıktan sonra presence düşüşünü YOK SAYDIĞIMIZ süre (ms).
@@ -68,8 +84,11 @@ export const PLAYER_HIT_R = 4.2
  * Zaman sabiti ≈ 1/k saniye. k=12 → ~83ms; akıcı ama tepkisel.
  */
 export const REMOTE_SMOOTHING_K = 12
-/** Yumuşatma sırasında bu mesafeden (arena %) büyük farklar anında atlanır. */
-export const REMOTE_SNAP_DISTANCE = 18
+// NOT: Eskiden `REMOTE_SNAP_DISTANCE` vardı; büyük farklarda rakibi ANINDA
+// hedefe zıplatıyordu. Bu, sunucu snapshot'ına düşülen durumlarda NORMAL
+// hareket sırasında tetiklenip rakibi ileri-geri ışınlıyordu ("bazen rakip bir
+// başka konuma ışınlanıyor"). Ani zıplama kaldırıldı; her zaman yumuşatılır.
+// Gerçek respawn/yeni tur `remoteTarget` sıfırlamasıyla ele alınır.
 export const ARENA = { minX: 5, maxX: 95, minY: 7, maxY: 93 }
 export const SPAWN = { p1: { x: 18, y: 50 }, p2: { x: 82, y: 50 } }
 
