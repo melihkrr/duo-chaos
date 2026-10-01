@@ -27,12 +27,18 @@ const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 
 /**
  * Rakibin "canlı" sayılması için son yayınından bu yana geçebilecek azami süre.
- * Rakip bu süre içinde bir `move`/`collect`/`steal`/`score` yayını gönderdiyse
- * kesinlikle oyundadır; presence düşse bile "rakip ayrıldı" uyarısını
- * GÖSTERMEYİZ. Skor heartbeat'i 2 sn'de bir, trail heartbeat'i 3 sn'de bir
- * yayınlandığı için 6 sn güvenli bir tampon.
+ * Rakip bu süre içinde bir `move`/`collect`/`steal`/`score`/`trail` yayını
+ * gönderdiyse kesinlikle oyundadır; presence düşse bile "rakip ayrıldı"
+ * uyarısını GÖSTERMEYİZ.
+ *
+ * TAMPON: `move` heartbeat'i 1 sn'de bir, `trail` heartbeat'i 3 sn'de bir
+ * yayınlanır. Supabase Realtime broadcast "best-effort"tur; paket kaybı veya
+ * kısa bir ağ takılması olabilir. 6 sn'lik pencere, üst üste birkaç paket
+ * kaybında bile yanlış pozitif üretebiliyordu (kullanıcı raporu: "hareketler
+ * laglı görünüyor, sonra rakip ayrıldı diyor"). 12 sn, en kötü durumda
+ * (3 sn'lik heartbeat'in 3-4 kez üst üste kaybı) bile güvenli kalır.
  */
-const RIVAL_ALIVE_TTL_MS = 6_000
+const RIVAL_ALIVE_TTL_MS = 12_000
 
 /**
  * MAÇ KAZANANINI İSTEMCİ TARAFINDA HESAPLA.
@@ -779,6 +785,12 @@ export const useDuoChaos = () => {
     const offTrail = room.on('trail', (payload) => {
       const data = payload as { by?: string; id?: TrailId }
       if (!data || data.by === room.playerId || !data.id) return
+      // `trail` her 3 saniyede bir yayınlanan HEARTBEAT'tir. Bunu yalnızca
+      // kozmetik güncelleme olarak görmek YETMEZ: rakip hareketsiz durup hiç
+      // coin toplamadığında `move`/`collect`/`steal`/`score` yayını gelmez ve
+      // `rivalAliveAt` bayatlar → yanlış "rakip ayrıldı" popup'ı çıkar. Bu
+      // yüzden heartbeat'i de bir CANLILIK sinyali sayarız.
+      noteRivalAlive()
       setState((prev) => ({
         ...prev,
         players: prev.players.map((player, index) =>

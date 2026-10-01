@@ -9,6 +9,7 @@ import {
   COIN_RESPAWN_MS,
   COLLECT_RADIUS,
   COUNTDOWN_MS,
+  MOVE_HEARTBEAT_MS,
   MOVE_SEND_MS,
   MOVE_SPEED,
   PHASE_TICK_MS,
@@ -87,6 +88,7 @@ export const useGameLoop = (deps: LoopDeps) => {
   }, [deps])
 
   const lastSend = useRef(0)
+  const lastHeartbeat = useRef(0)
   const lastAction = useRef(0)
   const lastSteal = useRef(0)
   const lastPhase = useRef<State['phase']>('home')
@@ -545,8 +547,19 @@ export const useGameLoop = (deps: LoopDeps) => {
     })
 
     // Ağ yayınları (state dışı yan etkiler).
-    if (moving && now - lastSend.current >= MOVE_SEND_MS) {
+    //
+    // HAREKET: 60Hz'de konum yayınla (rakip akıcı görünsün).
+    // HEARTBEAT: Oyuncu HAREKETSİZ dursa bile periyodik olarak konum yayınla.
+    //   Neden: `move` yayını aynı zamanda bir CANLILIK sinyalidir. Yalnızca
+    //   hareket ederken yayın yaparsak, hareketsiz duran (ve coin toplamayan)
+    //   bir oyuncudan rakibe HİÇ sinyal gitmez → rakibin `rivalAliveAt`'i
+    //   bayatlar ve yanlış "rakip ayrıldı" popup'ı çıkar. Ayrıca seyrek de olsa
+    //   konum tazelemesi, paket kaybı sonrası rakibin konumunun yakınsamasını
+    //   sağlar (lag telafisi).
+    const heartbeatDue = now - lastHeartbeat.current >= MOVE_HEARTBEAT_MS
+    if ((moving && now - lastSend.current >= MOVE_SEND_MS) || heartbeatDue) {
       lastSend.current = now
+      if (heartbeatDue) lastHeartbeat.current = now
       publishMove(nextX, nextY)
     }
     // KONUM TAZELEME (KRİTİK): Sunucu `duo_collect`/`duo_steal` menzilini

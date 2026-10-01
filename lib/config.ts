@@ -8,6 +8,11 @@ export const MATCH_ROUNDS = 3
 // --- Ağ / döngü aralıkları ---
 // 16ms ≈ 60Hz: pozisyon yayını kare hızıyla eşleşir, rakip akıcı görünür.
 export const MOVE_SEND_MS = 16
+// Hareketsizken bile bu aralıkla konum (canlılık) yayınlarız. `move` yayını
+// aynı zamanda "buradayım" sinyalidir; hareketsiz oyuncudan hiç sinyal
+// gitmezse rakip yanlışlıkla "ayrıldı" sanır. 1sn, `RIVAL_ALIVE_TTL_MS`'ten
+// çok daha kısa olduğundan tek bir paket kaybı bile sorun yaratmaz.
+export const MOVE_HEARTBEAT_MS = 1_000
 export const ACTION_MS = 90
 export const STEAL_COOLDOWN_MS = 700
 export const BUMP_SLOW_MS = 400
@@ -24,8 +29,15 @@ export const CLOCK_TICK_MS = 150
  * konumu "taze" sayıp kullanıyordu → "rakip 5 sn sonra hareket ediyor" hatası.
  * 600 ms, 60Hz yayında ~36 paketlik bir toleranstır; bu süre dolunca sunucu
  * snapshot'ı (1 sn'de bir) devralır ve rakip doğru konuma oturur.
+ *
+ * GÜNCELLEME (kullanıcı raporu: "bir playerın hareketleri diğerinde biraz
+ * laglı görünüyor"): 600 ms çok agresifti. Supabase Realtime broadcast
+ * "best-effort"tur; kısa bir paket kaybı/ağ takılması 600 ms'yi aşınca
+ * dead-reckoning DURUYOR (`vel = 0`) ve rakip aniden donuyor → "laglı/titrek"
+ * görünüm. 1500 ms, ~90 paketlik toleransla kısa kayıpları yutar; yine de
+ * gerçek bir kopmada (sekme kapandı) 1.5 sn içinde sunucu snapshot'ına düşer.
  */
-export const REMOTE_POS_TTL = 600
+export const REMOTE_POS_TTL = 1_500
 export const POLL_MS = { lobby: 700, countdown: 500, battle: RECONCILE_MS, other: 1500 }
 /**
  * Maç başladıktan sonra presence düşüşünü YOK SAYDIĞIMIZ süre (ms).
