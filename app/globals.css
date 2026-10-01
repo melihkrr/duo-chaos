@@ -124,10 +124,8 @@ h3 {
 
 .topbar {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 8px;
   width: 100%;
   max-width: 1080px;
   margin: 0 auto 26px;
@@ -137,6 +135,17 @@ h3 {
   background: rgba(255, 255, 255, 0.78);
   backdrop-filter: blur(12px);
   box-shadow: var(--shadow-sm);
+}
+
+/* Birinci satır: marka solda, aksiyonlar (ses/leave) sağda. Oda kodu bu
+   satıra sığmadığında alt satıra iner; marka ve aksiyonlar üstte kalır. */
+.topbar-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  width: 100%;
 }
 
 /* Oda varken üst çubuk ekranın tepesine SABİTLENİR. `top` güvenli alanı
@@ -174,12 +183,15 @@ h3 {
   box-shadow: 0 4px 0 rgba(43, 36, 64, 0.16);
 }
 
+/* Oda kodu kendi satırında ORTALI durur. Birinci satıra sığmadığında
+   doğal olarak alt satıra iner; marka ve aksiyonlar üstte kalır. */
 .topbar-meta {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
   justify-content: center;
+  width: 100%;
 }
 
 .room-code {
@@ -1765,9 +1777,9 @@ h3 {
     gap: 8px;
   }
 
-  /* Dar ekranda oda kodu ortada kalır; marka ve aksiyonlar sığmazsa sarar. */
+  /* Dar ekranda oda kodu kendi satırında ortada kalır; marka ve aksiyonlar
+     üst satırda (solda/sağda) durmaya devam eder. */
   .topbar-meta {
-    flex: 1 1 auto;
     justify-content: center;
   }
 

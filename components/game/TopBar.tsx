@@ -19,9 +19,32 @@ export function TopBar({ code, onLeave }: Props) {
 
   return (
     <header className={['topbar', code ? 'topbar-sticky' : ''].filter(Boolean).join(' ')}>
-      <div className="brand">
-        <span className="brand-mark">DC</span>
-        <strong>DUO CHAOS</strong>
+      {/* Birinci satır: marka solda, ses/leave aksiyonları sağda. Oda kodu
+          sığmadığında ikinci satıra iner; marka ve aksiyonlar üstte kalır. */}
+      <div className="topbar-row">
+        <div className="brand">
+          <span className="brand-mark">DC</span>
+          <strong>DUO CHAOS</strong>
+        </div>
+
+        <div className="topbar-actions">
+          <Button
+            variant="ghost"
+            className="icon-btn"
+            onClick={() => {
+              unlockAudio()
+              setMuted(toggleMuted())
+            }}
+            aria-label={muted ? 'Unmute' : 'Mute'}
+          >
+            {muted ? '🔇' : '🔊'}
+          </Button>
+          {code && (
+            <Button variant="ghost" onClick={onLeave}>
+              Leave
+            </Button>
+          )}
+        </div>
       </div>
 
       {code && (
@@ -29,25 +52,6 @@ export function TopBar({ code, onLeave }: Props) {
           <span className="room-code">Room {code}</span>
         </div>
       )}
-
-      <div className="topbar-actions">
-        <Button
-          variant="ghost"
-          className="icon-btn"
-          onClick={() => {
-            unlockAudio()
-            setMuted(toggleMuted())
-          }}
-          aria-label={muted ? 'Unmute' : 'Mute'}
-        >
-          {muted ? '🔇' : '🔊'}
-        </Button>
-        {code && (
-          <Button variant="ghost" onClick={onLeave}>
-            Leave
-          </Button>
-        )}
-      </div>
     </header>
   )
 }
