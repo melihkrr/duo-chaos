@@ -156,6 +156,21 @@ export const useGameLoop = (deps: LoopDeps) => {
   // Sanal joystick vektörü. `VirtualJoystick` `setJoystick` ile buraya yazar;
   // böylece her pointer hareketinde React render tetiklenmez (yalnızca RAF okur).
   const joystick = useRef<JoystickVector>({ x: 0, y: 0 })
+  // GÖREV KİMLİĞİ: sunucu bir görev tamamlanınca yeni bir görev atar ve
+  // `collected_types`'ı SIFIRLAR. İstemci iyimser sayacı `me.collectedTypes`
+  // tabanından biriktirdiği için, görev değiştiğinde taban hâlâ ESKİ görevin
+  // sayılarını taşır; bir sonraki yoklama sıfırlayınca sayaç "bir artıp bir
+  // azalır". Bu ref, görev `id`'si değiştiğinde iyimser tabanı sıfırlar.
+  const objectiveIdRef = useRef<string | null>(null)
+  // TUR TOPLAMI: `player.coins` sunucuda her görev değişiminde sıfırlanır; bu
+  // yüzden tur sonu ekranında iki istemci farklı değer görebilir (19 vs 20).
+  // Tur boyunca toplanan GERÇEK toplamı burada biriktiririz (tur başında
+  // sıfırlanır) ve tur sonu istatistiklerinde bunu gösteririz.
+  const roundTotalRef = useRef<{ round: number; coins: number; stolen: number }>({
+    round: -1,
+    coins: 0,
+    stolen: 0,
+  })
 
   /**
    * Joystick vektörünü günceller. Ref'i doğrudan dışarı vermek yerine bir
@@ -530,11 +545,21 @@ export const useGameLoop = (deps: LoopDeps) => {
     // "win" sesi mükerrer çalıyordu. Artık tüm kararları ve yan etkileri
     // güncelleyicinin DIŞINDA, mevcut `state` üzerinden hesaplıyoruz; güncelleyici
     // yalnızca saf bir dönüşüm yapar. SKOR ise tamamen sunucuya aittir.
+    // İYİMSER TABAN: görev `id`'si değiştiyse (sunucu yeni görev atadı ve
+    // `collected_types`'ı sıfırladı) tabanı SIFIRLA. Aksi halde eski görevin
+    // sayıları yeni göreve taşınır ve yoklama sıfırlayınca sayaç zıplar.
+    const objectiveId = me.objective?.id ?? null
+    const objectiveChanged = objectiveIdRef.current !== objectiveId
+    if (objectiveChanged) {
+      objectiveIdRef.current = objectiveId
+    }
+    // Görev değiştiyse taban BOŞ; aksi halde sunucudan gelen birikimi kullan.
+    const baseCollected = objectiveChanged ? {} : (me.collectedTypes ?? {})
     const collectedTypes = state.coins
       .filter((coin) => collectedSet.has(coin.id))
       .reduce<Partial<Record<Coin['type'], number>>>(
         (counts, coin) => ({ ...counts, [coin.type]: (counts[coin.type] ?? 0) + 1 }),
-        { ...(me.collectedTypes ?? {}) },
+        { ...baseCollected },
       )
 
     // Görev tamamlanma kararı: toplama/çalma uygulandıktan SONRAKİ varsayımsal
@@ -559,6 +584,19 @@ export const useGameLoop = (deps: LoopDeps) => {
       objectiveHold.current = now + OBJECTIVE_CELEBRATE_MS
       celebrateRef.current = now
       playSound('win')
+    }
+
+    // TUR TOPLAMI: tur değiştiyse sıfırla; toplanan/çalınanları biriktir.
+    // `player.coins` sunucuda görev değişiminde sıfırlandığı için tur sonu
+    // istatistikleri için GÜVENİLİR değildir; gerçek tur toplamını burada tutarız.
+    if (roundTotalRef.current.round !== state.round) {
+      roundTotalRef.current = { round: state.round, coins: 0, stolen: 0 }
+    }
+    if (collectedIds.length > 0) {
+      roundTotalRef.current.coins += collectedIds.length
+    }
+    if (stealing) {
+      roundTotalRef.current.stolen += 1
     }
 
     setState((prev) => {
@@ -758,6 +796,10 @@ export const useGameLoop = (deps: LoopDeps) => {
     comboRef,
     scorePopRef,
     shakeRef,
+    // Tur boyunca toplanan/çalınan GERÇEK toplamlar (tur sonu istatistikleri
+    // için). `player.coins` sunucuda görev değişiminde sıfırlandığından
+    // güvenilir değildir; bu ref tur başında sıfırlanır.
+    roundTotalRef,
   }
 }
 

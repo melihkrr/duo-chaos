@@ -679,6 +679,10 @@ export const useDuoChaos = () => {
   const scorePopRef = loop.scorePopRef
   // Ekran sarsıntısı (çalma/çarpışma). `Battle` arena'ya shake uygular.
   const shakeRef = loop.shakeRef
+  // Tur boyunca toplanan/çalınan GERÇEK toplamlar. `player.coins` sunucuda
+  // görev değişiminde sıfırlandığı için tur sonu ekranında güvenilir değildir;
+  // `Results` bu ref'ten okur (iki istemci de aynı değeri görür).
+  const roundTotalRef = loop.roundTotalRef
 
   // Realtime olaylarını bağla.
   useEffect(() => {
@@ -2144,6 +2148,7 @@ export const useDuoChaos = () => {
     comboRef,
     scorePopRef,
     shakeRef,
+    roundTotalRef,
     createRoom,
     joinRoom,
     restore,

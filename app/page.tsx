@@ -106,6 +106,7 @@ export default function Page() {
           rivalRematchReady={game.rivalRematchReady}
           onRematch={() => void game.rematch()}
           busy={game.busy}
+          roundTotalRef={game.roundTotalRef}
         />
       )}
 

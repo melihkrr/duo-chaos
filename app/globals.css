@@ -1102,6 +1102,14 @@ h3 {
   white-space: nowrap;
 }
 
+/* --- HUD: rakibin gizli görevi (taranmadıysa) --- */
+.hud-hidden {
+  color: var(--muted);
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  opacity: 0.85;
+}
+
 /* --- Rakip ayrıldı: duraklatma katmanı --- */
 .rival-left-overlay {
   position: absolute;

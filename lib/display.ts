@@ -61,17 +61,30 @@ export const targetOf = (o?: Objective | null) => {
   return Number(match[0]) || 0
 }
 
+/**
+ * Görev ilerlemesi (HAM sayı). Sunucudaki `duo_mission_satisfied` ile BİREBİR
+ * aynı mantığı izlemelidir; aksi halde istemci "tamamlandı" derken sunucu
+ * demez (veya tersi) ve sayaç tutarsız görünür.
+ *
+ * SUNUCU MANTIĞI (0002_helpers.sql):
+ *   - `requirements` varsa: progress = Σ min(collected[key], required)
+ *   - `coinType` (mixed değil) varsa: progress = collected[coinType]
+ *   - aksi halde: progress = stolen (steal) veya coins
+ *
+ * ÖNEMLİ: `requirements` + `steal` görevlerinde (ör. "Steal 2 and secure 1
+ * Gold") sunucu `progress`e ÇALMAYI EKLEMEZ; çalma ayrı bir `steals_met`
+ * koşuludur. Eski istemci kodu burada `stolen`'ı progress'e ekliyordu; bu
+ * yüzden sayaç sunucudan farklı (şişkin) görünüyordu.
+ */
 export const progressOf = (
   p: Pick<Player, 'id' | 'objective' | 'coins' | 'stolen' | 'collectedTypes'>,
 ) => {
   const objective = objectiveOf(p)
   if (objective?.requirements) {
-    const resourceProgress = Object.entries(objective.requirements).reduce(
+    return Object.entries(objective.requirements).reduce(
       (sum, [type, required]) => Math.min(p.collectedTypes?.[type as CoinType] || 0, required || 0) + sum,
       0,
     )
-    if (objective.kind === 'steal') return Math.min(p.stolen || 0, objective.stealTarget || 0) + resourceProgress
-    return resourceProgress
   }
   if (objective?.coinType && objective.coinType !== 'mixed') {
     return p.collectedTypes?.[objective.coinType] || 0
@@ -79,6 +92,10 @@ export const progressOf = (
   return objective?.kind === 'steal' ? p.stolen || 0 : p.coins || 0
 }
 
+/**
+ * Görev tamamlandı mı? Sunucudaki `duo_mission_satisfied` ile BİREBİR aynı.
+ *   resources_met AND steals_met AND progress >= target
+ */
 export const objectiveSatisfied = (
   p: Pick<Player, 'id' | 'objective' | 'coins' | 'stolen' | 'collectedTypes'>,
 ) => {
@@ -97,3 +114,18 @@ export const missionDoneForDisplay = (p: Player) =>
 
 export const missionLabel = (o?: Objective | null) =>
   String(o?.label ?? 'Collect 3 Gold').replace(/\*+/g, '').trim()
+
+/**
+ * Rakibin görevi GİZLİ mi?
+ *
+ * Sunucu (`duo_public_state`), rakibin görevini yalnızca taranmışsa (scout)
+ * döndürür; aksi halde `objective: null` gönderir. İstemci eskiden bu `null`
+ * değeri `defaultObjectiveForPlayer('p2')` ile SAHTE bir göreve çeviriyordu;
+ * bu yüzden iki oyuncu rakibin görevi için FARKLI metinler görüyordu
+ * ("görevler çelişkili görünüyor" hatası). Artık gizli görevi uydurmuyoruz.
+ *
+ * KURAL: Yerel oyuncu (index 0) için `null` = "henüz atanmadı" (fallback
+ * gösterilebilir). Rakip (index 1) için `null` = "gizli" (uydurma YOK).
+ */
+export const objectiveHidden = (p?: Pick<Player, 'id' | 'objective'>): boolean =>
+  !!p && p.id !== 'p1' && !p.objective

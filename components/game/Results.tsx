@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect, useState, type RefObject } from 'react'
 import { Button } from '../ui/Button'
 import { Panel } from '../ui/Panel'
 import type { State } from '../../lib/types'
@@ -18,6 +19,12 @@ type Props = {
   rivalRematchReady: boolean
   onRematch: () => void
   busy?: boolean
+  /**
+   * Tur boyunca toplanan/çalınan GERÇEK toplamlar. `player.coins` sunucuda
+   * görev değişiminde sıfırlandığı için tur sonu istatistikleri için
+   * güvenilir değildir; bu ref iki istemcide de aynı değeri taşır.
+   */
+  roundTotalRef?: RefObject<{ round: number; coins: number; stolen: number } | null>
 }
 
 export function Results({
@@ -29,10 +36,21 @@ export function Results({
   rivalRematchReady,
   onRematch,
   busy,
+  roundTotalRef,
 }: Props) {
   const isMatchOver = state.phase === 'matchover'
   const winner = state.winner
   const meWon = winner === 'p1'
+
+  // TUR TOPLAMI: ref'i render sırasında OKUMAK yasaktır (react-hooks/refs).
+  // Bu yüzden değeri bir effect ile state'e anlık görüntü olarak alırız.
+  // `state.round` bağımlılığı sayesinde tur bittiğinde güncel toplam yakalanır.
+  const [roundTotals, setRoundTotals] = useState<{ coins: number; stolen: number } | null>(null)
+  useEffect(() => {
+    const snapshot = roundTotalRef?.current
+    if (!snapshot) return
+    setRoundTotals({ coins: snapshot.coins, stolen: snapshot.stolen })
+  }, [roundTotalRef, state.round, state.phase])
 
   return (
     <Panel
@@ -57,6 +75,12 @@ export function Results({
 
       <div className="score-list">
         {state.players.map((player, index) => {
+          // TUR TOPLAMI: yerel oyuncu için `roundTotals` (tur boyunca
+          // biriktirilen GERÇEK toplam) kullanılır. `player.coins` sunucuda
+          // görev değişiminde sıfırlandığı için iki istemci farklı değer
+          // görebiliyordu (19 vs 20). Rakip için sunucu değerine düşeriz.
+          const roundCoins = index === 0 && roundTotals ? roundTotals.coins : player.coins ?? 0
+          const roundStolen = index === 0 && roundTotals ? roundTotals.stolen : player.stolen ?? 0
           // Yalnızca PUAN gösterilir. Görev/round/match/XP kaldırıldı: puan
           // zaten oyunun tek ölçüsü, XP ise kişisel bir ilerleme verisi.
           //
@@ -91,11 +115,11 @@ export function Results({
                   <span className="score-stats" aria-label="Round stats">
                     <span className="stat-chip" title="Coins collected">
                       <span aria-hidden>🪙</span>
-                      {player.coins ?? 0}
+                      {roundCoins}
                     </span>
                     <span className="stat-chip" title="Coins stolen">
                       <span aria-hidden>🦹</span>
-                      {player.stolen ?? 0}
+                      {roundStolen}
                     </span>
                     <span className="stat-chip" title="Missions completed">
                       <span aria-hidden>🎯</span>
