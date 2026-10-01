@@ -91,6 +91,14 @@ const makeToken = () => {
 }
 
 /**
+ * Rakibin emote etiketinin ekranda kalma süresi. `useCosmetics`'teki
+ * `EMOTE_MS` ile AYNI olmalıdır; aksi halde etiket animasyondan önce/sonra
+ * kaybolur. Burada ayrı tanımlanır çünkü `useCosmetics` bu sabiti export
+ * etmez ve döngüsel import istemeyiz.
+ */
+const EMOTE_MS = 1_600
+
+/**
  * Adres çubuğunu yeniden yüklemeden günceller. Oda oluşturma/katılma sonrası
  * paylaşılabilir `/play/CODE` linkini, çıkışta ise kök `/` yolunu gösterir.
  */
@@ -313,6 +321,8 @@ export const useDuoChaos = () => {
   const [rematchReady, setRematchReady] = useState(false)
   const [rivalRematchReady, setRivalRematchReady] = useState(false)
   const remotePos = useRef<Map<string, { x: number; y: number; at: number }>>(new Map())
+  // Rakibin emote etiketini süresi dolunca temizlemek için zamanlayıcı.
+  const remoteEmoteTimer = useRef<number>(0)
   // NOT: Eskiden burada `rivalBroadcastSeenRef` adlı KALICI bir mandal vardı:
   // tur içinde bir kez `move` broadcast'i görüldüyse sunucu snapshot'ı rakip
   // konumu için sonsuza dek devre dışı kalıyordu. Bu, "bir süre sonra rakip
@@ -800,12 +810,30 @@ export const useDuoChaos = () => {
       // `cosmeticsRef` üzerinden okuruz: effect artık `cosmetics`'e bağımlı
       // değil (her emote animasyonunda yeniden bağlanmasın diye).
       cosmeticsRef.current.showRemoteEmote(data.id)
+      const emoteId = data.id
       setState((prev) => ({
         ...prev,
         players: prev.players.map((player, index) =>
-          index === 1 ? { ...player, emote: data.id ?? null } : player,
+          index === 1 ? { ...player, emote: emoteId } : player,
         ),
       }))
+      // KÖK SORUN ("emojinin adı emoji yok olunca da ekranda kalıyor"):
+      // Rakibin emote etiketi (`avatar-emote`) yalnızca yeni bir emote
+      // geldiğinde güncelleniyordu; hiçbir zaman TEMİZLENMİYORDU. Bu yüzden
+      // emote animasyonu bittikten sonra da rakibin üstünde asılı kalıyordu.
+      // Çözüm: yerel emote süresi (EMOTE_MS) dolduğunda rakibin emote'unu da
+      // temizle. Yeni bir emote gelirse bu zamanlayıcı iptal edilip yeniden
+      // kurulur (aşağıdaki `clearTimeout`).
+      if (remoteEmoteTimer.current) window.clearTimeout(remoteEmoteTimer.current)
+      remoteEmoteTimer.current = window.setTimeout(() => {
+        remoteEmoteTimer.current = 0
+        setState((prev) => ({
+          ...prev,
+          players: prev.players.map((player, index) =>
+            index === 1 && player.emote === emoteId ? { ...player, emote: null } : player,
+          ),
+        }))
+      }, EMOTE_MS)
     })
 
     // Rakip iz (trail) seçimini değiştirdiğinde anında yansıt.
@@ -940,6 +968,10 @@ export const useDuoChaos = () => {
       offName()
       offLeave()
       offScore()
+      if (remoteEmoteTimer.current) {
+        window.clearTimeout(remoteEmoteTimer.current)
+        remoteEmoteTimer.current = 0
+      }
     }
   }, [room, setState])
 

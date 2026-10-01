@@ -65,6 +65,8 @@ type Props = {
 
 const coinClass = (type: string) => `coin coin-${type}`
 
+/** Görev tamamlanma kutlamasının ekranda kalma süresi (ms). */
+const CELEBRATE_MS = 1_400
 /** Elmas "+50" rozetinin ekranda kalma süresi (ms). */
 const DIAMOND_POP_MS = 1_100
 /** COMBO rozetinin, son toplamadan sonra görünür kaldığı süre (ms). */
@@ -204,18 +206,20 @@ export function Battle({
 
   // Görev tamamlanma sinyalini izle. `celebrateRef` her tamamlanmada yeni bir
   // zaman damgası alır; değer değiştiğinde kutlamayı ~1.4 sn gösteririz.
+  //
+  // SAĞLAMLIK: Önceden gizleme `setTimeout` ile yapılıyordu ve zaman aşımı
+  // closure'ı `value`'ya bağlıydı. StrictMode/çift mount veya hızlı ardışık
+  // tamamlanmalarda zaman aşımı düşürülüp kutlama EKRANDA KALABİLİYORDU
+  // ("Mission complete! yazısı gitmedi"). Artık gizleme kararını RAF
+  // döngüsünde, `celebrateRef` zaman damgasına göre veriyoruz: damga
+  // `CELEBRATE_MS`'ten eskiyse katman kapanır. Böylece hiçbir zaman aşımı
+  // sızıntısı kutlamayı kalıcı yapamaz.
   useEffect(() => {
     let raf = 0
-    let last = celebrateRef.current
     const watch = () => {
       const value = celebrateRef.current
-      if (value !== last) {
-        last = value
-        setCelebrate(value)
-        window.setTimeout(() => {
-          setCelebrate((current) => (current === value ? 0 : current))
-        }, 1400)
-      }
+      const fresh = value > 0 && Date.now() - value < CELEBRATE_MS
+      setCelebrate((current) => (current === value && !fresh ? 0 : fresh ? value : current))
       raf = window.requestAnimationFrame(watch)
     }
     raf = window.requestAnimationFrame(watch)

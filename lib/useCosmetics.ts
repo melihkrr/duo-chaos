@@ -6,6 +6,12 @@ import { playSound } from './sound'
 import type { EmoteId, TrailId } from './types'
 
 const EMOTE_MS = 1_600
+/**
+ * Emote SPAM KİLİDİ. Bir emote tetiklendikten sonra bu süre boyunca yeni emote
+ * yayınlanmaz. Aksi halde oyuncular butona basılı tutup saniyede onlarca emote
+ * yayınlayarak hem rakibin ekranını hem de Realtime kanalını boğuyordu.
+ */
+const EMOTE_COOLDOWN_MS = 2_500
 
 export type CosmeticsApi = {
   emote: EmoteId
@@ -15,6 +21,8 @@ export type CosmeticsApi = {
   emoteOptions: typeof EMOTES
   trailOptions: typeof TRAILS
   trailColor: string
+  /** Emote spam kilidi aktif mi? (buton disabled göstergesi için) */
+  emoteOnCooldown: boolean
   setEmote: (id: EmoteId) => void
   setTrail: (id: TrailId) => void
   /** Bir emote tetikler (yerel + yayın için callback). */
@@ -37,7 +45,11 @@ export const useCosmetics = (
   const [emoteOverride, setEmoteState] = useState<EmoteId | null>(null)
   const [trailOverride, setTrailState] = useState<TrailId | null>(null)
   const [activeEmote, setActiveEmote] = useState<EmoteId | null>(null)
+  const [emoteOnCooldown, setEmoteOnCooldown] = useState(false)
   const timer = useRef<number | null>(null)
+  // Emote spam kilidi: son tetikleme zamanı + cooldown zamanlayıcısı.
+  const lastEmoteAt = useRef(0)
+  const cooldownTimer = useRef<number | null>(null)
 
   // Callback'leri ref'te tutarız. `useDuoChaos` bu hook'a HER render'da yeni
   // kimlikli inline arrow fonksiyonlar geçirir (onPersist/onBroadcast/
@@ -64,6 +76,7 @@ export const useCosmetics = (
   useEffect(
     () => () => {
       if (timer.current) window.clearTimeout(timer.current)
+      if (cooldownTimer.current) window.clearTimeout(cooldownTimer.current)
     },
     [],
   )
@@ -89,6 +102,17 @@ export const useCosmetics = (
 
   const triggerEmote = useCallback(
     (id?: EmoteId) => {
+      // SPAM KİLİDİ: Cooldown dolmadan yeni emote tetiklenmez/yayınlanmaz.
+      // Yerel görsel de tekrarlanmaz; böylece butona basılı tutmak işe yaramaz.
+      const now = Date.now()
+      if (now - lastEmoteAt.current < EMOTE_COOLDOWN_MS) return
+      lastEmoteAt.current = now
+      setEmoteOnCooldown(true)
+      if (cooldownTimer.current) window.clearTimeout(cooldownTimer.current)
+      cooldownTimer.current = window.setTimeout(
+        () => setEmoteOnCooldown(false),
+        EMOTE_COOLDOWN_MS,
+      )
       const chosen = id ?? emote
       flash(chosen)
       onBroadcastRef.current?.(chosen)
@@ -117,11 +141,21 @@ export const useCosmetics = (
       emoteOptions: EMOTES,
       trailOptions: TRAILS,
       trailColor: trailById(trail).color,
+      emoteOnCooldown,
       setEmote,
       setTrail,
       triggerEmote,
       showRemoteEmote,
     }),
-    [emote, trail, activeEmote, setEmote, setTrail, triggerEmote, showRemoteEmote],
+    [
+      emote,
+      trail,
+      activeEmote,
+      emoteOnCooldown,
+      setEmote,
+      setTrail,
+      triggerEmote,
+      showRemoteEmote,
+    ],
   )
 }

@@ -9,7 +9,16 @@ type Props = {
 
 /** Emote ve iz (trail) seçimi. Seviye kilidi uygulanır. */
 export function CosmeticsPicker({ cosmetics, level }: Props) {
-  const { emote, trail, emoteOptions, trailOptions, setEmote, setTrail, triggerEmote } = cosmetics
+  const {
+    emote,
+    trail,
+    emoteOptions,
+    trailOptions,
+    emoteOnCooldown,
+    setEmote,
+    setTrail,
+    triggerEmote,
+  } = cosmetics
 
   return (
     <div className="cosmetics">
@@ -18,13 +27,28 @@ export function CosmeticsPicker({ cosmetics, level }: Props) {
         <div className="chip-row">
           {emoteOptions.map((option) => {
             const locked = level < option.minLevel
+            // Emote spam kilidi: cooldown sırasında butonlar kilitli görünür.
+            const disabled = locked || emoteOnCooldown
             return (
               <button
                 key={option.id}
                 type="button"
-                className={['chip', emote === option.id ? 'active' : '', locked ? 'locked' : ''].join(' ')}
-                disabled={locked}
-                title={locked ? `Unlocks at level ${option.minLevel}` : option.label}
+                className={[
+                  'chip',
+                  emote === option.id ? 'active' : '',
+                  locked ? 'locked' : '',
+                  emoteOnCooldown && !locked ? 'cooldown' : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+                disabled={disabled}
+                title={
+                  locked
+                    ? `Unlocks at level ${option.minLevel}`
+                    : emoteOnCooldown
+                      ? 'Emote cooldown…'
+                      : option.label
+                }
                 onClick={() => {
                   setEmote(option.id)
                   triggerEmote(option.id)
