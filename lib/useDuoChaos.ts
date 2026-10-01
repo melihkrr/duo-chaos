@@ -1012,10 +1012,18 @@ export const useDuoChaos = () => {
             data.matchScores && Object.keys(data.matchScores).length > 0
               ? mapScores(data.matchScores, myId)
               : null
+          // TUR SKORU: `advancePhase` yolunda uygulanıyordu ama canlı savaş
+          // yoklamasında atlanıyordu. Sunucu `round_scores`'u hesapladığı için
+          // burada da uygularız; aksi halde tur skoru istemcide bayat kalır.
+          const serverRoundScores =
+            data.roundScores && Object.keys(data.roundScores).length > 0
+              ? mapScores(data.roundScores, myId)
+              : null
           const leavingBattle = prev.phase === 'battle' && phase !== 'battle'
           const matchScores =
             serverMatchScores ??
             (leavingBattle ? accumulateMatchScores(prev.matchScores, players) : prev.matchScores)
+          const roundScores = serverRoundScores ?? prev.roundScores
           // KAZANAN: Sunucunun `winner` alanı artık güvenilirdir (skor sunucuda
           // tutulur). Sunucu bir kazanan döndürdüyse onu kullanırız; yoksa
           // `matchover`'da yerel skorlardan hesaplarız.
@@ -1034,6 +1042,7 @@ export const useDuoChaos = () => {
             endsAt: localEndsAt > 0 ? localEndsAt : prev.endsAt,
             countdownEndsAt: localCountdownEndsAt > 0 ? localCountdownEndsAt : prev.countdownEndsAt,
             winner,
+            roundScores,
             matchScores,
             coins,
             players,
@@ -1149,28 +1158,41 @@ export const useDuoChaos = () => {
             : mergeCoins(prev.coins, serverCoins, myId)
         const phaseChanged = nextPhase !== prev.phase
         const coinsChanged = coins !== prev.coins
-        if (!phaseChanged && !coinsChanged) return prev
-        // SKOR OTORİTESİ: sunucu `match_scores`/`winner` alanlarını hesaplar
-        // (bkz. battle poll). Sunucu değeri varsa onu kullanırız.
+        // SKOR OTORİTESİ: sunucu `match_scores`/`round_scores`/`winner` alanlarını
+        // hesaplar (bkz. battle poll). Sunucu değeri varsa onu kullanırız.
         // SLOT EŞLEME: Sunucu skorları SUNUCU slotlarıyla anahtarlıdır;
         // yerel state YEREL slot bekler. `mapScores` ile çeviririz.
         const serverMatchScores =
           data.matchScores && Object.keys(data.matchScores).length > 0
             ? mapScores(data.matchScores, myId)
             : null
+        const serverRoundScores =
+          data.roundScores && Object.keys(data.roundScores).length > 0
+            ? mapScores(data.roundScores, myId)
+            : null
         const leavingBattle = prev.phase === 'battle' && nextPhase !== 'battle'
         const matchScores =
           serverMatchScores ??
           (leavingBattle ? accumulateMatchScores(prev.matchScores, prev.players) : prev.matchScores)
+        const roundScores = serverRoundScores ?? prev.roundScores
         // ÖNEMLİ (SLOT EŞLEME): Sunucu `winner`'ı SUNUCU slotuyla döndürür;
         // yerel state YEREL slot bekler. `mapPlayerId` ile çeviririz.
         const winner =
           (data.winner ? mapPlayerId(data.winner, myId) : undefined) ??
           (nextPhase === 'matchover' ? winnerFromScores(matchScores) : prev.winner)
+        // Skor/kazanan değişimi de "değişiklik" sayılır; aksi halde faz ve coin
+        // sabitken sunucunun hesapladığı kazanan/skor uygulanmaz ve istemci
+        // bayat sonuç ekranında takılı kalırdı.
+        const scoresChanged =
+          matchScores !== prev.matchScores ||
+          roundScores !== prev.roundScores ||
+          winner !== prev.winner
+        if (!phaseChanged && !coinsChanged && !scoresChanged) return prev
         return {
           ...prev,
           phase: nextPhase,
           winner,
+          roundScores,
           matchScores,
           round: data.round ?? prev.round,
           endsAt: localEndsAt > 0 ? localEndsAt : prev.endsAt,
