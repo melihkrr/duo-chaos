@@ -1,21 +1,37 @@
 {
-  "name": "DUO CHAOS",
+  "id": "/",
+  "name": "DUO CHAOS — Two-Player Party Game",
   "short_name": "DUO CHAOS",
-  "description": "A fast, replayable two-player party game with secret objectives, shared resources, and chaos events.",
+  "description": "A fast, replayable two-player party game with secret objectives, shared resources, and chaos events. Play free in your browser.",
+  "lang": "en",
+  "dir": "ltr",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "orientation": "any",
   "background_color": "#fff7fb",
   "theme_color": "#fff7fb",
+  "categories": ["games", "entertainment"],
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "/android-chrome-192x192.png",
       "sizes": "192x192",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any"
     },
     {
       "src": "/android-chrome-512x512.png",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/android-chrome-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }

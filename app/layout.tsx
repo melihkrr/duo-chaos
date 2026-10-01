@@ -1,6 +1,16 @@
 import { Analytics } from '@vercel/analytics/next'
 import type { Metadata, Viewport } from 'next'
 import { Nunito } from 'next/font/google'
+import {
+  OG_IMAGE,
+  SITE_DESCRIPTION,
+  SITE_KEYWORDS,
+  SITE_LOCALE,
+  SITE_NAME,
+  SITE_TITLE,
+  SITE_URL,
+  structuredData,
+} from '../lib/seo'
 import './globals.css'
 
 const nunito = Nunito({
@@ -11,10 +21,53 @@ const nunito = Nunito({
 })
 
 export const metadata: Metadata = {
-  title: 'DUO CHAOS — See it. Steal it. Win it.',
-  description: 'A fast, replayable two-player Roblox party game with secret objectives, shared resources, and chaos events.',
-  generator: 'v0.app',
+  // metadataBase, göreli görsel/canonical URL'lerini mutlak URL'lere çevirir.
+  metadataBase: new URL(SITE_URL),
+  title: {
+    default: SITE_TITLE,
+    template: `%s · ${SITE_NAME}`,
+  },
+  description: SITE_DESCRIPTION,
+  applicationName: SITE_NAME,
+  keywords: SITE_KEYWORDS,
+  authors: [{ name: SITE_NAME, url: SITE_URL }],
+  creator: SITE_NAME,
+  publisher: SITE_NAME,
+  category: 'games',
+  classification: 'Party Game',
+  alternates: {
+    canonical: '/',
+  },
   manifest: '/site.webmanifest',
+  // Arama motorlarına tam indeksleme izni + zengin önizleme ipuçları.
+  robots: {
+    index: true,
+    follow: true,
+    nocache: false,
+    googleBot: {
+      index: true,
+      follow: true,
+      'max-image-preview': 'large',
+      'max-snippet': -1,
+      'max-video-preview': -1,
+    },
+  },
+  openGraph: {
+    type: 'website',
+    locale: SITE_LOCALE,
+    url: SITE_URL,
+    siteName: SITE_NAME,
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION,
+    images: [OG_IMAGE],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION,
+    images: [OG_IMAGE.url],
+    creator: '@duochaos',
+  },
   icons: {
     icon: [
       { url: '/favicon.ico', sizes: 'any' },
@@ -25,11 +78,25 @@ export const metadata: Metadata = {
     ],
     apple: [{ url: '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }],
   },
+  appleWebApp: {
+    capable: true,
+    title: SITE_NAME,
+    statusBarStyle: 'default',
+  },
+  formatDetection: {
+    telephone: false,
+    email: false,
+    address: false,
+  },
 }
 
 export const viewport: Viewport = {
   colorScheme: 'light',
   themeColor: '#fff7fb',
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 5,
+  viewportFit: 'cover',
 }
 
 export default function RootLayout({
@@ -39,6 +106,14 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={nunito.variable}>
+      <head>
+        {/* Yapılandırılmış veri (schema.org VideoGame + WebSite). */}
+        <script
+          type="application/ld+json"
+          // JSON-LD içeriği sunucuda üretilir; kullanıcı girdisi içermez.
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData()) }}
+        />
+      </head>
       <body className="antialiased">
         {children}
         {process.env.NODE_ENV === 'production' && <Analytics />}
