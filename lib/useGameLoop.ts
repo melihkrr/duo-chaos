@@ -519,11 +519,21 @@ export const useGameLoop = (deps: LoopDeps) => {
     const collectedSet = new Set(collectedIds)
 
     // --- Çalma (zaman kapılı). ---
+    //
+    // KÖK SORUN ("steal çalışmıyor"): Menzil kontrolü `rivalTarget.x/y` (state)
+    // üzerinden yapılıyordu. Ancak rakibin state konumu döngü boyunca
+    // GÜNCELLENMEZ (yalnızca tur başında spawn'da doğrudur); canlı konum
+    // `liveRivalPos.current` ref'inde tutulur ve doğrudan DOM'a yazılır. Bu
+    // yüzden mesafe BAYAT konuma göre hesaplanıyor ve oyuncu rakibin üstünde
+    // dursa bile `STEAL_RADIUS` içinde görünmüyordu → çalma neredeyse hiç
+    // tetiklenmiyordu. Artık CANLI konumu (`liveRivalPos`) esas alırız; ref
+    // henüz tohumlanmadıysa (ilk kare) state konumuna düşeriz.
     let stealing = false
+    const rivalPos = liveRivalPos.current ?? rivalTarget
     if (
-      rivalTarget &&
+      rivalPos &&
       now - lastSteal.current >= STEAL_COOLDOWN_MS &&
-      Math.hypot(rivalTarget.x - nextX, rivalTarget.y - nextY) <= STEAL_RADIUS
+      Math.hypot(rivalPos.x - nextX, rivalPos.y - nextY) <= STEAL_RADIUS
     ) {
       lastSteal.current = now
       stealing = true
@@ -808,7 +818,25 @@ export const useGameLoop = (deps: LoopDeps) => {
     }
     if (stealing) {
       broadcast('steal', { by: playerId })
-      void call('duo_steal', { p_token: token }).catch(() => undefined)
+      // YARIŞ ÖNLEME (KRİTİK): Sunucu `duo_steal` menzilini KENDİ sakladığı
+      // `x/y` ile doğrular. Yukarıdaki `duo_move` çağrısı "fire-and-forget"
+      // olduğundan, `duo_steal` ondan ÖNCE işlenirse sunucudaki konum BAYAT
+      // kalır ve çalma `too_far` ile REDDEDİLİR → "steal çalışmıyor". Bu yüzden
+      // önce konumu tazeleyip (await) SONRA çalmayı göndeririz.
+      void (async () => {
+        try {
+          await call('duo_move', { p_token: token, p_x: nextX, p_y: nextY })
+        } catch {
+          // Konum tazeleme başarısız olsa bile çalmayı yine de deneriz.
+        }
+        try {
+          await call('duo_steal', { p_token: token })
+        } catch {
+          // Sunucu reddederse (too_far vb.) sessizce yut; yerel iyimser
+          // geri bildirim zaten verildi, sunucu otoritesi sonraki yoklamada
+          // düzeltir.
+        }
+      })()
     }
     // SKOR YAYINI YOK: puan artık sunucunun tekelindedir. İstemci skoru ne
     // üretir ne de rakibe yayınlar; her iki taraf da `duo_public_state`
