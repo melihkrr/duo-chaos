@@ -160,13 +160,16 @@ export const useGameLoop = (deps: LoopDeps) => {
   // `collected_types`'ı SIFIRLAR. İstemci iyimser ilerlemeyi `me.objectiveProgress`
   // tabanından biriktirir; görev değiştiğinde taban hâlâ ESKİ görevin sayısını
   // taşır. Bu ref, görev `id`'si değiştiğinde iyimser tabanı sıfırlar.
+  //
+  // NOT (0033): Eskiden burada `countedCoinIdsRef` adlı KALICI bir Set vardı ve
+  // coin id'lerini "bir kez sayıldı" diye işaretliyordu. Ancak coinler 3 sn
+  // sonra AYNI id ile yeniden doğar; oyuncu aynı coini ikinci kez topladığında
+  // istemci onu ATLIYOR, sunucu ise `collected_types`'ı YENİDEN artırıyordu.
+  // Sonuç: istemci 2, sunucu 3 gösteriyordu ("3 topladım 2 gösteriyor").
+  // Bu Set KALDIRILDI; iyimser ilerleme artık doğrudan sunucu sayaçlarından
+  // (`collected_types` + bu karenin coinleri) türetilir ve respawn sonrası
+  // yeniden toplanan coin de SAYILIR — istemci/sunucu birebir uyuşur.
   const objectiveIdRef = useRef<string | null>(null)
-  // İYİMSER İLERLEME SAYACI (görev başına): bu görev için iyimser olarak
-  // SAYILMIŞ coin id'leri. Aynı coin (respawn sonrası yeniden toplansa bile)
-  // ASLA iki kez sayılmaz. Görev değiştiğinde temizlenir. Bu, "3 topladım ama
-  // 2/3 gösteriyor" (çift sayma / kayma) hatasının kök çözümüdür: ilerleme,
-  // sunucu değeri + yalnızca HENÜZ sayılmamış yeni coinlerin katkısıdır.
-  const countedCoinIdsRef = useRef<Set<number>>(new Set())
 
   /**
    * Joystick vektörünü günceller. Ref'i doğrudan dışarı vermek yerine bir
@@ -549,37 +552,34 @@ export const useGameLoop = (deps: LoopDeps) => {
     if (objectiveIdChanged) {
       objectiveIdRef.current = objectiveId
     }
-    // ERTELENMİŞ REROLL (0032) İSTEMCİ UYUMU:
-    // Sunucu artık görev tamamlandığı ANDA reroll YAPMAZ; görev `missionDone`
-    // olarak KALIR (3/3 görünür). Reroll, oyuncunun BİR SONRAKİ eyleminde
-    // (collect/steal) sunucu tarafında yapılır. Bu yüzden görev `id`'si henüz
-    // değişmemiş olsa bile, görev TAMAMLANMIŞSA (`me.missionDone`) bir sonraki
-    // eylemi YENİ görevin başlangıcı sayarız: tabanı 0'a çekeriz. Aksi halde
-    // tamamlanmış görevin ilerlemesi (3) üzerine eklenir ve bar hedefi aşar.
-    const objectiveCompleted = Boolean(me.missionDone)
-    const objectiveChanged = objectiveIdChanged || objectiveCompleted
-    // Görev değiştiyse VEYA tamamlandıysa taban 0; aksi halde sunucu değeri.
+    // ANINDA REROLL (0033) İSTEMCİ UYUMU:
+    // Sunucu görev tamamlandığı ANDA reroll YAPAR ve yeni görev atar. Bu yüzden
+    // görev değişimi YALNIZCA `objective.id` değişimiyle algılanır. Eskiden
+    // burada `objectiveCompleted = Boolean(me.missionDone)` ile taban 0'a
+    // çekiliyordu; ancak sunucu ANINDA reroll yaptığı için bu, sunucu
+    // snapshot'ı ile yarışıyor ve bar "3 → 1" gibi zıplıyordu. Artık taban
+    // yalnızca gerçek görev id değişiminde sıfırlanır.
+    const objectiveChanged = objectiveIdChanged
+    // Görev değiştiyse taban 0; aksi halde sunucu değeri.
     const baseProgress = objectiveChanged ? 0 : (me.objectiveProgress ?? 0)
-    // Görev değiştiyse/tamamlandıysa iyimser sayacı SIFIRLA (yeni görev, yeni coinler).
-    if (objectiveChanged) countedCoinIdsRef.current = new Set()
 
     const objective = me.objective
     const collectedCount = collectedIds.length
 
-    // İYİMSER İLERLEME (ÇİFT SAYMA YOK):
-    // Yalnızca bu görev için HENÜZ sayılmamış coin id'lerini hesaba katarız.
-    // Aynı coin (respawn sonrası yeniden toplansa bile) bir kez sayılır. Böylece
-    // "3 topladım ama 2/3 gösteriyor" (çift sayma / kayma) hatası oluşmaz.
-    const counted = countedCoinIdsRef.current
-    const freshCoins = state.coins.filter(
-      (coin) => collectedSet.has(coin.id) && !counted.has(coin.id),
-    )
+    // İYİMSER İLERLEME (ÇİFT SAYMA YOK — 0033):
+    // Bu karede toplanan coinlerin TÜRLERİNİ sayarız. Coinler respawn sonrası
+    // AYNI id ile yeniden doğduğundan, id bazlı kalıcı bir "sayıldı" Set'i
+    // KULLANMAYIZ (aksi halde respawn edilen coin ikinci kez sayılmaz ve istemci
+    // sunucudan geri kalır → "3 topladım 2 gösteriyor"). Sunucu her toplamada
+    // `collected_types`'ı artırdığı için istemci de her toplamayı saymalıdır.
+    // Çift sayma riski yoktur: `collectedSet` yalnızca BU karenin toplanan
+    // coinlerini içerir ve her coin bir kez toplanır (sunucu `already_collected`
+    // ile ikinci toplamayı reddeder).
+    const freshCoins = state.coins.filter((coin) => collectedSet.has(coin.id))
     const freshTypes = freshCoins.reduce<Partial<Record<Coin['type'], number>>>(
       (counts, coin) => ({ ...counts, [coin.type]: (counts[coin.type] ?? 0) + 1 }),
       {},
     )
-    // Sayılan id'leri işaretle (bir daha sayılmasınlar).
-    for (const coin of freshCoins) counted.add(coin.id)
 
     let progressDelta = 0
     if (objective?.requirements) {
