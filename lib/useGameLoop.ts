@@ -306,11 +306,14 @@ export const useGameLoop = (deps: LoopDeps) => {
       // hareketi bende hiç görünmüyor" hatası. Artık rakibin GERÇEK slotuyla
       // ararız; `'rival'` anahtarı yalnızca geriye dönük uyumluluk içindir.
       const rivalSlot = rivalTarget.id
-      const broadcast =
+      // DİKKAT: Bu değişken adı `broadcast` OLAMAZ — `step` başındaki
+      // `broadcast` FONKSİYONUNU gölgeler ve aşağıdaki `broadcast('collect')`
+      // çağrılarını bozar. Bu yüzden `rivalBroadcast` adını kullanırız.
+      const rivalBroadcast =
         remotePos.current?.get(rivalSlot) ??
         remotePos.current?.get('rival') ??
         remotePos.current?.get(rivalSlot === 'p1' ? 'p2' : 'p1')
-      const fresh = broadcast && now - broadcast.at < REMOTE_POS_TTL
+      const fresh = rivalBroadcast && now - rivalBroadcast.at < REMOTE_POS_TTL
       // KÖK SORUN ("hareket ediyorum, sonra birden başlangıç konumuna gidiyor"):
       // Broadcast bayatladığında (rakip durdu, paket kaybı) hedefi sunucu
       // snapshot'ına (`rivalTarget.x/y`) düşürüyorduk. Sunucu x/y'si `duo_move`
@@ -323,9 +326,9 @@ export const useGameLoop = (deps: LoopDeps) => {
       // snapshot'ına TERCİH EDERİZ. Sunucu x/y'si yalnızca hiç broadcast
       // görülmediyse (geç katılma / yeniden bağlanma) kullanılır. Böylece
       // rakip durduğunda bile son bilinen konumda kalır; spawn'a zıplamaz.
-      const hasBroadcast = broadcast !== undefined
-      const goalX = hasBroadcast ? broadcast.x : rivalTarget.x
-      const goalY = hasBroadcast ? broadcast.y : rivalTarget.y
+      const hasBroadcast = rivalBroadcast !== undefined
+      const goalX = hasBroadcast ? rivalBroadcast.x : rivalTarget.x
+      const goalY = hasBroadcast ? rivalBroadcast.y : rivalTarget.y
       const remote = remoteTarget.current
       if (!remote) {
         remoteTarget.current = { x: goalX, y: goalY }
@@ -334,18 +337,20 @@ export const useGameLoop = (deps: LoopDeps) => {
         // Yeni bir broadcast örneği geldiyse hızı güncelle; aksi halde son
         // bilinen hızı koru (paket gecikmesinde de akıcı kalsın).
         const prevSample = remoteSample.current
-        if (fresh && broadcast && (!prevSample || broadcast.at !== prevSample.at)) {
-          const dtSample = prevSample ? Math.max(1, broadcast.at - prevSample.at) / 1000 : 0
+        if (fresh && rivalBroadcast && (!prevSample || rivalBroadcast.at !== prevSample.at)) {
+          const dtSample = prevSample
+            ? Math.max(1, rivalBroadcast.at - prevSample.at) / 1000
+            : 0
           if (prevSample && dtSample > 0) {
             // Ani ışınlanmalarda (respawn) sahte hız üretmemek için sınırla.
-            const rawVx = (broadcast.x - prevSample.x) / dtSample
-            const rawVy = (broadcast.y - prevSample.y) / dtSample
+            const rawVx = (rivalBroadcast.x - prevSample.x) / dtSample
+            const rawVy = (rivalBroadcast.y - prevSample.y) / dtSample
             const speed = Math.hypot(rawVx, rawVy)
             const maxSpeed = MOVE_SPEED * 1.6
             const scale = speed > maxSpeed ? maxSpeed / speed : 1
             remoteVel.current = { x: rawVx * scale, y: rawVy * scale }
           }
-          remoteSample.current = { x: broadcast.x, y: broadcast.y, at: broadcast.at }
+          remoteSample.current = { x: rivalBroadcast.x, y: rivalBroadcast.y, at: rivalBroadcast.at }
         }
         // Hedefi hız ile ileri taşı (yalnızca taze veri varken).
         const vel = fresh ? remoteVel.current : { x: 0, y: 0 }
@@ -543,6 +548,15 @@ export const useGameLoop = (deps: LoopDeps) => {
     if (moving && now - lastSend.current >= MOVE_SEND_MS) {
       lastSend.current = now
       publishMove(nextX, nextY)
+    }
+    // KONUM TAZELEME (KRİTİK): Sunucu `duo_collect`/`duo_steal` menzilini
+    // KENDİ sakladığı `x/y` ile doğrular. İstemci `duo_move`'u yalnızca
+    // HAREKET ederken gönderir; oyuncu bir coinin üstünde DURURSA sunucudaki
+    // konum bayatlar ve toplama `too_far` ile REDDEDİLİR → istemci skoru artar
+    // ama sunucu skoru artmaz ("puanlar tutmuyor"). Bu yüzden toplama/çalma
+    // öncesinde konumu MUTLAKA tazeleriz.
+    if (collectedIds.length > 0 || stealing) {
+      void call('duo_move', { p_token: token, p_x: nextX, p_y: nextY }).catch(() => undefined)
     }
     if (collectedIds.length > 0) {
       // `respawnAt`'i de yayınlarız: rakip coinleri TAM AYNI anda canlandırsın.

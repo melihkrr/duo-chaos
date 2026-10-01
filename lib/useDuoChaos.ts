@@ -182,7 +182,8 @@ const toLocalCoins = (
  */
 const mergeCoins = (local: Coin[], server: Coin[]): Coin[] => {
   const byId = new Map(server.map((coin) => [coin.id, coin]))
-  return local.map((coin) => {
+  const localIds = new Set(local.map((coin) => coin.id))
+  const merged = local.map((coin) => {
     const remote = byId.get(coin.id)
     if (!remote) return coin
     // Sunucu toplanmış diyorsa otoritedir; değilse yerel "toplandı" kararını koru.
@@ -198,6 +199,23 @@ const mergeCoins = (local: Coin[], server: Coin[]): Coin[] => {
       respawnAt,
     }
   })
+  // SUNUCUDA OLUP YERELDE OLMAYAN COINLER: kaynak dalgası coinleri (id 1000+)
+  // ve elmas (id 900+round) yalnızca sunucuda doğar. Bunları EKLEMEZSEK
+  // oyuncular dalga coinlerini ve elması hiç görmez (yalnızca yeni turda,
+  // `roundChanged` tam listeyi benimsediğinde ortaya çıkarlar). Bu yüzden
+  // sunucuya özel coinleri listeye ekleriz.
+  for (const remote of server) {
+    if (localIds.has(remote.id)) continue
+    merged.push({
+      id: remote.id,
+      x: remote.x,
+      y: remote.y,
+      type: remote.type,
+      collectedBy: remote.collectedBy ?? undefined,
+      respawnAt: remote.respawnAt ?? undefined,
+    })
+  }
+  return merged
 }
 
 /** `duo_public_state` RPC'sinin döndürdüğü anlık görüntü. */
