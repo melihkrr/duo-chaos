@@ -59,6 +59,7 @@ export function Home({ progress, onCreate, onJoin, busy, error, initialName = ''
               level={profile.level}
               onSelect={(id) => void progress.setCosmetics({ avatar: id })}
               label="Choose your animal"
+              backdrop="light"
             />
             <label className="field name-field">
               <span className="field-label">Your name</span>
@@ -137,6 +138,7 @@ export function Home({ progress, onCreate, onJoin, busy, error, initialName = ''
           onJoin(code, trimmed)
         }}
         busy={busy}
+        backdrop="light"
       />
     </main>
   )

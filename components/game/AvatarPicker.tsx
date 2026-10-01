@@ -22,6 +22,12 @@ type Props = {
   label?: string
   /** Tetikleyiciye ek sınıf. */
   className?: string
+  /**
+   * Popup arka planı:
+   *   - `dim` (varsayılan): koyu + blur'lu (lobi/oyun içi).
+   *   - `light`: neredeyse şeffaf (ana sayfa) — sayfa kararmaz.
+   */
+  backdrop?: 'dim' | 'light'
 }
 
 /**
@@ -45,6 +51,7 @@ export function AvatarPicker({
   variant = 'inline',
   label = 'Change your animal',
   className,
+  backdrop = 'dim',
 }: Props) {
   const [open, setOpen] = useState(false)
   const glyph = avatarGlyph(avatar)
@@ -78,6 +85,7 @@ export function AvatarPicker({
         title="Choose your animal"
         subtitle="Your rival sees this avatar in the arena."
         onClose={() => setOpen(false)}
+        backdrop={backdrop}
       >
         <div className="avatar-grid" role="radiogroup" aria-label="Choose your animal avatar">
           {AVATARS.map((option) => {

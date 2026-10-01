@@ -10,6 +10,13 @@ type Props = {
   children: ReactNode
   /** Optional footer actions (rendered right-aligned). */
   footer?: ReactNode
+  /**
+   * Arka plan (backdrop) görünümü:
+   *   - `dim` (varsayılan): koyu + blur'lu arka plan (oyun içi/lobi).
+   *   - `light`: neredeyse şeffaf arka plan (ana sayfa). Koyu arka plan
+   *     ana sayfada "ekran karardı/siyah oldu" hissi veriyordu.
+   */
+  backdrop?: 'dim' | 'light'
 }
 
 /**
@@ -23,7 +30,7 @@ type Props = {
  *   - body scroll lock
  *   - `role="dialog"` + `aria-modal`
  */
-export function Modal({ open, title, subtitle, onClose, children, footer }: Props) {
+export function Modal({ open, title, subtitle, onClose, children, footer, backdrop = 'dim' }: Props) {
   const panelRef = useRef<HTMLDivElement>(null)
   const previouslyFocused = useRef<HTMLElement | null>(null)
 
@@ -93,7 +100,12 @@ export function Modal({ open, title, subtitle, onClose, children, footer }: Prop
   if (!open) return null
 
   return (
-    <div className="modal-backdrop" onMouseDown={onClose}>
+    <div
+      className={['modal-backdrop', backdrop === 'light' ? 'modal-backdrop-light' : '']
+        .filter(Boolean)
+        .join(' ')}
+      onMouseDown={onClose}
+    >
       <div
         ref={panelRef}
         className="modal"

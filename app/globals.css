@@ -1706,10 +1706,13 @@ h3 {
    Avatar picker (hayvan seçimi) — POPUP deseni
    ============================================================ */
 
-/* Ana sayfa: yuvarlak avatar butonu + isim alanı yan yana. */
+/* Ana sayfa: yuvarlak avatar butonu + isim alanı yan yana.
+   Hizalama: avatar butonu, isim alanının TAMAMINA (etiket + input + ipucu)
+   göre dikeyde ORTALANIR. Eskiden `align-items: flex-start` idi ve avatar
+   en üste yapışıyordu; "Your name" etiketiyle hizasız görünüyordu. */
 .name-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
   gap: 12px;
   width: min(420px, 100%);
@@ -1787,7 +1790,10 @@ h3 {
   font-size: 9px;
 }
 
-/* Popup içindeki ızgara. */
+/* Popup içindeki ızgara.
+   RESPONSIVE: `auto-fill` + `minmax` ile sütun sayısı ekran genişliğine göre
+   kendiliğinden ayarlanır. Küçük ekranlarda hücreler taşmaz; geniş ekranda
+   daha çok sütun görünür. */
 .avatar-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
@@ -1857,6 +1863,23 @@ h3 {
   .avatar-grid {
     grid-template-columns: repeat(auto-fill, minmax(60px, 1fr));
     gap: 8px;
+  }
+}
+
+/* Çok küçük ekranlarda avatar ızgarası 3 sütuna sabitlenir; hücreler
+   sıkışmaz ve popup yatayda taşmaz. */
+@media (max-width: 360px) {
+  .avatar-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+  }
+
+  .avatar-chip {
+    padding: 8px 2px 6px;
+  }
+
+  .avatar-glyph {
+    font-size: 24px;
   }
 }
 
@@ -2455,6 +2478,16 @@ h3 {
   animation: fade-in 160ms ease-out;
 }
 
+/* AÇIK ARKA PLAN VARYANTI (ana sayfa).
+   Ana sayfada koyu + blur'lu arka plan "ekran karardı/siyah oldu" hissi
+   veriyordu. Bu varyantta arka plan neredeyse şeffaftır; yalnızca hafif bir
+   karartma bırakır, blur YOKTUR. Böylece popup açılınca sayfa kararmaz. */
+.modal-backdrop-light {
+  background: rgba(38, 24, 54, 0.12);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
 .modal {
   width: min(440px, 100%);
   max-height: calc(100dvh - 40px);
@@ -2676,8 +2709,22 @@ h3 {
 }
 
 @media (max-width: 560px) {
+  /* RESPONSIVE MODAL (oda/lobi sayfası): küçük ekranlarda popup kenarlara
+     yapışmasın, dikeyde taşmasın ve içerik kaydırılabilir olsun. */
+  .modal-backdrop {
+    padding: 12px;
+    align-items: flex-end;
+  }
+
   .modal {
+    width: 100%;
+    max-height: calc(100dvh - 24px);
     padding: 18px;
+    border-radius: var(--r-lg);
+  }
+
+  .modal-head h2 {
+    font-size: 19px;
   }
 
   .modal-foot {

@@ -9,6 +9,11 @@ type Props = {
   onClose: () => void
   onJoin: (code: string) => void
   busy?: boolean
+  /**
+   * Popup arka planı. Ana sayfada `light` kullanılır; koyu arka plan
+   * "ekran karardı/siyah oldu" hissi veriyordu.
+   */
+  backdrop?: 'dim' | 'light'
 }
 
 const CODE_LENGTH = 6
@@ -28,7 +33,7 @@ const sanitize = (value: string) =>
  * In-app room-code entry dialog. Replaces the native `window.prompt` so the
  * join flow matches the rest of the UI.
  */
-export function JoinDialog({ open, onClose, onJoin, busy }: Props) {
+export function JoinDialog({ open, onClose, onJoin, busy, backdrop = 'dim' }: Props) {
   const [code, setCode] = useState('')
   const [touched, setTouched] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -54,6 +59,7 @@ export function JoinDialog({ open, onClose, onJoin, busy }: Props) {
       title="Join a game"
       subtitle="Enter the 6-character code your friend shared."
       onClose={onClose}
+      backdrop={backdrop}
       footer={
         <>
           <Button variant="ghost" onClick={onClose} disabled={busy}>
