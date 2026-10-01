@@ -42,6 +42,20 @@ export function TopBar({ code, onLeave }: Props) {
     const bar = barRef.current
     if (!bar) return
 
+    // Bir flex konteynerinin DOĞAL (içerik) genişliğini hesaplar. Konteynerin
+    // kendi `scrollWidth`'i GÜVENİLMEZ: `flex: 1 1 auto` ile esnediğinde
+    // ESKİMİŞ (tüm satırı kaplayan) genişliği döndürür ve öğeler sığsa bile
+    // "sığmıyor" sonucu çıkar. Bu yüzden çocukların genişliklerini + aralarındaki
+    // boşlukları toplayarak gerçek içerik genişliğini buluruz.
+    const naturalWidth = (el: HTMLElement): number => {
+      const styles = window.getComputedStyle(el)
+      const gap = parseFloat(styles.columnGap || styles.gap) || 0
+      const children = Array.from(el.children) as HTMLElement[]
+      if (children.length === 0) return 0
+      const sum = children.reduce((total, child) => total + child.getBoundingClientRect().width, 0)
+      return sum + gap * (children.length - 1)
+    }
+
     const measure = () => {
       const brand = brandRef.current
       const meta = metaRef.current
@@ -55,11 +69,10 @@ export function TopBar({ code, onLeave }: Props) {
       const gap = parseFloat(styles.columnGap || styles.gap) || 0
       const available = bar.clientWidth - padLeft - padRight
 
-      // Doğal (içerik) genişlikler. `scrollWidth` taşma durumunda da doğru
-      // değeri verir; `getBoundingClientRect` ise esnemiş genişliği verir.
-      const brandW = brand.scrollWidth
-      const actionsW = actions.scrollWidth
-      const metaW = meta ? meta.scrollWidth : 0
+      // Her öğenin DOĞAL içerik genişliği (esnemiş genişlik DEĞİL).
+      const brandW = naturalWidth(brand)
+      const actionsW = naturalWidth(actions)
+      const metaW = meta ? naturalWidth(meta) : 0
 
       // Tek satırda gereken toplam genişlik: 3 öğe + 2 boşluk.
       const needed = brandW + metaW + actionsW + gap * 2
