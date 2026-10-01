@@ -8,7 +8,6 @@ import {
   MATCH_PRESENCE_GRACE_MS,
   MATCH_ROUNDS,
   POLL_MS,
-  REMOTE_HARD_TTL_MS,
   generateObjectivePair,
   spawnCoins,
 } from './config'
@@ -961,26 +960,29 @@ export const useDuoChaos = () => {
             merged.slowedUntil = player.slowedUntil
           }
           if (player.id === 'p2') {
-            // Rakip konumu: TAZE bir `move` broadcast'i varsa sunucunun
-            // gecikmeli x/y'si ile ezme; broadcast BAYATLADIYSA sunucu değeri
-            // otoritedir.
+            // Rakip konumu: canlı `move` broadcast'i sunucunun gecikmeli x/y'sinden
+            // HER ZAMAN daha tazedir. Bu yüzden bu turda rakip için EN AZ BİR
+            // broadcast görüldüyse, sunucu snapshot'ı konumu EZMEZ.
             //
-            // KÖK SORUN ("bir süre sonra rakip sabit/donuk görünüyor"):
-            // Eskiden burada `rivalBroadcastSeenRef.current` KALICI bir mandal
-            // gibiydi: tur içinde bir kez broadcast görüldüyse, sunucu snapshot'ı
-            // rakip konumu için SONSUZA DEK devre dışı kalıyordu. Supabase
-            // broadcast "best-effort"tur ve uzun ömürlü kanallarda sessizce
-            // durabilir; o anda rakip son bilinen konumda DONUYORDU ve hiçbir
-            // kurtarma yolu yoktu.
+            // KÖK SORUNLAR:
+            //  1. ("bir süre sonra rakip sabit/donuk görünüyor") Eski kodda
+            //     `rivalBroadcastSeenRef` KALICI bir mandaldı; bir kez broadcast
+            //     görülünce sunucu snapshot'ı SONSUZA DEK devre dışı kalıyordu ve
+            //     broadcast sessizce durunca rakip donuyordu.
+            //  2. ("hareket etmelerine rağmen bazen durup kalıyorlar") Mandalı
+            //     `REMOTE_HARD_TTL_MS` (3 sn) ile sınırlamak da yetersizdi:
+            //     broadcast 3 sn'den uzun kesilince sunucu snapshot'ı (≈1 sn
+            //     gecikmeli, üstelik `duo_move` heartbeat'i de aynı yoldan
+            //     geciktiği için BAYAT) konumu eziyordu. Rakip gerçekte hareket
+            //     ederken ekranda DONUYORDU.
             //
-            // ÇÖZÜM (İKİ KADEMELİ): Mandalı ZAMAN SINIRLI yaparız.
-            //   - Broadcast TAZE (≤ REMOTE_POS_TTL) VEYA KISA kopma
-            //     (≤ REMOTE_HARD_TTL_MS): yerel (broadcast türevli) konumu KORU.
-            //     Kısa kopmada sunucu snapshot'ına düşmek, ~1 sn gecikmeli sunucu
-            //     konumu yüzünden rakibi geriye çekip ileri-geri zıplatıyordu
-            //     ("bazen rakip bir başka konuma ışınlanıyor").
-            //   - UZUN kopma (> REMOTE_HARD_TTL_MS): sunucu snapshot'ı devralır
-            //     (gerçek kopma / yeniden bağlanma).
+            // ÇÖZÜM: `remotePos` girdisinin VARLIĞINI esas alırız (yaşını değil).
+            //   - Bu turda rakip broadcast'i GÖRÜLDÜYSE → yerel konumu KORU.
+            //     `useGameLoop` zaten bayat broadcast'te son bilinen konumu tutar
+            //     ve `REMOTE_HARD_TTL_MS` sonrası sunucuya yumuşakça devreder;
+            //     burada sunucuyla EZMEK o mantığı bozuyordu.
+            //   - Hiç broadcast GÖRÜLMEDİYSE (geç katılma / kanal sorunu) →
+            //     sunucu snapshot'ı başlangıç konumunu sağlar.
             //
             // Rakibin GERÇEK slotunu kullanırız (yerel `p2` isek rakip `p1`'dir);
             // eski kod sabit `'p2'` okuduğu için yanlış anahtara bakabiliyordu.
@@ -989,8 +991,7 @@ export const useDuoChaos = () => {
               remotePos.current.get(rivalSlot) ??
               remotePos.current.get('rival') ??
               remotePos.current.get('p2')
-            const broadcastAge = remote ? Date.now() - remote.at : Infinity
-            if (broadcastAge <= REMOTE_HARD_TTL_MS) {
+            if (!remote) {
               merged.x = player.x
               merged.y = player.y
             }
@@ -1019,7 +1020,15 @@ export const useDuoChaos = () => {
           // topladıysa ve sunucu henüz işlemediyse, doğrudan uygulamak coini bir
           // anlığına geri getirir ("coin geri geldi / titredi" hatası).
           const serverCoins = toLocalCoins(data.coins, myId, toLocal)
-          const roundChanged = (data.round ?? prev.round) !== prev.round
+          // TUR MONOTONİKLİĞİ (KÖK SORUN: "beni başlangıç konumuma ışınlıyor"):
+          // Sunucu bir anlığına BAYAT bir `round` döndürebilir (replica gecikmesi
+          // / eşzamanlı `duo_next_round`). Eski kod `data.round`'u koşulsuz
+          // uyguluyordu; tur geri gelince `useGameLoop` konumu SPAWN'a yeniden
+          // tohumluyor, sonraki yoklama turu düzeltince oyuncu geri dönüyordu
+          // ("ışınla → geri gel"). Turu YALNIZCA ileri yönde kabul ederiz.
+          const serverRound = typeof data.round === 'number' ? data.round : prev.round
+          const nextRound = serverRound > prev.round ? serverRound : prev.round
+          const roundChanged = nextRound !== prev.round
           const coins = !serverCoins
             ? prev.coins
             : roundChanged
@@ -1066,7 +1075,9 @@ export const useDuoChaos = () => {
           return {
             ...prev,
             phase,
-            round: data.round ?? prev.round,
+            // Tur MONOTONİK ilerler (yukarıdaki `nextRound`); bayat/geri tur
+            // uygulanmaz.
+            round: nextRound,
             endsAt: localEndsAt > 0 ? localEndsAt : prev.endsAt,
             countdownEndsAt: localCountdownEndsAt > 0 ? localCountdownEndsAt : prev.countdownEndsAt,
             winner,
@@ -1178,7 +1189,12 @@ export const useDuoChaos = () => {
         // onarır. Sunucu `duo_spawn_coins` ile istemciyle AYNI düzeni üretir ve
         // okuma sırasında süresi dolan coinleri tembel olarak canlandırır.
         const serverCoins = toLocalCoins(data.coins, myId, toLocal)
-        const roundChanged = (data.round ?? prev.round) !== prev.round
+        // TUR MONOTONİKLİĞİ: bayat/geri sunucu turu UYGULANMAZ (bkz. battle poll
+        // açıklaması). Aksi halde `useGameLoop` konumu spawn'a yeniden tohumlar ve
+        // oyuncu "ışınlanıp geri gelir".
+        const serverRound = typeof data.round === 'number' ? data.round : prev.round
+        const nextRound = serverRound > prev.round ? serverRound : prev.round
+        const roundChanged = nextRound !== prev.round
         const coins = !serverCoins
           ? prev.coins
           : roundChanged
@@ -1222,7 +1238,7 @@ export const useDuoChaos = () => {
           winner,
           roundScores,
           matchScores,
-          round: data.round ?? prev.round,
+          round: nextRound,
           endsAt: localEndsAt > 0 ? localEndsAt : prev.endsAt,
           countdownEndsAt: localCountdownEndsAt > 0 ? localCountdownEndsAt : prev.countdownEndsAt,
           coins,

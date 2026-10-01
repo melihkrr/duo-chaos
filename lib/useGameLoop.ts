@@ -227,18 +227,39 @@ export const useGameLoop = (deps: LoopDeps) => {
     if (!me) return
 
     // Yeni tur: konum ref'ini ve görev bekleme sayacını sıfırla.
+    //
+    // KÖK SORUN ("bazen beni başlangıç konumuma ışınlıyor sonra tekrar yerime
+    // getiriyor"): `state.round` SAVAŞ SIRASINDA geçici olarak yanlış
+    // ayarlanabiliyordu. Savaş yoklaması her turda `round: data.round ?? prev.round`
+    // yazar; sunucu bir anlığına bayat/yanlış bir tur döndürürse yerel tur
+    // değişir. Bu blok da konumu `me.x/me.y`'den (SPAWN) yeniden tohumlar →
+    // oyuncu spawn'a ışınlanır, sonraki `duo_move` heartbeat'i spawn'ı sunucuya
+    // gönderir (rakip de ışınlanmayı görür), yoklama turu düzeltince oyuncu geri
+    // döner. Yani "ışınla → geri gel" tam olarak buradan çıkıyordu.
+    //
+    // ÇÖZÜM: Yeniden tohumlamayı YALNIZCA tur İLERİ gittiğinde (gerçek yeni tur)
+    // yaparız. Tur GERİ gelirse (bayat snapshot düzeltmesi) konumu KORURUZ;
+    // yalnızca `lastRound` işaretçisini güncelleriz. Böylece geçici bir yanlış
+    // tur oyuncuyu spawn'a ışınlamaz.
+    //
+    // NOT: Bu noktada `state.phase` zaten `'battle'`'dır (yukarıdaki erken
+    // `return`), bu yüzden `countdown` kontrolü gereksizdir.
     if (lastRound.current !== state.round) {
+      const roundAdvanced = state.round > lastRound.current
       lastRound.current = state.round
-      localPos.current = { x: me.x, y: me.y }
-      // Ekrana basılacak konumu da spawn'dan tohumla (ilk karede (0,0)
-      // görünmesini engeller).
-      livePos.current = { x: me.x, y: me.y }
-      objectiveHold.current = 0
-      // Rakip interpolasyon durumunu sıfırla: yeni turda eski hız/örnek
-      // kalırsa rakip yanlış yöne "sürüklenir" (dead-reckoning artığı).
-      remoteTarget.current = null
-      remoteSample.current = null
-      remoteVel.current = { x: 0, y: 0 }
+      if (roundAdvanced) {
+        localPos.current = { x: me.x, y: me.y }
+        // Ekrana basılacak konumu da spawn'dan tohumla (ilk karede (0,0)
+        // görünmesini engeller).
+        livePos.current = { x: me.x, y: me.y }
+        objectiveHold.current = 0
+        // Rakip interpolasyon durumunu sıfırla: yeni turda eski hız/örnek
+        // kalırsa rakip yanlış yöne "sürüklenir" (dead-reckoning artığı).
+        remoteTarget.current = null
+        remoteSample.current = null
+        remoteVel.current = { x: 0, y: 0 }
+      }
+      // Tur geri geldiyse (bayat snapshot düzeltmesi): konumu KORU.
     }
 
     // --- Girdi: klavye + sanal joystick birleşir. ---
