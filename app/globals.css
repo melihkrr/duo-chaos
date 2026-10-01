@@ -1591,12 +1591,14 @@ h3 {
   inset: 0;
   display: block;
   pointer-events: none;
-  /* GÖREV/HUD katmanlarının ÜZERİNDE olmalı. `.hud` `backdrop-filter` ile
-     kendi yığın bağlamını oluşturur; bu yüzden joystick'in HUD'un üstünde
-     kalabilmesi için SARMALAYICI (`.battle-foot`) da HUD'un üstünde bir
-     z-index taşımalıdır. Aksi halde içerideki `z-index: 50` yalnızca bu
-     sarmalayıcının bağlamı içinde geçerli olur ve HUD yine üstte kalır. */
-  z-index: 45;
+  /* GÖREV/HUD katmanlarının VE chaos banner'ın ÜZERİNDE olmalı.
+     - `.hud` `backdrop-filter` ile kendi yığın bağlamını oluşturur.
+     - `.chaos-banner` (arena içinde) `z-index: 40` taşır.
+     Bu yüzden joystick'in ikisinin de üstünde kalabilmesi için SARMALAYICI
+     (`.battle-foot`) da onların üstünde bir z-index taşımalıdır. Aksi halde
+     içerideki joystick z-index'i yalnızca bu sarmalayıcının bağlamı içinde
+     geçerli olur ve banner/HUD yine üstte kalır. */
+  z-index: 55;
 }
 
 /* Diğer kontroller tam ekranda gizlenir. */
@@ -1619,10 +1621,11 @@ h3 {
   position: absolute;
   right: 22px;
   bottom: 22px;
-  /* GÖREV/HUD katmanlarının ÜZERİNDE olmalı: tam ekranda joystick, görev
-     kartlarının (HUD) altında kalıp dokunulamaz hale geliyordu. `z-index`
-     ile joystick'i HUD'un üstüne çıkarırız. */
-  z-index: 50;
+  /* GÖREV/HUD ve chaos banner katmanlarının ÜZERİNDE olmalı: tam ekranda
+     joystick, görev kartlarının (HUD) ve "Gold Rush" gibi chaos banner'ların
+     altında kalıp dokunulamaz hale geliyordu. `z-index` ile joystick'i
+     hepsinin üstüne çıkarırız. */
+  z-index: 60;
   opacity: 0.42;
   background: rgba(255, 255, 255, 0.28);
   border-color: rgba(43, 36, 64, 0.45);
