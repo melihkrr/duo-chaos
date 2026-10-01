@@ -58,6 +58,13 @@ export type Player = {
   y: number
   coins: number
   stolen: number
+  /**
+   * TUR TOPLAMI (sunucu otoritesi). `coins`/`stolen` görev tamamlanmasında
+   * SIFIRLANDIĞI için tur sonu istatistikleri için güvenilmez. Bu alanlar tur
+   * boyunca birikir ve İKİ istemcide de AYNI sunucu değerini taşır.
+   */
+  roundCoins?: number
+  roundStolen?: number
   collectedTypes?: Partial<Record<CoinType, number>>
   /**
    * PUAN TABANLI SKOR. Coin toplama + çalma + görev ödüllerinin TOPLAMI.

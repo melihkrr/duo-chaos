@@ -1,6 +1,5 @@
 'use client'
 
-import { useEffect, useState, type RefObject } from 'react'
 import { Button } from '../ui/Button'
 import { Panel } from '../ui/Panel'
 import type { State } from '../../lib/types'
@@ -19,12 +18,6 @@ type Props = {
   rivalRematchReady: boolean
   onRematch: () => void
   busy?: boolean
-  /**
-   * Tur boyunca toplanan/çalınan GERÇEK toplamlar. `player.coins` sunucuda
-   * görev değişiminde sıfırlandığı için tur sonu istatistikleri için
-   * güvenilir değildir; bu ref iki istemcide de aynı değeri taşır.
-   */
-  roundTotalRef?: RefObject<{ round: number; coins: number; stolen: number } | null>
 }
 
 export function Results({
@@ -36,21 +29,10 @@ export function Results({
   rivalRematchReady,
   onRematch,
   busy,
-  roundTotalRef,
 }: Props) {
   const isMatchOver = state.phase === 'matchover'
   const winner = state.winner
   const meWon = winner === 'p1'
-
-  // TUR TOPLAMI: ref'i render sırasında OKUMAK yasaktır (react-hooks/refs).
-  // Bu yüzden değeri bir effect ile state'e anlık görüntü olarak alırız.
-  // `state.round` bağımlılığı sayesinde tur bittiğinde güncel toplam yakalanır.
-  const [roundTotals, setRoundTotals] = useState<{ coins: number; stolen: number } | null>(null)
-  useEffect(() => {
-    const snapshot = roundTotalRef?.current
-    if (!snapshot) return
-    setRoundTotals({ coins: snapshot.coins, stolen: snapshot.stolen })
-  }, [roundTotalRef, state.round, state.phase])
 
   return (
     <Panel
@@ -75,12 +57,13 @@ export function Results({
 
       <div className="score-list">
         {state.players.map((player, index) => {
-          // TUR TOPLAMI: yerel oyuncu için `roundTotals` (tur boyunca
-          // biriktirilen GERÇEK toplam) kullanılır. `player.coins` sunucuda
-          // görev değişiminde sıfırlandığı için iki istemci farklı değer
-          // görebiliyordu (19 vs 20). Rakip için sunucu değerine düşeriz.
-          const roundCoins = index === 0 && roundTotals ? roundTotals.coins : player.coins ?? 0
-          const roundStolen = index === 0 && roundTotals ? roundTotals.stolen : player.stolen ?? 0
+          // TUR TOPLAMI (SUNUCU OTORİTESİ): `roundCoins`/`roundStolen` sunucunun
+          // tur boyunca biriktirdiği GERÇEK toplamlardır ve HER İKİ istemcide de
+          // AYNIDIR. `player.coins`/`player.stolen` görev tamamlanmasında
+          // sıfırlandığı için tur sonu istatistikleri için kullanılmaz; aksi
+          // halde iki istemci farklı değer gösterir (çelişkili sonuç ekranı).
+          const roundCoins = player.roundCoins ?? player.coins ?? 0
+          const roundStolen = player.roundStolen ?? player.stolen ?? 0
           // Yalnızca PUAN gösterilir. Görev/round/match/XP kaldırıldı: puan
           // zaten oyunun tek ölçüsü, XP ise kişisel bir ilerleme verisi.
           //

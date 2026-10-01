@@ -162,15 +162,6 @@ export const useGameLoop = (deps: LoopDeps) => {
   // sayılarını taşır; bir sonraki yoklama sıfırlayınca sayaç "bir artıp bir
   // azalır". Bu ref, görev `id`'si değiştiğinde iyimser tabanı sıfırlar.
   const objectiveIdRef = useRef<string | null>(null)
-  // TUR TOPLAMI: `player.coins` sunucuda her görev değişiminde sıfırlanır; bu
-  // yüzden tur sonu ekranında iki istemci farklı değer görebilir (19 vs 20).
-  // Tur boyunca toplanan GERÇEK toplamı burada biriktiririz (tur başında
-  // sıfırlanır) ve tur sonu istatistiklerinde bunu gösteririz.
-  const roundTotalRef = useRef<{ round: number; coins: number; stolen: number }>({
-    round: -1,
-    coins: 0,
-    stolen: 0,
-  })
 
   /**
    * Joystick vektörünü günceller. Ref'i doğrudan dışarı vermek yerine bir
@@ -586,19 +577,6 @@ export const useGameLoop = (deps: LoopDeps) => {
       playSound('win')
     }
 
-    // TUR TOPLAMI: tur değiştiyse sıfırla; toplanan/çalınanları biriktir.
-    // `player.coins` sunucuda görev değişiminde sıfırlandığı için tur sonu
-    // istatistikleri için GÜVENİLİR değildir; gerçek tur toplamını burada tutarız.
-    if (roundTotalRef.current.round !== state.round) {
-      roundTotalRef.current = { round: state.round, coins: 0, stolen: 0 }
-    }
-    if (collectedIds.length > 0) {
-      roundTotalRef.current.coins += collectedIds.length
-    }
-    if (stealing) {
-      roundTotalRef.current.stolen += 1
-    }
-
     setState((prev) => {
       let changed = false
 
@@ -649,6 +627,9 @@ export const useGameLoop = (deps: LoopDeps) => {
             next = {
               ...next,
               coins: next.coins + collectedIds.length,
+              // TUR TOPLAMI: sonuç ekranı `roundCoins` okur; sunucu yoklaması
+              // gelene kadar iyimser artırırız (sunucu değeri yine otoritedir).
+              roundCoins: (next.roundCoins ?? 0) + collectedIds.length,
               collectedTypes,
             }
           }
@@ -657,6 +638,8 @@ export const useGameLoop = (deps: LoopDeps) => {
             next = {
               ...next,
               stolen: next.stolen + 1,
+              // TUR TOPLAMI: sonuç ekranı `roundStolen` okur; iyimser artır.
+              roundStolen: (next.roundStolen ?? 0) + 1,
             }
           }
           // Görev tamamlandıysa: yalnızca YEREL kutlama durumunu işaretle.
@@ -796,10 +779,6 @@ export const useGameLoop = (deps: LoopDeps) => {
     comboRef,
     scorePopRef,
     shakeRef,
-    // Tur boyunca toplanan/çalınan GERÇEK toplamlar (tur sonu istatistikleri
-    // için). `player.coins` sunucuda görev değişiminde sıfırlandığından
-    // güvenilir değildir; bu ref tur başında sıfırlanır.
-    roundTotalRef,
   }
 }
 

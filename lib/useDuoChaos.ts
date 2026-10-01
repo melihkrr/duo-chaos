@@ -679,10 +679,6 @@ export const useDuoChaos = () => {
   const scorePopRef = loop.scorePopRef
   // Ekran sarsıntısı (çalma/çarpışma). `Battle` arena'ya shake uygular.
   const shakeRef = loop.shakeRef
-  // Tur boyunca toplanan/çalınan GERÇEK toplamlar. `player.coins` sunucuda
-  // görev değişiminde sıfırlandığı için tur sonu ekranında güvenilir değildir;
-  // `Results` bu ref'ten okur (iki istemci de aynı değeri görür).
-  const roundTotalRef = loop.roundTotalRef
 
   // Realtime olaylarını bağla.
   useEffect(() => {
@@ -779,7 +775,15 @@ export const useDuoChaos = () => {
               collectedTypes[type as Coin['type']] =
                 (collectedTypes[type as Coin['type']] ?? 0) + (count ?? 0)
             }
-            return { ...player, coins: player.coins + newlyCollected, collectedTypes }
+            return {
+              ...player,
+              coins: player.coins + newlyCollected,
+              // TUR TOPLAMI: sonuç ekranı `roundCoins` okur; sunucu yoklaması
+              // gelene kadar iyimser olarak artırırız (iki istemci de aynı
+              // sonucu görsün diye sunucu değeri yine otoritedir).
+              roundCoins: (player.roundCoins ?? 0) + newlyCollected,
+              collectedTypes,
+            }
           }),
         }
       })
@@ -803,7 +807,14 @@ export const useDuoChaos = () => {
       setState((prev) => ({
         ...prev,
         players: prev.players.map((player, index) =>
-          index === 0 ? player : { ...player, stolen: player.stolen + 1 },
+          index === 0
+            ? player
+            : {
+                ...player,
+                stolen: player.stolen + 1,
+                // TUR TOPLAMI: sonuç ekranı `roundStolen` okur; iyimser artır.
+                roundStolen: (player.roundStolen ?? 0) + 1,
+              },
         ),
       }))
     })
@@ -2148,7 +2159,6 @@ export const useDuoChaos = () => {
     comboRef,
     scorePopRef,
     shakeRef,
-    roundTotalRef,
     createRoom,
     joinRoom,
     restore,
