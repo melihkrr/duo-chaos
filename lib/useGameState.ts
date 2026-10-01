@@ -11,11 +11,17 @@ import {
 } from './config'
 import type { Coin, Phase, Player, State } from './types'
 
-export const blankPlayer = (id: 'p1' | 'p2'): Player => ({
+/**
+ * Boş oyuncu. `spawnId` verilirse spawn konumu ONDAN alınır; aksi halde
+ * `id`'den. Bu, "yerel slot" (id) ile "sunucu slotu" (spawnId) ayrımını
+ * mümkün kılar: yerel oyuncu her zaman `id='p1'` (slot 0) olsa da GERÇEK
+ * spawn'ı sunucu slotuna göre belirlenir (bkz. aynalama notu, `config.ts`).
+ */
+export const blankPlayer = (id: 'p1' | 'p2', spawnId: string = id): Player => ({
   id,
   name: id === 'p1' ? 'You' : 'Rival',
-  x: spawnFor(id).x,
-  y: spawnFor(id).y,
+  x: spawnFor(spawnId).x,
+  y: spawnFor(spawnId).y,
   coins: 0,
   stolen: 0,
   collectedTypes: {},
@@ -63,10 +69,24 @@ export type GameStateApi = {
 
 /**
  * Oyun durumunun tek sahibi. Tüm alt hook'lar buradan beslenir.
+ *
+ * `serverSlot`: yerel oyuncunun SUNUCUDAKİ slotu (`'p1'`/`'p2'`). Yerel state
+ * her zaman slot 0 = "ben", slot 1 = "rakip" düzenini kullanır; ancak GERÇEK
+ * spawn konumları sunucu slotuna göre belirlenir. Yerel oyuncu sunucuda `p2`
+ * ise gerçek spawn'ı sağdadır (x=82); render sırasında aynalanarak ekranda
+ * SOLDA gösterilir (bkz. `config.ts` aynalama notu). Bu ayrım olmadan iki
+ * oyuncu da kendini solda görüp rakibi "soldaki başlama noktasına ışınlanıyor"
+ * gibi görünüyordu.
  */
-export const useGameState = (): GameStateApi => {
+export const useGameState = (serverSlot: 'p1' | 'p2' = 'p1'): GameStateApi => {
   const [state, setState] = useState<State>(initialState)
   const stateRef = useRef(state)
+  // Sunucu slotunu ref'te tutarız; `resetRound`/`resetMatch` kimlikleri kararlı
+  // kalır (bağımlılığa eklemeyiz) ama her zaman GÜNCEL slotu okurlar.
+  const serverSlotRef = useRef<'p1' | 'p2'>(serverSlot)
+  useEffect(() => {
+    serverSlotRef.current = serverSlot
+  }, [serverSlot])
 
   // Ref'i render sırasında değil, commit sonrası senkronize et.
   useEffect(() => {
@@ -95,15 +115,21 @@ export const useGameState = (): GameStateApi => {
       chaosEvent: undefined,
       chaosEventEndsAt: undefined,
       winner: undefined,
-      players: prev.players.map((player, index) => ({
-        ...blankPlayer(player.id as 'p1' | 'p2'),
-        name: player.name,
-        xp: player.xp,
-        level: player.level,
-        title: player.title,
-        trail: player.trail,
-        objective: index === 0 ? first : second,
-      })),
+      players: prev.players.map((player, index) => {
+        // Yerel slot 0 = "ben" → GERÇEK spawn'ı sunucu slotundan alır.
+        // Yerel slot 1 = "rakip" → karşı slotun spawn'ı.
+        const slot = serverSlotRef.current
+        const spawnId = index === 0 ? slot : slot === 'p1' ? 'p2' : 'p1'
+        return {
+          ...blankPlayer(player.id as 'p1' | 'p2', spawnId),
+          name: player.name,
+          xp: player.xp,
+          level: player.level,
+          title: player.title,
+          trail: player.trail,
+          objective: index === 0 ? first : second,
+        }
+      }),
     }))
   }, [])
 
@@ -116,14 +142,18 @@ export const useGameState = (): GameStateApi => {
       winner: undefined,
       chaosEvent: undefined,
       chaosEventEndsAt: undefined,
-      players: prev.players.map((player) => ({
-        ...blankPlayer(player.id as 'p1' | 'p2'),
-        name: player.name,
-        xp: player.xp,
-        level: player.level,
-        title: player.title,
-        trail: player.trail,
-      })),
+      players: prev.players.map((player, index) => {
+        const slot = serverSlotRef.current
+        const spawnId = index === 0 ? slot : slot === 'p1' ? 'p2' : 'p1'
+        return {
+          ...blankPlayer(player.id as 'p1' | 'p2', spawnId),
+          name: player.name,
+          xp: player.xp,
+          level: player.level,
+          title: player.title,
+          trail: player.trail,
+        }
+      }),
     }))
   }, [])
 

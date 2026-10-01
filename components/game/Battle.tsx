@@ -5,7 +5,7 @@ import { ChaosBanner } from './ChaosBanner'
 import { CosmeticsPicker } from './CosmeticsPicker'
 import { VirtualJoystick } from './VirtualJoystick'
 import { Button } from '../ui/Button'
-import { ARENA, OBSTACLES, trailById } from '../../lib/config'
+import { ARENA, OBSTACLES, mirrorX, trailById } from '../../lib/config'
 import { missionLabel, objectiveOf, progressOf, targetOf } from '../../lib/display'
 import type { ChaosApi } from '../../lib/useChaos'
 import type { CosmeticsApi } from '../../lib/useCosmetics'
@@ -37,6 +37,12 @@ type Props = {
   celebrateRef: React.RefObject<number>
   /** Rakip oyundan ayrıldı mı? True iken oyun duraklar ve bir uyarı gösterilir. */
   rivalLeft: boolean
+  /**
+   * Arena X ekseninde aynalansın mı? Yerel oyuncu sunucuda `p2` ise `true`.
+   * Bu durumda TÜM dünya (avatar, coin, engel) `x' = 100 - x` ile çizilir;
+   * böylece yerel oyuncu HER ZAMAN solda, rakip sağda görünür.
+   */
+  mirrored: boolean
   /** "Odadan ayrıl" — oyuncu odayı terk eder. */
   onLeaveRoom: () => void
 }
@@ -54,6 +60,7 @@ export function Battle({
   liveRivalPos,
   celebrateRef,
   rivalLeft,
+  mirrored,
   onLeaveRoom,
 }: Props) {
   const [now, setNow] = useState(0)
@@ -154,20 +161,20 @@ export function Battle({
       // halde ilk karede avatar (0,0) köşesine ışınlanıp sonra spawn'a
       // zıplıyordu ("ilk girdiğimizde garip hareket" şikâyeti).
       if (meNode && mePos) {
-        meNode.style.left = `${mePos.x}%`
+        meNode.style.left = `${mirrorX(mePos.x, mirrored)}%`
         meNode.style.top = `${mePos.y}%`
       }
       const rivalNode = rivalRef.current
       const rivalPos = liveRivalPos.current
       if (rivalNode && rivalPos) {
-        rivalNode.style.left = `${rivalPos.x}%`
+        rivalNode.style.left = `${mirrorX(rivalPos.x, mirrored)}%`
         rivalNode.style.top = `${rivalPos.y}%`
       }
       raf = window.requestAnimationFrame(tick)
     }
     raf = window.requestAnimationFrame(tick)
     return () => window.cancelAnimationFrame(raf)
-  }, [livePos, liveRivalPos])
+  }, [livePos, liveRivalPos, mirrored])
 
   const me = state.players[0]
   const rival = state.players[1]
@@ -316,11 +323,12 @@ export function Battle({
             key={index}
             className={`obstacle ${index === 0 ? 'one' : 'two'}`}
             style={{
-              left: `${obstacle.cx}%`,
+              left: `${mirrorX(obstacle.cx, mirrored)}%`,
               top: `${obstacle.cy}%`,
               width: `${obstacle.w}%`,
               height: `${obstacle.h}%`,
-              transform: `translate(-50%, -50%) rotate(${obstacle.angleDeg}deg)`,
+              // Aynalamada engelin eğim açısı da ters çevrilir (görsel tutarlılık).
+              transform: `translate(-50%, -50%) rotate(${mirrored ? -obstacle.angleDeg : obstacle.angleDeg}deg)`,
             }}
           />
         ))}
@@ -331,7 +339,7 @@ export function Battle({
             <span
               key={coin.id}
               className={coinClass(coin.type)}
-              style={{ left: `${coin.x}%`, top: `${coin.y}%` }}
+              style={{ left: `${mirrorX(coin.x, mirrored)}%`, top: `${coin.y}%` }}
             />
           ))}
 
@@ -348,7 +356,7 @@ export function Battle({
               key={player.id}
               ref={isMe ? meRef : rivalRef}
               className={['avatar', isMe ? 'me' : 'rival', (player.slowedUntil ?? 0) > now ? 'slowed' : ''].join(' ')}
-              style={{ left: `${player.x}%`, top: `${player.y}%` }}
+              style={{ left: `${mirrorX(player.x, mirrored)}%`, top: `${player.y}%` }}
             >
               {trail.id !== 'none' && (
                 <span className="avatar-trail" style={{ background: trail.color }} aria-hidden />

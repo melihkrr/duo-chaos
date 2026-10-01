@@ -256,8 +256,10 @@ type PublicSnapshot = {
  * Sayfa bileşeni sadece bunu tüketir.
  */
 export const useDuoChaos = () => {
-  const game = useGameState()
+  // `room` ÖNCE kurulur: `useGameState` yerel oyuncunun GERÇEK spawn konumunu
+  // sunucu slotuna (`room.playerId`) göre belirler (aynalama için kritik).
   const room = useRoom()
+  const game = useGameState(room.playerId)
   const progress = useProgress()
   const chaos = useChaos()
   const toast = useToast()
@@ -1882,6 +1884,9 @@ export const useDuoChaos = () => {
     livePos,
     liveRivalPos,
     celebrateRef,
+    // Yerel oyuncu sunucuda `p2` ise arena X ekseninde aynalanır; böylece
+    // yerel oyuncu HER ZAMAN solda, rakip sağda görünür (bkz. `config.ts`).
+    mirrored: room.playerId === 'p2',
     createRoom,
     joinRoom,
     restore,
