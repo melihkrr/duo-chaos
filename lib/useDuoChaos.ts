@@ -941,6 +941,11 @@ export const useDuoChaos = () => {
         return
       }
       if (cancelled || !data) return
+      // SUNUCU OTORİTESİ (oyuncu sayısı): `rivalGone` kararı presence'a
+      // (güvenilmez) değil, sunucunun GERÇEK oyuncu satırı sayısına dayanmalı.
+      // Bu değeri savaş sırasında da güncelleriz; aksi halde maç boyunca lobiden
+      // kalan bayat değer kullanılır ve sunucu rakibin gittiğini asla bildiremez.
+      if (typeof data.playerCount === 'number') setServerPlayerCount(data.playerCount)
       // Sunucu saat farkını güncelle, sonra deadline'ları yerel saate çevir.
       noteServerNow(data.serverNow)
       const localEndsAt = toLocal(data.endsAt)
@@ -1886,51 +1891,48 @@ export const useDuoChaos = () => {
   // güvenmek yanlış pozitif üretiyordu (rakip bağlı ama satırı yok).
   const lobbyReady = serverPlayerCount >= 2
 
-  // Rakip ayrıldı mı? İki sinyalden biri yeterli:
-  //   1. `rivalLeft` — rakip 'leave' broadcast'i gönderdi (temiz çıkış).
-  //   2. Presence düştü — rakip sekmesini kapatıp broadcast gönderemeden
-  //      düştü. Yalnızca aktif bir maç sırasında dikkate alınır.
+  // Rakip ayrıldı mı? KARAR ARTIK SUNUCUYA DAYANIR.
   //
-  // ÖNEMLİ: Her iki sinyal de `!room.opponentPresent` ile kapılanır. Rakip
-  // yeniden bağlanıp presence'da göründüğü anda `rivalGone` OTOMATİK olarak
-  // `false` olur — böylece "rakip geri geldi ama popup hâlâ duruyor" hatası
-  // (setState-in-effect kullanmadan) kökten çözülür.
+  // KÖK SORUN (kullanıcı raporu: "hareketler laglı, sonra rakip ayrıldı diyor,
+  // oysa rakip oyunda"): Eski mantık `!room.opponentPresent` (Supabase
+  // presence) + "canlı yayın yok" kombinasyonuna dayanıyordu. Presence
+  // GÜVENİLMEZDİR: kanal yeniden abone olurken, sekme arka plana düşünce veya
+  // ağ dalgalanmasında boş `sync` döner. Aynı anda rakibin `move` paketleri de
+  // düşerse (tam da "laglı" senaryo) `rivalAliveAt` bayatlar ve YANLIŞ
+  // "rakip ayrıldı" popup'ı çıkar. TTL'leri büyütmek semptomu hafifletir ama
+  // kökü çözmez.
   //
-  // KÖK SORUN (düzeltildi): Presence, kanal yeni kurulduğunda ilk `sync`
-  // gelene kadar `false`'tur. Host oyunu başlattığı anda misafirin presence'ı
-  // henüz oturmamışsa `!room.opponentPresent` yanlışlıkla `true` oluyor ve
-  // host "Your rival left the game" görüyordu. Çözüm iki katmanlıdır:
-  //   a) `room.presenceReady` — presence en az bir kez senkron olmadan bu
-  //      sinyale GÜVENMEYİZ.
-  //   b) `matchStartRef` — maç başladıktan sonraki ilk birkaç saniyede
-  //      presence düşüşünü yok sayarız (geçiş sırasında kanal yeniden
-  //      abone olurken oluşan kısa boşluklar). Bu, "5 sn sonra rakip ayrıldı"
-  //      hatasının doğrudan çözümüdür.
+  // ÇÖZÜM: Otoriteyi sunucuya veririz. `duo_public_state` her yoklamada
+  // `playerCount` (odadaki GERÇEK oyuncu satırı sayısı) döndürür. Sunucu hâlâ
+  // 2 oyuncu görüyorsa rakip KESİNLİKLE oyundadır — presence/broadcast ne
+  // derse desin popup GÖSTERİLMEZ. Yalnızca:
+  //   1. Rakip açıkça `leave` yayınladıysa (temiz çıkış), VEYA
+  //   2. Sunucu oyuncu sayısını 2'nin altına düşürdüyse (satır silindi),
+  // "rakip ayrıldı" deriz. Presence yalnızca İKİNCİL bir teyit sinyalidir.
   const inActiveMatch = state.phase === 'countdown' || state.phase === 'battle'
-  const presenceTrusted = room.presenceReady
   const withinMatchGrace =
     matchStartAt > 0 && now - matchStartAt < MATCH_PRESENCE_GRACE_MS
   // RAKİP CANLI MI? Rakip son `RIVAL_ALIVE_TTL_MS` içinde bir yayın
-  // (move/collect/steal/score) gönderdiyse KESİNLİKLE oyundadır. Presence
-  // (Supabase) sekme arka plana düşünce veya kanal yeniden abone olurken boş
-  // `sync` döndürebiliyor; bu yüzden "rakip ayrıldı" kararını presence'a tek
-  // başına bırakmayız. Canlı yayın varsa uyarıyı GÖSTERMEYİZ.
+  // (move/collect/steal/score/trail) gönderdiyse KESİNLİKLE oyundadır.
   const rivalAliveRecently = rivalAliveAt > 0 && now - rivalAliveAt < RIVAL_ALIVE_TTL_MS
-  // SÜREKLİ YOKLUK: Presence düştüğü ANDA değil, düştükten sonra bir süre
-  // (RIVAL_ALIVE_TTL_MS) boyunca HİÇ canlı sinyal gelmediyse "gitti" deriz.
-  // Bu, kanal yeniden abone olurken oluşan kısa presence boşluklarının yanlış
-  // pozitif üretmesini engeller. `rivalAliveAt === 0` ise (rakip hiç sinyal
-  // göndermedi) presence düşüşünü bekletmeden kabul ederiz.
-  const rivalSilentLongEnough =
-    rivalAliveAt === 0 || now - rivalAliveAt >= RIVAL_ALIVE_TTL_MS
+  // SUNUCU ONAYI: Sunucu 2 oyuncu görüyorsa rakip oyundadır. `serverPlayerCount`
+  // 0 ise (henüz yoklanmadı) bu sinyale GÜVENMEYİZ; yalnızca tam olarak 1
+  // olduğunda "sunucu rakibi görmüyor" deriz.
+  const serverConfirmsRivalGone = serverPlayerCount === 1
+  // Presence İKİNCİL teyit: presence düştü VE sunucu da rakibi görmüyor.
+  const presenceConfirmsGone = room.presenceReady && !room.opponentPresent
+  // `leave` broadcast'i de TEK BAŞINA yeterli DEĞİLDİR: Supabase kanalı
+  // yeniden abone olurken sahte bir `leave` üretebiliyor (kullanıcı raporu:
+  // host, misafir hâlâ oynarken "rakip ayrıldı" gördü). Bu yüzden `leave`'i
+  // yalnızca SUNUCU da rakibi görmüyorsa dikkate alırız. Böylece hem temiz
+  // çıkış (satır silinir → playerCount=1) hem de gerçek kopma yakalanır;
+  // sahte `leave` ise sunucu hâlâ 2 oyuncu gördüğü için YOK SAYILIR.
+  const leaveConfirmed = rivalLeft && serverConfirmsRivalGone
   const rivalGone =
     Boolean(room.code) &&
-    presenceTrusted &&
     !withinMatchGrace &&
     !rivalAliveRecently &&
-    !room.opponentPresent &&
-    rivalSilentLongEnough &&
-    (rivalLeft || inActiveMatch)
+    (leaveConfirmed || (inActiveMatch && serverConfirmsRivalGone && presenceConfirmsGone))
 
   return {
     state,
