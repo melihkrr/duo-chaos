@@ -1626,6 +1626,11 @@ h3 {
      altında kalıp dokunulamaz hale geliyordu. `z-index` ile joystick'i
      hepsinin üstüne çıkarırız. */
   z-index: 60;
+  /* KENDİ KOMPOZİT KATMANI: `transform`/`will-change` ile joystick'i ayrı bir
+     GPU katmanına alırız. Böylece tarayıcı, joystick'i (z-index'i daha yüksek
+     olsa bile) başka bir kompozit katmanın arkasına çizemez. */
+  transform: translateZ(0);
+  will-change: transform;
   opacity: 0.42;
   background: rgba(255, 255, 255, 0.28);
   border-color: rgba(43, 36, 64, 0.45);
@@ -1980,9 +1985,14 @@ h3 {
   padding: 10px 16px;
   border: 2px solid var(--ink);
   border-radius: var(--r-lg);
-  background: rgba(255, 255, 255, 0.82);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  /* NOT: `backdrop-filter` BURADAN KALDIRILDI. Chromium'da `backdrop-filter`
+     taşıyan bir öğe ayrı bir kompozit katmana alınır ve bu katman, z-index
+     sıralamasına rağmen normal (kompozit olmayan) kardeşlerin ÜSTÜNDE
+     çizilebiliyor. Bu yüzden tam ekranda joystick, z-index'i daha yüksek
+     olmasına rağmen banner'ın ARKASINDA kalıyordu. Opaklığı biraz artırıp
+     blur'u kaldırarak banner'ı normal akış katmanına döndürüyoruz; böylece
+     z-index sıralaması güvenilir şekilde işler. */
+  background: rgba(255, 255, 255, 0.92);
   box-shadow: 0 -5px 0 rgba(43, 36, 64, 0.16);
   pointer-events: none;
   /* Chaos olayı başladığında dikkat çeken, hafif "sarsıntılı" giriş.
