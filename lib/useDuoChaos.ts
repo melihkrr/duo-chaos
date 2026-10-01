@@ -239,8 +239,40 @@ const mergeProgress = (
   Player,
   'coins' | 'stolen' | 'roundCoins' | 'roundStolen' | 'collectedTypes' | 'objectiveProgress'
 > => {
-  // Görev değiştiyse sunucu sayaçları sıfırlamıştır; sunucu değerini AYNEN al.
-  if (objectiveChanged) {
+  // BAYAT SNAPSHOT KORUMASI (KÖK SORUN DÜZELTMESİ).
+  //
+  // `objectiveChanged` çağıran tarafından "sunucu görev kimliği yerelden farklı"
+  // diye hesaplanır. Ancak BAYAT bir snapshot, ÖNCEKİ görevin kimliğini taşır;
+  // bu durumda `objectiveChanged` yanlışlıkla `true` olur ve eski görevin
+  // ilerlemesi YENİ görevin üzerine yazılır ("görev değişti ama ilerleme eski
+  // değerde kaldı" hatası). Sunucunun `objectivesDone` sayacı monotonik bir
+  // sürüm damgasıdır: snapshot'ın `objectivesDone`'ı yerelden KÜÇÜKSE snapshot
+  // BAYATTIR ve görev değişimi SAYILMAZ.
+  const serverDone =
+    typeof server.objectivesDone === 'number' && Number.isFinite(server.objectivesDone)
+      ? server.objectivesDone
+      : undefined
+  const localDone =
+    typeof local.objectivesDone === 'number' && Number.isFinite(local.objectivesDone)
+      ? local.objectivesDone
+      : 0
+  const staleSnapshot = serverDone !== undefined && serverDone < localDone
+  // BAYAT SNAPSHOT: sunucunun `objectivesDone`'ı yerelden geride → bu snapshot
+  // ÖNCEKİ göreve aittir. TAMAMEN YOK SAYILIR; hiçbir alanı uygulanmaz. Aksi
+  // halde eski görevin ilerlemesi (ör. 4) yeni görevin üzerine yazılır.
+  if (staleSnapshot) {
+    return {
+      coins: local.coins,
+      stolen: local.stolen,
+      roundCoins: local.roundCoins,
+      roundStolen: local.roundStolen,
+      collectedTypes: local.collectedTypes ?? {},
+      objectiveProgress: local.objectiveProgress ?? 0,
+    }
+  }
+  const effectiveChanged = objectiveChanged
+  // Görev GERÇEKTEN değiştiyse sunucu sayaçları sıfırlamıştır; AYNEN al.
+  if (effectiveChanged) {
     return {
       coins: server.coins ?? local.coins,
       stolen: server.stolen ?? local.stolen,
@@ -251,18 +283,23 @@ const mergeProgress = (
       objectiveProgress: server.objectiveProgress ?? 0,
     }
   }
-  // SUNUCU OTORİTESİ (0035): ilerleme için TEK kaynak sunucudur.
+  // SUNUCU OTORİTESİ + MONOTONİKLİK (KÖK SORUN DÜZELTMESİ).
   //
-  // KÖK SORUN (önceki sürümler): Burada `Math.max(yerel, sunucu)` uygulanıyordu.
-  // Ancak "yerel" değer, istemcinin HER KAREDE bayat `collectedTypes`'tan
-  // YENİDEN İNŞA ettiği iyimser ilerlemeydi ve YANLIŞ (fazla yüksek) olabiliyordu.
-  // `Math.max` bu yanlış değeri KALICI olarak kilitliyordu (asla düşmediği için)
-  // → "3 gösterip sonra 1'e düşme" ve "3 topladım 2 gösteriyor" hataları.
+  // KÖK SORUN ("4/4 → 3/4 → 4/4"): `objectiveProgress`'e İKİ yazar vardı:
+  //   1. TAZE yol — `duo_collect`/`duo_steal` RPC yanıtı (`applyServerState`),
+  //      anında ve otoriter (4/4 gösterir).
+  //   2. BAYAT yol — `duo_public_state` yoklaması (~1 sn gecikmeli). Snapshot
+  //      4. toplama commit edilmeden ÖNCE alındıysa ilerleme 3 taşır.
   //
-  // ÇÖZÜM: İstemci artık ilerleme ÜRETMEZ (`lib/useGameLoop.ts`). Sunucu
-  // `objective_progress`'i `greatest()` ile zaten MONOTONİK tutar; bu yüzden
-  // sunucu değerini AYNEN uygulamak güvenlidir ve geri düşme OLMAZ. Sunucu
-  // alanı yoksa (eski oda / geçiş anı) yerel değeri koruruz.
+  // Önceki sürüm "sunucu değeri kazanır" diyordu; ancak snapshot BAYAT
+  // olabildiği için (replica gecikmesi / yazma öncesi okuma) bu, taze 4'ü
+  // bayat 3 ile EZİYOR ve ilerleme geri düşüyordu.
+  //
+  // ÇÖZÜM: İlerleme, GÖREV KİMLİĞİ BAŞINA MONOTONİKTİR. Görev kimliği
+  // değişmediği sürece HİÇBİR yazar değeri DÜŞÜREMEZ (`Math.max`). Tek meşru
+  // sıfırlama, görev kimliği değiştiğinde (sunucu yeni görev atadığında) olur
+  // ve o dal yukarıda ele alınır. Böylece 1/4 → 2/4 → 3/4 → 4/4 garanti;
+  // 4/4 → 3/4 ASLA olmaz.
   const serverProgress =
     typeof server.objectiveProgress === 'number' && Number.isFinite(server.objectiveProgress)
       ? server.objectiveProgress
@@ -271,13 +308,16 @@ const mergeProgress = (
     typeof local.objectiveProgress === 'number' && Number.isFinite(local.objectiveProgress)
       ? local.objectiveProgress
       : 0
+  // Görev değişmedi → monotonik: en büyük değeri koru (bayat snapshot düşüremez).
+  const objectiveProgress =
+    serverProgress === undefined ? localProgress : Math.max(localProgress, serverProgress)
   return {
     coins: server.coins ?? local.coins,
     stolen: server.stolen ?? local.stolen,
     roundCoins: server.roundCoins ?? local.roundCoins,
     roundStolen: server.roundStolen ?? local.roundStolen,
     collectedTypes: server.collectedTypes ?? local.collectedTypes ?? {},
-    objectiveProgress: serverProgress === undefined ? localProgress : serverProgress,
+    objectiveProgress,
   }
 }
 
@@ -929,13 +969,23 @@ export const useDuoChaos = () => {
           // İYİMSER İLERLEME: yalnızca `steal` görevlerinde çalma ilerlemeyi
           // artırır (sunucu `duo_mission_progress` ile aynı). `requirements`
           // görevlerinde çalma progress'e EKLENMEZ.
-          const stealDelta = player.objective?.kind === 'steal' ? 1 : 0
+          //
+          // KÖK SORUN DÜZELTMESİ: Eskiden `objectiveProgress + 1` şeklinde
+          // EKLENİYORDU. Aynı `steal` yayını iki kez gelirse (veya sunucu
+          // snapshot'ı çalmayı zaten saymışsa) ilerleme ÇİFT artıyordu. Artık
+          // ilerlemeyi otoriter `stolen` sayacından TÜRETİRİZ (monotonik) —
+          // `offCollect`'in `collectedTypes`'tan türetmesiyle aynı mantık.
+          const stolen = player.stolen + 1
+          const objectiveProgress =
+            player.objective?.kind === 'steal'
+              ? Math.max(player.objectiveProgress ?? 0, stolen)
+              : player.objectiveProgress ?? 0
           return {
             ...player,
-            stolen: player.stolen + 1,
+            stolen,
             // TUR TOPLAMI: sonuç ekranı `roundStolen` okur; iyimser artır.
             roundStolen: (player.roundStolen ?? 0) + 1,
-            objectiveProgress: (player.objectiveProgress ?? 0) + stealDelta,
+            objectiveProgress,
           }
         }),
       }))
@@ -1534,10 +1584,28 @@ export const useDuoChaos = () => {
                 if (typeof server.coins === 'number') next.coins = server.coins
                 if (typeof server.stolen === 'number') next.stolen = server.stolen
                 if (server.collectedTypes) next.collectedTypes = server.collectedTypes
-                // GÖREV İLERLEMESİ (SUNUCU OTORİTESİ): sonuç ekranı da doğru
-                // ilerlemeyi gösterir; sunucu değeri geldiğinde AYNEN uygula.
-                if (typeof server.objectiveProgress === 'number') {
-                  next.objectiveProgress = server.objectiveProgress
+                // GÖREV İLERLEMESİ (SUNUCU OTORİTESİ + MONOTONİK + BAYAT KORUMASI):
+                // sonuç ekranı da doğru ilerlemeyi gösterir. Bu yoklama BAYAT
+                // olabilir; `objectivesDone` geride ise snapshot ÖNCEKİ göreve
+                // aittir ve TAMAMEN yok sayılır. Aksi halde görev kimliği
+                // DEĞİŞMEDİĞİ sürece ilerlemeyi DÜŞÜREMEZ (monotonik). Yalnızca
+                // görev GERÇEKTEN değiştiyse (sunucu yeni görev atadı) sunucu
+                // değerini AYNEN alırız. Böylece "4/4 → 3/4" olmaz.
+                const serverDone =
+                  typeof server.objectivesDone === 'number' ? server.objectivesDone : undefined
+                const localDone = typeof player.objectivesDone === 'number' ? player.objectivesDone : 0
+                const staleSnapshot = serverDone !== undefined && serverDone < localDone
+                if (!staleSnapshot) {
+                  const serverObjectiveId = server.objective?.id ?? null
+                  const localObjectiveId = player.objective?.id ?? null
+                  const objectiveChanged =
+                    serverObjectiveId !== null && serverObjectiveId !== localObjectiveId
+                  if (typeof server.objectiveProgress === 'number') {
+                    next.objectiveProgress = objectiveChanged
+                      ? server.objectiveProgress
+                      : Math.max(player.objectiveProgress ?? 0, server.objectiveProgress)
+                  }
+                  if (objectiveChanged && server.objective) next.objective = server.objective
                 }
                 if (typeof server.objectivesDone === 'number') {
                   next.objectivesDone = server.objectivesDone

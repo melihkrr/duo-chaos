@@ -220,11 +220,31 @@ export const useGameLoop = (deps: LoopDeps) => {
     depsRef.current.setState((prev) => {
       const players = prev.players.map((player, index) => {
         if (index !== 0) return player
+        // GÖREV: sunucu yeni görev atadıysa (reroll) burada ANINDA gelir.
+        const nextObjective = s.objective ?? player.objective
+        const objectiveChanged = (nextObjective?.id ?? null) !== (player.objective?.id ?? null)
+        // MONOTONİKLİK (KÖK SORUN DÜZELTMESİ): `objectiveProgress`'e birden çok
+        // yazar var (bu taze RPC yanıtı + `duo_public_state` yoklaması). Gecikmiş
+        // bir RPC yanıtı (ör. daha eski bir collect) yeni değeri EZMEMELİ.
+        // Görev kimliği DEĞİŞMEDİĞİ sürece ilerleme asla düşmez; yalnızca artar.
+        // Tek meşru sıfırlama görev değişimindedir (sunucu yeni görev atar).
+        const serverProgress =
+          typeof s.objectiveProgress === 'number' && Number.isFinite(s.objectiveProgress)
+            ? s.objectiveProgress
+            : undefined
+        const localProgress =
+          typeof player.objectiveProgress === 'number' && Number.isFinite(player.objectiveProgress)
+            ? player.objectiveProgress
+            : 0
+        const objectiveProgress = objectiveChanged
+          ? (serverProgress ?? 0)
+          : serverProgress === undefined
+            ? localProgress
+            : Math.max(localProgress, serverProgress)
         return {
           ...player,
-          // GÖREV: sunucu yeni görev atadıysa (reroll) burada ANINDA gelir.
-          objective: s.objective ?? player.objective,
-          objectiveProgress: s.objectiveProgress ?? player.objectiveProgress,
+          objective: nextObjective,
+          objectiveProgress,
           collectedTypes: s.collectedTypes ?? player.collectedTypes,
           coins: s.coins ?? player.coins,
           stolen: s.stolen ?? player.stolen,
