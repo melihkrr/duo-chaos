@@ -107,6 +107,28 @@ const syncUrl = (path: string) => {
 const mapPlayerId = (rawId: string, meId: string): string => (rawId === meId ? 'p1' : 'p2')
 
 /**
+ * Sunucunun skor sözlüğünü (`{ p1, p2 }`, SUNUCU slotlarıyla anahtarlı) YEREL
+ * slotlarla anahtarlanmış sözlüğe çevirir.
+ *
+ * Sunucu `round_scores`/`match_scores` alanlarını `player_id` (`'p1'`/`'p2'`)
+ * ile döndürür. Yerel state ise skorları YEREL slotlarla tutar (slot 0 = 'p1' =
+ * ben, slot 1 = 'p2' = rakip). Bu çevrimi yapmazsak p2 istemcisi sunucunun
+ * `p1` skorunu (yani RAKİBİN skorunu) kendi skoru sanar → "puanlar ters
+ * görünüyor" ve kazanan yanlış hesaplanır.
+ */
+const mapScores = (
+  scores: Record<string, number> | undefined,
+  meId: string,
+): Record<string, number> | undefined => {
+  if (!scores) return undefined
+  const out: Record<string, number> = {}
+  for (const [rawId, value] of Object.entries(scores)) {
+    out[mapPlayerId(rawId, meId)] = value
+  }
+  return out
+}
+
+/**
  * Tur seed'i — sunucunun `duo_start_round` içinde ürettiği `round_seed` ile
  * BİREBİR aynı olmalıdır: `CODE:round`.
  *
@@ -523,8 +545,12 @@ export const useDuoChaos = () => {
               p2: (prev.matchScores?.p2 ?? 0) + roundScores.p2,
             }
           }
-          if (serverRound) roundScores = serverRound as Record<string, number>
-          if (serverMatch) matchScores = serverMatch as Record<string, number>
+          // SLOT EŞLEME: Sunucu skorları SUNUCU slotlarıyla anahtarlıdır;
+          // yerel state YEREL slot bekler. `mapScores` ile çeviririz.
+          const mappedRound = mapScores(serverRound, room.playerId)
+          const mappedMatch = mapScores(serverMatch, room.playerId)
+          if (mappedRound) roundScores = mappedRound
+          if (mappedMatch) matchScores = mappedMatch
           // KAZANAN: Sunucu artık skoru tuttuğu için `winner` alanı güvenilirdir.
           //
           // ÖNEMLİ (SLOT EŞLEME): Sunucunun `winner` alanı SUNUCU slotudur
@@ -970,9 +996,11 @@ export const useDuoChaos = () => {
           // hesaplar. Bu yüzden bunları sunucudan alırız; istemci-taraflı
           // biriktirme/kazanan hesabı kaldırıldı. Sunucu değeri yoksa (eski
           // oda / geçiş anı) yerel birikime geri düşeriz.
+          // SLOT EŞLEME: Sunucu skorları SUNUCU slotlarıyla anahtarlıdır;
+          // yerel state YEREL slot bekler. `mapScores` ile çeviririz.
           const serverMatchScores =
             data.matchScores && Object.keys(data.matchScores).length > 0
-              ? data.matchScores
+              ? mapScores(data.matchScores, myId)
               : null
           const leavingBattle = prev.phase === 'battle' && phase !== 'battle'
           const matchScores =
@@ -1114,9 +1142,11 @@ export const useDuoChaos = () => {
         if (!phaseChanged && !coinsChanged) return prev
         // SKOR OTORİTESİ: sunucu `match_scores`/`winner` alanlarını hesaplar
         // (bkz. battle poll). Sunucu değeri varsa onu kullanırız.
+        // SLOT EŞLEME: Sunucu skorları SUNUCU slotlarıyla anahtarlıdır;
+        // yerel state YEREL slot bekler. `mapScores` ile çeviririz.
         const serverMatchScores =
           data.matchScores && Object.keys(data.matchScores).length > 0
-            ? data.matchScores
+            ? mapScores(data.matchScores, myId)
             : null
         const leavingBattle = prev.phase === 'battle' && nextPhase !== 'battle'
         const matchScores =
