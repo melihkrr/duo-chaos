@@ -702,12 +702,19 @@ export const useDuoChaos = () => {
       noteRivalAlive()
       playSound('bump')
       // Yerel state'te index 0 = "ben", index 1 = "rakip" (iki istemcide de).
+      //
+      // ÖNEMLİ (ÇİFT SAYMA): Rakip benden çaldığında YALNIZCA rakibin `stolen`
+      // sayacını artırırız. Kurbanın (benim) `coins` değerini BURADA
+      // DÜŞÜRMEYİZ: yerel oyun döngüsü (`useGameLoop`), çalmayı BAŞLATAN taraf
+      // ben olduğumda kurbanın coinini zaten düşürür. Ancak rakip çaldığında
+      // döngü bunu bilmez; bu yüzden kurban tarafındaki düşüşü sunucu
+      // (`duo_steal` → `coins = greatest(0, coins - 1)`) uygular ve bir sonraki
+      // `duo_public_state` yoklaması yerel state'e yansıtır. Burada da
+      // düşürürsek düşüş İKİ KEZ olur ("puanlar tutmuyor" hatası).
       setState((prev) => ({
         ...prev,
         players: prev.players.map((player, index) =>
-          index === 0
-            ? { ...player, coins: Math.max(0, player.coins - 1), slowedUntil: Date.now() + 400 }
-            : { ...player, stolen: player.stolen + 1 },
+          index === 0 ? player : { ...player, stolen: player.stolen + 1 },
         ),
       }))
     })
