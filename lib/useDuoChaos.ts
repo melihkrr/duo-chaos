@@ -314,24 +314,12 @@ export const useDuoChaos = () => {
   const [rematchReady, setRematchReady] = useState(false)
   const [rivalRematchReady, setRivalRematchReady] = useState(false)
   const remotePos = useRef<Map<string, { x: number; y: number; at: number }>>(new Map())
-  // Bu turda rakipten EN AZ BİR `move` broadcast'i aldık mı?
-  //
-  // KÖK SORUN ("hareket ediyorum, sonra birden başlangıç konumuna gidiyor"):
-  // Rakibin konumu iki kaynaktan gelir: (1) 60Hz `move` broadcast'i — taze ve
-  // akıcı; (2) 1 sn'de bir yoklanan sunucu snapshot'ı (`duo_public_state`) —
-  // GECİKMELİ. `duo_move` yalnızca oyuncu HAREKET EDERKEN yazılır ve
-  // `not_live`/ağ hatası durumunda sessizce düşer; bu yüzden sunucudaki x/y
-  // sık sık eski (hatta spawn) konumda kalır. Eski kod, broadcast 600 ms'den
-  // eskiyse sunucu değerini uyguluyordu; rakip durduğunda (yeni broadcast
-  // gelmez) sunucunun BAYAT konumu devreye girip rakibi geriye/spawn'a
-  // zıplatıyordu.
-  //
-  // ÇÖZÜM: Bu turda bir kez broadcast gördüysek, sunucu snapshot'ı ARTIK rakip
-  // konumu için otorite DEĞİLDİR. Broadcast kesilse bile son bilinen konumu
-  // koruruz (rakip donar ama asla geriye zıplamaz). Sunucu konumu yalnızca
-  // HİÇ broadcast görülmediyse (geç katılma / yeniden bağlanma) kullanılır.
-  // Tur değişiminde sıfırlanır.
-  const rivalBroadcastSeenRef = useRef(false)
+  // NOT: Eskiden burada `rivalBroadcastSeenRef` adlı KALICI bir mandal vardı:
+  // tur içinde bir kez `move` broadcast'i görüldüyse sunucu snapshot'ı rakip
+  // konumu için sonsuza dek devre dışı kalıyordu. Bu, "bir süre sonra rakip
+  // sabit/donuk görünüyor" hatasının köküydü (broadcast sessizce durunca hiçbir
+  // kurtarma yolu kalmıyordu). Artık rakip konumu TAZELİK bazlı seçilir:
+  // taze broadcast > sunucu snapshot'ı. Mandal kaldırıldı.
   // `room` her render'da yeni bir nesne kimliği taşır (useRoom dönüşü
   // memoize edilmemiş). Bu yüzden yoklama effect'lerinin bağımlılığı olarak
   // `room` kullanmak, effect'in her render'da yeniden kurulup interval'i
@@ -687,12 +675,6 @@ export const useDuoChaos = () => {
       remotePos.current.set('rival', { x: data.x, y: data.y, at })
       // Rakip canlı hareket ediyor → "ayrıldı" bayrağını kesin temizle.
       noteRivalAlive()
-      // Bu turda rakipten canlı konum aldık: artık sunucu snapshot'ı rakip
-      // konumunu GERİYE ÇEKEMEZ (aşağıdaki poll merge'e bakınız).
-      rivalBroadcastSeenRef.current = true
-      // `useGameLoop`'a da "bu turda broadcast gördük" bilgisini taşı. Ayrı bir
-      // prop eklemek yerine `remotePos` map'ine bir sentinel anahtar yazarız.
-      remotePos.current.set('__seen__', { x: 0, y: 0, at })
     })
 
     const offCollect = room.on('collect', (payload) => {
@@ -979,11 +961,34 @@ export const useDuoChaos = () => {
             merged.slowedUntil = player.slowedUntil
           }
           if (player.id === 'p2') {
-            // Rakip konumu: taze bir `move` broadcast'i varsa sunucunun
-            // gecikmeli x/y'si ile ezme; broadcast yoksa sunucu değeri
-            // otoritedir (yeniden bağlanma / ışınlanma).
-            const remote = remotePos.current.get('p2') ?? remotePos.current.get('rival')
-            if (rivalBroadcastSeenRef.current || (remote && Date.now() - remote.at < REMOTE_POS_TTL)) {
+            // Rakip konumu: TAZE bir `move` broadcast'i varsa sunucunun
+            // gecikmeli x/y'si ile ezme; broadcast BAYATLADIYSA sunucu değeri
+            // otoritedir.
+            //
+            // KÖK SORUN ("bir süre sonra rakip sabit/donuk görünüyor"):
+            // Eskiden burada `rivalBroadcastSeenRef.current` KALICI bir mandal
+            // gibiydi: tur içinde bir kez broadcast görüldüyse, sunucu snapshot'ı
+            // rakip konumu için SONSUZA DEK devre dışı kalıyordu. Supabase
+            // broadcast "best-effort"tur ve uzun ömürlü kanallarda sessizce
+            // durabilir; o anda rakip son bilinen konumda DONUYORDU ve hiçbir
+            // kurtarma yolu yoktu.
+            //
+            // ÇÖZÜM: Mandalı ZAMAN SINIRLI yaparız. Rakibin konumu yalnızca
+            // broadcast TAZE olduğu sürece broadcast'ten alınır. Broadcast
+            // bayatladığında (paket kaybı / kanal düşüşü) sunucu snapshot'ı
+            // devreye girer. Sunucu artık `duo_move`'u 1 sn'lik heartbeat ile de
+            // çağırdığı için x/y en fazla ~1 sn bayattır — spawn'a zıplama
+            // riski yok, ama donma da olmaz.
+            //
+            // Rakibin GERÇEK slotunu kullanırız (yerel `p2` isek rakip `p1`'dir);
+            // eski kod sabit `'p2'` okuduğu için yanlış anahtara bakabiliyordu.
+            const rivalSlot = player.id === 'p2' ? 'p1' : 'p2'
+            const remote =
+              remotePos.current.get(rivalSlot) ??
+              remotePos.current.get('rival') ??
+              remotePos.current.get('p2')
+            const broadcastFresh = Boolean(remote && Date.now() - remote.at < REMOTE_POS_TTL)
+            if (broadcastFresh) {
               merged.x = player.x
               merged.y = player.y
             }
@@ -1263,9 +1268,6 @@ export const useDuoChaos = () => {
       // henüz hareket etmemişse eski konumda "asılı" kalır ve iki oyuncu aynı
       // noktada başlıyormuş gibi görünür. Sunucu spawn konumu devralır.
       remotePos.current.clear()
-      // Yeni turda "broadcast gördük" mandalını da sıfırla: rakip henüz
-      // hareket etmediyse sunucu spawn konumu otorite olmalı.
-      rivalBroadcastSeenRef.current = false
       // ÖNEMLİ: `resetRound` `countdownEndsAt`/`endsAt`'i sıfırlar. Misafirin
       // geri sayımı silinmesin diye sunucudan gelen EN SON deadline'ları
       // hemen geri yazarız. Aksi halde misafir "3-2-1" görmeden ya da geç
@@ -1340,7 +1342,6 @@ export const useDuoChaos = () => {
         // Maç başlangıç damgasını misafir tarafında da kur (grace penceresi).
         setMatchStartAt(Date.now())
         remotePos.current.clear()
-        rivalBroadcastSeenRef.current = false
       }
       setState((prev) => {
         const players =
@@ -1617,7 +1618,6 @@ export const useDuoChaos = () => {
       resetRound(1, roundSeedFor(room.code, 1))
       // Yeni maçta rakibin eski broadcast konumunu bırak.
       remotePos.current.clear()
-      rivalBroadcastSeenRef.current = false
       // Maç başlangıç damgasını kur: bundan sonraki kısa pencerede presence
       // düşüşü "rakip ayrıldı" sayılmaz (bkz. MATCH_PRESENCE_GRACE_MS).
       setMatchStartAt(Date.now())
@@ -1672,7 +1672,6 @@ export const useDuoChaos = () => {
       // Yeni turda rakibin eski broadcast konumunu bırak (iki oyuncu aynı
       // noktada başlamasın).
       remotePos.current.clear()
-      rivalBroadcastSeenRef.current = false
       // Yeni turda da grace penceresini tazele ve eski "ayrıldı" bayrağını
       // temizle (tur geçişinde presence kısa süre dalgalanabilir).
       setMatchStartAt(Date.now())

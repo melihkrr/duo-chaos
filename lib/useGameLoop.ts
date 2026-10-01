@@ -319,21 +319,23 @@ export const useGameLoop = (deps: LoopDeps) => {
         remotePos.current?.get('rival') ??
         remotePos.current?.get(rivalSlot === 'p1' ? 'p2' : 'p1')
       const fresh = rivalBroadcast && now - rivalBroadcast.at < REMOTE_POS_TTL
-      // KÖK SORUN ("hareket ediyorum, sonra birden başlangıç konumuna gidiyor"):
-      // Broadcast bayatladığında (rakip durdu, paket kaybı) hedefi sunucu
-      // snapshot'ına (`rivalTarget.x/y`) düşürüyorduk. Sunucu x/y'si `duo_move`
-      // yalnızca hareket sırasında yazıldığı için BAYAT olabilir (hatta spawn);
-      // bu da rakibi geriye zıplatıyordu. Bu turda bir kez canlı broadcast
-      // gördüysek son bilinen konumu KORURUZ; sunucu konumuna yalnızca hiç
-      // broadcast görülmediyse (geç katılma / yeniden bağlanma) düşeriz.
+      // HEDEF SEÇİMİ (KÖK SORUN: "bir süre sonra rakip sabit/donuk görünüyor"):
+      // Eskiden `hasBroadcast = rivalBroadcast !== undefined` idi; yani BAYAT bir
+      // broadcast bile sunucu snapshot'ına tercih ediliyordu. Supabase broadcast
+      // "best-effort"tur ve uzun ömürlü kanallarda sessizce durabilir; o anda
+      // hedef SON BİLİNEN konuma çakılı kalıyor ve rakip DONUYORDU — sunucu
+      // snapshot'ına hiç düşmüyorduk.
       //
-      // EK GÜVENCE: `broadcast` varsa (taze olmasa bile) onu sunucu
-      // snapshot'ına TERCİH EDERİZ. Sunucu x/y'si yalnızca hiç broadcast
-      // görülmediyse (geç katılma / yeniden bağlanma) kullanılır. Böylece
-      // rakip durduğunda bile son bilinen konumda kalır; spawn'a zıplamaz.
-      const hasBroadcast = rivalBroadcast !== undefined
-      const goalX = hasBroadcast ? rivalBroadcast.x : rivalTarget.x
-      const goalY = hasBroadcast ? rivalBroadcast.y : rivalTarget.y
+      // ÇÖZÜM: Hedefi yalnızca broadcast TAZE iken broadcast'ten alırız. Bayatsa
+      // sunucu snapshot'ına (`rivalTarget.x/y`) düşeriz. Sunucu artık `duo_move`
+      // heartbeat'i sayesinde en fazla ~1 sn bayattır; bu yüzden spawn'a zıplama
+      // riski yoktur, ama donma da olmaz.
+      //
+      // NOT: `fresh` yukarıda `now - rivalBroadcast.at < REMOTE_POS_TTL` olarak
+      // hesaplanır. Bayat veriyle dead-reckoning YAPMAYIZ (aşağıda `vel` zaten
+      // `fresh`'e bağlı); hedef de sunucuya düşer.
+      const goalX = fresh && rivalBroadcast ? rivalBroadcast.x : rivalTarget.x
+      const goalY = fresh && rivalBroadcast ? rivalBroadcast.y : rivalTarget.y
       const remote = remoteTarget.current
       if (!remote) {
         remoteTarget.current = { x: goalX, y: goalY }
