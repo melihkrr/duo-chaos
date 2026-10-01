@@ -861,22 +861,37 @@ export const useGameLoop = (deps: LoopDeps) => {
     // konum bayatlar ve toplama `too_far` ile REDDEDİLİR → istemci skoru artar
     // ama sunucu skoru artmaz ("puanlar tutmuyor"). Bu yüzden toplama/çalma
     // öncesinde konumu MUTLAKA tazeleriz.
+    //
+    // KÖK SORUN ("Collect 2 Red → 1/2" — EŞZAMANLI TOPLAMA YARIŞI):
+    //   Buradaki `duo_move` eskiden "fire-and-forget" (`void call(...)`) idi ve
+    //   hemen ardından `duo_collect` çağrıları gönderiliyordu. İki geçerli
+    //   toplama neredeyse aynı anda (oyuncu coinlerin üstüne yeni varmışken)
+    //   yapıldığında, `duo_collect` sunucuya `duo_move`'dan ÖNCE ulaşabiliyordu.
+    //   Sunucu menzili KENDİ sakladığı BAYAT `x/y` ile doğruladığı için toplama
+    //   `too_far` ile REDDEDİLİYORDU. İstemci coini yine de YEREL olarak
+    //   "toplandı" işaretlediği için oyuncu iki coini de toplamış GÖRÜYORDU,
+    //   ama sunucu yalnızca birini sayıyordu → görev 1/2'de takılıyordu.
+    //
+    //   ÇÖZÜM: `duo_steal` yolunda zaten yapıldığı gibi, toplamadan ÖNCE konumu
+    //   `await` ile tazele. Bu bir gecikme/debounce/retry DEĞİLDİR; iki bağımlı
+    //   sunucu çağrısının DOĞRU SIRALAMASIDIR (önce konum, sonra toplama).
+    //   Böylece sunucu her toplamayı GÜNCEL konumla doğrular ve iki geçerli
+    //   toplama da atomik olarak (0039 kilidi) sayılır.
     if (collectedIds.length > 0 || stealing) {
-      void call('duo_move', { p_token: token, p_x: nextX, p_y: nextY }).catch(() => undefined)
-    }
-    if (collectedIds.length > 0) {
       // `respawnAt`'i de yayınlarız: rakip coinleri TAM AYNI anda canlandırsın.
       // Aksi halde iki taraf farklı zamanlarda canlandırır ve "bende var, onda
       // yok" uyumsuzluğu oluşur.
       //
       // `diamond: true` bayrağı: rakip, elmasın alındığını bilir ve ona göre
       // geri bildirim verir (elmas tek seferliktir, canlandırılmaz).
-      broadcast('collect', {
-        ids: collectedIds,
-        by: playerId,
-        respawnAt: now + COIN_RESPAWN_MS,
-        diamond: collectedDiamond,
-      })
+      if (collectedIds.length > 0) {
+        broadcast('collect', {
+          ids: collectedIds,
+          by: playerId,
+          respawnAt: now + COIN_RESPAWN_MS,
+          diamond: collectedDiamond,
+        })
+      }
       // Sunucuya TOPLANAN HER coini bildir. Önceden yalnızca ilk coin
       // (`collectedIds[0]`) gönderiliyordu; aynı karede birden fazla coin
       // toplandığında sunucu yalnızca birini işliyor ve skor/görev ilerlemesi
@@ -888,6 +903,12 @@ export const useGameLoop = (deps: LoopDeps) => {
       // onayladığı SON değere yakınsar ve görev tamamlanması + yeni görev
       // ataması ANINDA (yoklamayı beklemeden) yansır.
       void (async () => {
+        // ÖNCE konumu tazele (await) — sunucu menzili bu konumla doğrular.
+        try {
+          await call('duo_move', { p_token: token, p_x: nextX, p_y: nextY })
+        } catch {
+          // Konum tazeleme başarısız olsa bile toplamayı yine de deneriz.
+        }
         for (const coinId of collectedIds) {
           try {
             const res = await call('duo_collect', { p_token: token, p_coin_id: coinId })
