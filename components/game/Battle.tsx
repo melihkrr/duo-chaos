@@ -35,6 +35,12 @@ type Props = {
    * animasyonu (konfeti + "+25") oynatılır. Yeni görev zaten ANINDA atanmıştır.
    */
   celebrateRef: React.RefObject<number>
+  /**
+   * Elmas (jackpot) toplama bilgisi: `{ x, y, at }`. Yerel oyuncu elması
+   * topladığında doldurulur; `Battle` elmasın üstünde uçan "+50" rozetini
+   * gösterir. `null` = gösterilecek ödül yok.
+   */
+  diamondPopRef: React.RefObject<{ x: number; y: number; at: number } | null>
   /** Rakip oyundan ayrıldı mı? True iken oyun duraklar ve bir uyarı gösterilir. */
   rivalLeft: boolean
   /** "Odadan ayrıl" — oyuncu odayı terk eder. */
@@ -42,6 +48,9 @@ type Props = {
 }
 
 const coinClass = (type: string) => `coin coin-${type}`
+
+/** Elmas "+50" rozetinin ekranda kalma süresi (ms). */
+const DIAMOND_POP_MS = 1_100
 
 export function Battle({
   state,
@@ -53,6 +62,7 @@ export function Battle({
   livePos,
   liveRivalPos,
   celebrateRef,
+  diamondPopRef,
   rivalLeft,
   onLeaveRoom,
 }: Props) {
@@ -72,6 +82,9 @@ export function Battle({
   // Kutlama katmanının görünürlüğü. `celebrateRef` her tamamlanmada artan bir
   // zaman damgası taşır; değer değiştiğinde kutlamayı kısa süreliğine açarız.
   const [celebrate, setCelebrate] = useState(0)
+  // Elmas (jackpot) "+50" rozeti. `diamondPopRef` yerel oyuncu elması
+  // topladığında dolar; değer değiştiğinde rozeti kısa süreliğine gösteririz.
+  const [diamondPop, setDiamondPop] = useState<{ x: number; y: number; at: number } | null>(null)
   // Tam ekrana alınacak sarmalayıcı düğüm (`.battle-wrap`).
   const wrapRef = useRef<HTMLElement | null>(null)
   // Yerel avatarın DOM düğümü. Konumu her karede doğrudan buna yazarız.
@@ -141,6 +154,30 @@ export function Battle({
     raf = window.requestAnimationFrame(watch)
     return () => window.cancelAnimationFrame(raf)
   }, [celebrateRef])
+
+  // Elmas "+50" rozetini izle. `diamondPopRef` yeni bir toplama anı taşıdığında
+  // rozeti gösteririz; `DIAMOND_POP_MS` sonra otomatik gizlenir.
+  useEffect(() => {
+    let raf = 0
+    let shownAt = 0
+    const watch = () => {
+      const pop = diamondPopRef.current
+      if (pop && pop.at !== shownAt) {
+        shownAt = pop.at
+        setDiamondPop(pop)
+      }
+      raf = window.requestAnimationFrame(watch)
+    }
+    raf = window.requestAnimationFrame(watch)
+    return () => window.cancelAnimationFrame(raf)
+  }, [diamondPopRef])
+
+  // Rozet göründükten sonra kısa süre sonra gizle.
+  useEffect(() => {
+    if (!diamondPop) return
+    const id = window.setTimeout(() => setDiamondPop(null), DIAMOND_POP_MS)
+    return () => window.clearTimeout(id)
+  }, [diamondPop])
 
   // Yerel oyuncunun konumunu doğrudan DOM'a uygula (React render'ı olmadan).
   // Bu, hareketin 60Hz'de akıcı kalmasını sağlar; `state` yalnızca skor/coin
@@ -335,6 +372,18 @@ export function Battle({
               style={{ left: `${coin.x}%`, top: `${coin.y}%` }}
             />
           ))}
+
+        {/* Elmas (jackpot) "+50" rozeti: yerel oyuncu elması topladığında
+            elmasın son konumunda kısa süreliğine uçar. */}
+        {diamondPop && (
+          <span
+            className="diamond-pop"
+            style={{ left: `${diamondPop.x}%`, top: `${diamondPop.y}%` }}
+            aria-hidden
+          >
+            +50
+          </span>
+        )}
 
         {state.players.map((player, index) => {
           const isMe = index === 0

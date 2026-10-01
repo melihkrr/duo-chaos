@@ -16,6 +16,7 @@ export type SoundName =
   | 'bump'
   | 'scout'
   | 'chaos'
+  | 'jackpot'
   | 'win'
   | 'lose'
   | 'emote'
@@ -53,6 +54,15 @@ const RECIPES: Record<SoundName, ToneSpec[]> = {
   chaos: [
     { freq: 220, to: 110, dur: 0.3, type: 'sawtooth', gain: 0.18 },
     { freq: 330, to: 165, dur: 0.3, type: 'square', gain: 0.12, delay: 0.06 },
+  ],
+  // Jackpot: parlak, yükselen bir "ödül" arpeji — normal toplama sesinden
+  // belirgin şekilde farklı ki oyuncu büyük ödülü aldığını anlasın.
+  jackpot: [
+    { freq: 784, dur: 0.1, type: 'triangle', gain: 0.2 },
+    { freq: 988, dur: 0.1, type: 'triangle', gain: 0.2, delay: 0.09 },
+    { freq: 1319, dur: 0.12, type: 'triangle', gain: 0.2, delay: 0.18 },
+    { freq: 1568, dur: 0.28, type: 'triangle', gain: 0.22, delay: 0.3 },
+    { freq: 2093, dur: 0.3, type: 'sine', gain: 0.14, delay: 0.42 },
   ],
   win: [
     { freq: 523, dur: 0.14, type: 'triangle', gain: 0.2 },

@@ -1195,6 +1195,36 @@ h3 {
   box-shadow: 0 0 0 3px #fff, 0 3px 0 rgba(43, 36, 64, 0.25);
 }
 
+/* Elmas (jackpot) "+50" rozeti: elmasın son konumunda yukarı süzülerek
+   kaybolur. Oyuncuya büyük ödülü aldığına dair net, tatmin edici bir geri
+   bildirim verir. */
+.diamond-pop {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  font-weight: 800;
+  font-size: 20px;
+  color: #0b7d8f;
+  text-shadow: 0 0 6px #fff, 0 2px 0 #fff, 0 0 12px #b6f0ff;
+  pointer-events: none;
+  z-index: 5;
+  animation: diamond-rise 1.1s var(--ease-soft) forwards;
+}
+
+@keyframes diamond-rise {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.6);
+  }
+  25% {
+    opacity: 1;
+    transform: translate(-50%, -80%) scale(1.15);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -180%) scale(1);
+  }
+}
+
 .avatar {
   position: absolute;
   width: 36px;

@@ -660,6 +660,9 @@ export const useDuoChaos = () => {
   const liveRivalPos = loop.liveRivalPos
   // Son görev tamamlanma anı. `Battle` bunu izleyip küçük kutlama gösterir.
   const celebrateRef = loop.celebrateRef
+  // Elmas (jackpot) toplama anı/konumu. `Battle` bunu izleyip elmasın üstünde
+  // uçan "+50" rozetini gösterir.
+  const diamondPopRef = loop.diamondPopRef
 
   // Realtime olaylarını bağla.
   useEffect(() => {
@@ -702,16 +705,24 @@ export const useDuoChaos = () => {
     })
 
     const offCollect = room.on('collect', (payload) => {
-      const data = payload as { ids?: number[]; by?: string; respawnAt?: number }
+      const data = payload as { ids?: number[]; by?: string; respawnAt?: number; diamond?: boolean }
       if (!data || data.by === room.playerId || !data.ids || data.ids.length === 0) return
       const ids = new Set(data.ids)
       noteRivalAlive()
+      // Rakip ELMASI (jackpot) aldıysa ayırt edici sesi çalarız: elmas tek
+      // seferlik ve 50 puanlık olduğundan, oyuncu büyük ödülü KAYBETTİĞİNİ
+      // net hisseder. `diamond` bayrağı `useGameLoop` collect yayınından gelir.
+      if (data.diamond) playSound('jackpot')
       // Rakip topladığında da coin AYNI konumda, 3 sn sonra yeniden doğar.
       // `respawnAt` yazmazsak coin sonsuza dek toplanmış kalır ve bir daha
       // görünmez; bu da "coin kayboldu" hissi verir.
       //
       // ÖNEMLİ: `respawnAt`'i gönderen tarafın verdiği değerle (varsa) kurarız;
       // böylece iki istemci AYNI anda canlandırır. Yoksa yerel saatten türetiriz.
+      //
+      // ELMAS İSTİSNASI: Elmas tek seferliktir; sunucu elmasları canlandırmaz.
+      // Bu yüzden elmas için `respawnAt` YAZMAYIZ — aksi halde rakip elması
+      // aldığında istemci 3 sn sonra onu yeniden gösterirdi.
       const respawnAt =
         typeof data.respawnAt === 'number' && data.respawnAt > 0
           ? data.respawnAt
@@ -732,7 +743,9 @@ export const useDuoChaos = () => {
           if (coin.collectedBy) return coin
           newlyCollected += 1
           gainedTypes[coin.type] = (gainedTypes[coin.type] ?? 0) + 1
-          return { ...coin, collectedBy: 'p2' as const, respawnAt }
+          // Elmas tek seferlik: respawn planlama.
+          const nextRespawnAt = coin.type === 'diamond' ? undefined : respawnAt
+          return { ...coin, collectedBy: 'p2' as const, respawnAt: nextRespawnAt }
         })
         if (newlyCollected === 0) return prev
         return {
@@ -2061,6 +2074,7 @@ export const useDuoChaos = () => {
     livePos,
     liveRivalPos,
     celebrateRef,
+    diamondPopRef,
     createRoom,
     joinRoom,
     restore,

@@ -122,6 +122,10 @@ export const useGameLoop = (deps: LoopDeps) => {
   // Son görev tamamlanma anı (epoch ms). `Battle` bu değeri izleyerek küçük
   // kutlama animasyonunu (konfeti + "+25") tetikler.
   const celebrateRef = useRef(0)
+  // ELMAS (JACKPOT) GERİ BİLDİRİMİ: yerel oyuncu elması topladığında konumunu
+  // ve zamanını buraya yazarız. `Battle` bu değeri izleyerek elmasın üstünde
+  // uçan "+50" rozetini gösterir. `null` = gösterilecek bir ödül yok.
+  const diamondPopRef = useRef<{ x: number; y: number; at: number } | null>(null)
   // Sanal joystick vektörü. `VirtualJoystick` `setJoystick` ile buraya yazar;
   // böylece her pointer hareketinde React render tetiklenmez (yalnızca RAF okur).
   const joystick = useRef<JoystickVector>({ x: 0, y: 0 })
@@ -422,6 +426,7 @@ export const useGameLoop = (deps: LoopDeps) => {
     // Puan hesabı YOK: yalnızca hangi coinlerin toplandığını belirler ve
     // sunucuya bildiririz. Değer/çeşitlilik sunucuda (`duo_collect`) işlenir.
     let collectedIds: number[] = []
+    let collectedDiamond = false
     if (now - lastAction.current >= ACTION_MS) {
       lastAction.current = now
       const nearby = state.coins.filter(
@@ -429,7 +434,17 @@ export const useGameLoop = (deps: LoopDeps) => {
       )
       if (nearby.length > 0) {
         collectedIds = nearby.map((coin) => coin.id)
-        playSound('collect')
+        // ELMAS (JACKPOT) GERİ BİLDİRİMİ: elmas tek seferlik ve 50 puanlık
+        // olduğundan normal "collect" sesinden AYRI, daha tatmin edici bir ses
+        // çalarız. Böylece oyuncu büyük ödülü aldığını net hisseder.
+        const diamondCoin = nearby.find((coin) => coin.type === 'diamond')
+        collectedDiamond = Boolean(diamondCoin)
+        playSound(collectedDiamond ? 'jackpot' : 'collect')
+        // "+50" rozeti için elmasın konumunu ve anını kaydet. `Battle` bu
+        // değeri izleyerek elmasın üstünde uçan rozeti gösterir.
+        if (diamondCoin) {
+          diamondPopRef.current = { x: diamondCoin.x, y: diamondCoin.y, at: now }
+        }
       }
     }
     const collectedSet = new Set(collectedIds)
@@ -494,12 +509,28 @@ export const useGameLoop = (deps: LoopDeps) => {
       // Coinler: toplananları işaretle, süresi dolanları AYNI konum ve AYNI
       // renkte canlandır. Renk yuvaya (id'ye) bağlıdır; yalnızca yeni turda
       // yeniden dağıtılır. Böylece coinler "kendi kendine renk değiştirmez".
+      //
+      // ÖNEMLİ (ELMAS / JACKPOT): Elmas TEK SEFERLİK bir ödüldür. Sunucu
+      // (`duo_respawn_coins`) elmasları ASLA canlandırmaz (`type <> 'diamond'`).
+      // İstemci eskiden TÜR AYRIMI YAPMADAN `respawnAt` dolan her coini
+      // canlandırıyordu; bu yüzden elmas toplandıktan 3 sn sonra YENİDEN
+      // beliriyordu ("elması alsam bile hemen tekrar çıkıyor" hatası). Elması
+      // bu mantığın DIŞINDA tutarız: toplandıysa kalıcı olarak toplanmış kalır.
       const nextCoins = prev.coins.map((coin) => {
         if (collectedSet.has(coin.id)) {
           changed = true
+          if (coin.type === 'diamond') {
+            // Tek seferlik: respawn planlama, kalıcı olarak toplanmış işaretle.
+            return { ...coin, collectedBy: 'p1' as const, respawnAt: undefined }
+          }
           return { ...coin, collectedBy: 'p1' as const, respawnAt: now + COIN_RESPAWN_MS }
         }
-        if (coin.collectedBy && coin.respawnAt && now >= coin.respawnAt) {
+        if (
+          coin.type !== 'diamond' &&
+          coin.collectedBy &&
+          coin.respawnAt &&
+          now >= coin.respawnAt
+        ) {
           changed = true
           // Konum VE renk sabit kalır — yalnızca "toplanmış" işareti kalkar.
           return { ...coin, collectedBy: undefined, respawnAt: undefined }
@@ -602,7 +633,15 @@ export const useGameLoop = (deps: LoopDeps) => {
       // `respawnAt`'i de yayınlarız: rakip coinleri TAM AYNI anda canlandırsın.
       // Aksi halde iki taraf farklı zamanlarda canlandırır ve "bende var, onda
       // yok" uyumsuzluğu oluşur.
-      broadcast('collect', { ids: collectedIds, by: playerId, respawnAt: now + COIN_RESPAWN_MS })
+      //
+      // `diamond: true` bayrağı: rakip, elmasın alındığını bilir ve ona göre
+      // geri bildirim verir (elmas tek seferliktir, canlandırılmaz).
+      broadcast('collect', {
+        ids: collectedIds,
+        by: playerId,
+        respawnAt: now + COIN_RESPAWN_MS,
+        diamond: collectedDiamond,
+      })
       // Sunucuya TOPLANAN HER coini bildir. Önceden yalnızca ilk coin
       // (`collectedIds[0]`) gönderiliyordu; aynı karede birden fazla coin
       // toplandığında sunucu yalnızca birini işliyor ve skor/görev ilerlemesi
@@ -651,7 +690,7 @@ export const useGameLoop = (deps: LoopDeps) => {
     }
   }, [deps.state.phase])
 
-  return { keys, setJoystick, livePos, liveRivalPos, celebrateRef }
+  return { keys, setJoystick, livePos, liveRivalPos, celebrateRef, diamondPopRef }
 }
 
 export { COUNTDOWN_MS, PHASE_TICK_MS }
