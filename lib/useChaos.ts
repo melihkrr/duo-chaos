@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CHAOS_EVENTS } from './config'
 import { playSound } from './sound'
 import type { ChaosEvent } from './types'
@@ -59,5 +59,14 @@ export const useChaos = (): ChaosApi => {
   const secondsLeft =
     liveEvent && endsAt > 0 ? Math.max(0, Math.ceil((endsAt - now) / 1000)) : 0
 
-  return { event: liveEvent, endsAt, secondsLeft, sync, clear }
+  // KRİTİK: Dönüş nesnesi MEMOIZE edilir. `useDuoChaos` içindeki savaş yoklama
+  // effect'i `chaos`'u bağımlılık olarak listeler. Nesne her render'da yeni
+  // kimlik taşırsa yoklama interval'i (1 sn) her render'da sıfırlanır ve sunucu
+  // snapshot'ı HİÇ çekilemez → rakip konumu/skoru bayatlar ("hareket laglı /
+  // donuk"). `sync`/`clear` zaten kararlı; kimlik yalnızca gerçek değer
+  // değişiminde değişir.
+  return useMemo<ChaosApi>(
+    () => ({ event: liveEvent, endsAt, secondsLeft, sync, clear }),
+    [liveEvent, endsAt, secondsLeft, sync, clear],
+  )
 }

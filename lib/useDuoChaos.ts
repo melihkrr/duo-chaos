@@ -454,6 +454,16 @@ export const useDuoChaos = () => {
     (id) => room.broadcast('trail', { by: room.playerId, id }),
   )
 
+  // `cosmetics` nesnesi `activeEmote` değişince (her emote animasyonunda) yeni
+  // kimlik kazanır. Realtime işleyici effect'i `cosmetics`'e bağımlı olursa her
+  // emote'ta işleyiciler sökülüp yeniden bağlanır ve bu sırada gelen olaylar
+  // kaybolabilir. Bu yüzden güncel `cosmetics`'i ref'te tutarız; effect yalnızca
+  // kararlı `room`/`setState`'e bağlı kalır.
+  const cosmeticsRef = useRef(cosmetics)
+  useEffect(() => {
+    cosmeticsRef.current = cosmetics
+  }, [cosmetics])
+
   // İZ (TRAIL) SENKRONU.
   //
   // Kök sorun: `offTrail` yalnızca rakip izini DEĞİŞTİRDİĞİNDE tetiklenir.
@@ -653,6 +663,21 @@ export const useDuoChaos = () => {
 
   // Realtime olaylarını bağla.
   useEffect(() => {
+    // RAKİP HÂLÂ OYNUYOR SİNYALİ: Rakip her `move`/`collect`/`steal`/`score`
+    // yayınında "buradayım" damgasını günceller. Presence (Supabase) güvenilmez
+    // olduğundan — sekme arka plana düşünce veya kanal yeniden abone olurken
+    // `sync` boş dönebiliyor — "rakip ayrıldı" kararını presence'a TEK BAŞINA
+    // bırakmayız. Rakip canlı yayın gönderiyorsa kesinlikle oyundadır.
+    //
+    // NOT: Bu fonksiyon, kendisini kullanan işleyicilerden (offMove/offCollect/
+    // offSteal/offTrail/offHello/offScore) ÖNCE tanımlanmalıdır. Aksi halde
+    // `const` temporal-dead-zone nedeniyle kırılgan bir sıralamaya bağlı kalır.
+    const noteRivalAlive = () => {
+      setRivalAliveAt(Date.now())
+      // Canlı sinyal geldiyse "ayrıldı" bayrağını da temizle.
+      setRivalLeft(false)
+    }
+
     // Rakip hareketi: yalnızca HEDEFİ kaydederiz, state'e yazmayız.
     //
     // Neden: broadcast 60Hz gelir. Her pakette `setState` çağırmak saniyede
@@ -753,7 +778,9 @@ export const useDuoChaos = () => {
     const offEmote = room.on('emote', (payload) => {
       const data = payload as { by?: string; id?: EmoteId }
       if (!data || data.by === room.playerId || !data.id) return
-      cosmetics.showRemoteEmote(data.id)
+      // `cosmeticsRef` üzerinden okuruz: effect artık `cosmetics`'e bağımlı
+      // değil (her emote animasyonunda yeniden bağlanmasın diye).
+      cosmeticsRef.current.showRemoteEmote(data.id)
       setState((prev) => ({
         ...prev,
         players: prev.players.map((player, index) =>
@@ -808,17 +835,6 @@ export const useDuoChaos = () => {
       if (!data || data.by === room.playerId) return
       setRivalLeft(true)
     })
-
-    // RAKİP HÂLÂ OYNUYOR SİNYALİ: Rakip her `move`/`collect`/`steal`/`score`
-    // yayınında "buradayım" damgasını günceller. Presence (Supabase) güvenilmez
-    // olduğundan — sekme arka plana düşünce veya kanal yeniden abone olurken
-    // `sync` boş dönebiliyor — "rakip ayrıldı" kararını presence'a TEK BAŞINA
-    // bırakmayız. Rakip canlı yayın gönderiyorsa kesinlikle oyundadır.
-    const noteRivalAlive = () => {
-      setRivalAliveAt(Date.now())
-      // Canlı sinyal geldiyse "ayrıldı" bayrağını da temizle.
-      setRivalLeft(false)
-    }
 
     // SKOR SENKRONU: `duo_tick` çağrılmadığı için sunucu skoru güncellemez.
     // Rakip, kendi skor değişimini `score` olayıyla yayınlar; burada onu
@@ -906,7 +922,7 @@ export const useDuoChaos = () => {
       offLeave()
       offScore()
     }
-  }, [cosmetics, room, setState])
+  }, [room, setState])
 
   // Sunucu snapshot'ını periyodik çek.
   //
@@ -1748,10 +1764,16 @@ export const useDuoChaos = () => {
    * sıfırla. Böylece her turda el sıkışma baştan yapılır.
    */
   const readyRoundRef = useRef<number | null>(null)
+  // `startedRoundRef`: aşağıdaki "her iki onay da hazır → host başlatır"
+  // effect'inin AYNI tur için ÇİFT başlatmasını engeller. Yeni bir sonuç ekranı
+  // göründüğünde (yeni tur) sıfırlanır.
+  const startedRoundRef = useRef<number | null>(null)
   useEffect(() => {
     if (state.phase !== 'results') return
     if (readyRoundRef.current === state.round) return
     readyRoundRef.current = state.round
+    // Yeni sonuç ekranı: onay bayraklarını VE "başlatıldı" mandalını sıfırla.
+    startedRoundRef.current = null
     setNextReady(false)
     setRivalNextReady(false)
   }, [state.phase, state.round])
@@ -1792,6 +1814,13 @@ export const useDuoChaos = () => {
   // el sıkışma asla tamamlanmıyor ve İKİ taraf da "rakip bekleniyor" ekranında
   // takılı kalıyordu. Çözüm: `broadcastRef` kullanıp `room`'u bağımlılıktan
   // çıkarırız; böylece interval kararlı kalır ve gerçekten periyodik çalışır.
+  //
+  // EK GÜVENCE: Heartbeat yalnızca `!rivalNextReady` iken çalışır. İki taraf da
+  // onayladığında heartbeat DURUR. Eğer host, rakibin onayını aldığı anda
+  // `nextReadyRef.current` henüz `true` değilse (effect flush gecikmesi), tur
+  // hiç başlamaz ve iki heartbeat de durduğu için İKİ taraf sonsuza dek takılı
+  // kalır. Bu yüzden aşağıdaki "her iki onay da hazır → host başlatır" effect'i
+  // STATE'e bağlıdır ve bu yarışı kesin olarak kapatır.
   useEffect(() => {
     if (!nextReady || rivalNextReady) return
     if (state.phase !== 'results') return
@@ -1800,6 +1829,39 @@ export const useDuoChaos = () => {
       broadcastRef.current('next-ready', { by: room.playerId, round: state.round })
     }, 1_500)
     return () => window.clearInterval(id)
+  }, [nextReady, rivalNextReady, room.playerId, state.phase, state.round])
+
+  /**
+   * HER İKİ ONAY DA HAZIR → HOST TURU BAŞLATIR (STATE TABANLI, YARIŞSIZ).
+   *
+   * KÖK SORUN ("İKİ oyuncu da Next Round'a bastı ama ikisi de 'Waiting for your
+   * rival to accept…' ekranında takılı kaldı"):
+   *
+   *   Tur başlatma yalnızca OLAY İŞLEYİCİLERİNE bağlıydı:
+   *     - `approveNextRound` (buton) → `rivalNextReady` STATE'ini okur,
+   *     - `offNextReady` (rakip paketi) → `nextReadyRef.current` REF'ini okur.
+   *
+   *   `nextReadyRef.current` bir effect içinde güncellenir; yani host "Ready"e
+   *   bastıktan SONRA, effect flush olmadan rakibin `next-ready` paketi gelirse
+   *   `nextReadyRef.current` hâlâ `false` olur → host turu BAŞLATMAZ. Aynı anda
+   *   rakibin de `rivalNextReady`'si `true` olduğu için HER İKİ heartbeat de
+   *   durur (ikisi de `!rivalNextReady` bekler). Sonuç: hiçbir mekanizma turu
+   *   başlatmaz ve iki oyuncu da kalıcı olarak takılı kalır.
+   *
+   * ÇÖZÜM: Tur başlatmayı STATE'e bağlarız. `nextReady` VE `rivalNextReady`
+   * ikisi de `true` olduğunda (ve host isek) turu başlatırız. Effect yalnızca
+   * `beginNextRoundRef.current` (ref) çağırır — `set-state-in-effect` kuralına
+   * takılmaz. `startedRoundRef` ile aynı tur için ÇİFT başlatmayı engelleriz
+   * (hem bu effect hem `offNextReady` işleyicisi tetiklenebilir).
+   */
+  useEffect(() => {
+    if (state.phase !== 'results') return
+    if (!nextReady || !rivalNextReady) return
+    if (room.playerId !== 'p1') return
+    // Aynı tur için yalnızca BİR kez başlat.
+    if (startedRoundRef.current === state.round) return
+    startedRoundRef.current = state.round
+    void beginNextRoundRef.current?.()
   }, [nextReady, rivalNextReady, room.playerId, state.phase, state.round])
 
   /**
@@ -1835,15 +1897,23 @@ export const useDuoChaos = () => {
   // NOT: `next-ready` heartbeat'iyle AYNI düzeltme — `room` bağımlılığı her
   // render'da interval'i sıfırlayıp heartbeat'i ölü bırakıyordu. `broadcastRef`
   // kullanırız ve `room`'u bağımlılıktan çıkarırız.
+  //
+  // EK GÜVENCE: Yalnızca broadcast'i tekrarlamak YETMEZ. İlk `duo_rematch`
+  // çağrısı ağ hatası nedeniyle başarısız olduysa sunucu bu oyuncunun hazır
+  // olduğunu HİÇ kaydetmez; rakip de hazır olsa bile oda `lobby`'ye çekilmez ve
+  // iki oyuncu "waiting for rival" ekranında takılı kalır. Bu yüzden heartbeat
+  // `duo_rematch`'i de (idempotent) yeniden çağırır. `callRef` kullanırız ki
+  // effect bağımlılığına `room` eklemeyelim.
   useEffect(() => {
     if (!rematchReady || rivalRematchReady) return
     if (state.phase !== 'matchover') return
     const id = window.setInterval(() => {
       if (typeof document !== 'undefined' && document.hidden) return
       broadcastRef.current('rematch-ready', { by: room.playerId })
+      void callRef.current('duo_rematch', { p_token: room.token ?? room.playerId })
     }, 1_500)
     return () => window.clearInterval(id)
-  }, [rematchReady, rivalRematchReady, room.playerId, state.phase])
+  }, [rematchReady, rivalRematchReady, room.playerId, room.token, state.phase])
 
   // RÖVANŞ BAYRAKLARINI SIFIRLA: Sonuç ekranı her yeni maç için göründüğünde
   // onay bayraklarını temizle. (Aynı desen `readyRoundRef` için de kullanılır.)

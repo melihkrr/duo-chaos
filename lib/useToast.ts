@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import type { ToastMessage, ToastTone } from '../components/ui/Toast'
 
 export type ToastApi = {
@@ -28,5 +28,8 @@ export const useToast = (): ToastApi => {
     return id
   }, [])
 
-  return { toasts, push, dismiss }
+  // Dönüş nesnesini memoize ederiz; `push`/`dismiss` kararlı olduğundan kimlik
+  // yalnızca `toasts` değiştiğinde değişir. Bu, tüketici effect'lerinin
+  // gereksiz yere yeniden kurulmasını önler.
+  return useMemo<ToastApi>(() => ({ toasts, push, dismiss }), [toasts, push, dismiss])
 }

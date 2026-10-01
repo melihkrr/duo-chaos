@@ -247,14 +247,14 @@ const run = async () => {
     const coinCount = await host.locator('.arena .coin').count()
     check('coins rendered in arena', coinCount > 0, `got ${coinCount}`)
 
-    // Scout panel should be present and usable.
-    const scoutVisible = await host.locator('.scout').isVisible()
-    check('scout panel visible in battle', scoutVisible)
+    // Cosmetics panel (emote + trail picker) should be present and usable.
+    const cosmeticsVisible = await host.locator('.cosmetics').isVisible()
+    check('cosmetics panel visible in battle', cosmeticsVisible)
 
-    // Emote button should trigger a glyph. The glyph only lives for ~1.6s, so
+    // Emote chip should trigger a glyph. The glyph only lives for ~1.6s, so
     // we install a DOM observer BEFORE clicking, then click, then read the flag.
     // This avoids missing the short-lived `.emote-pop` between polls.
-    const emoteBtn = host.locator('.emote-btn')
+    const emoteBtn = host.locator('.cosmetics .chip-row').first().locator('.chip').first()
     const emoteBtnCount = await emoteBtn.count()
     if (emoteBtnCount > 0) {
       await emoteBtn.scrollIntoViewIfNeeded().catch(() => {})

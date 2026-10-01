@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getSupabase, hasSupabase, rpc } from './supabase'
 
 export type RoomStatus = 'idle' | 'connecting' | 'live' | 'error'
@@ -261,19 +261,56 @@ export const useRoom = (): RoomApi => {
     [disconnect],
   )
 
-  return {
-    code,
-    playerId,
-    token,
-    name,
-    status,
-    opponentPresent,
-    presenceReady,
-    connect,
-    disconnect,
-    setName,
-    broadcast,
-    call,
-    on,
-  }
+  // KRİTİK: Dönüş değeri MEMOIZE edilir.
+  //
+  // Kök sorun: Bu nesne her render'da YENİ bir kimlik taşıyordu. `useDuoChaos`
+  // içindeki birçok effect/callback `room`'u bağımlılık olarak listeliyor
+  // (duo_tick interval'i, trail heartbeat, next-ready/rematch heartbeat,
+  // realtime işleyici aboneliği, publishMove...). `room` her render'da
+  // değiştiği için bu effect'ler HER render'da sökülüp yeniden kuruluyor ve
+  // interval'ler 1 sn / 1.5 sn / 3 sn'ye ulaşmadan sıfırlanıyordu → heartbeat
+  // HİÇ ateşlenmiyordu. Bu da iki kritik hataya yol açıyordu:
+  //   1) Rakip hareketi laglı/donuk görünüyordu (move broadcast/heartbeat
+  //      kararsız).
+  //   2) İki oyuncu da "Next Round"a bastığı halde el sıkışma tamamlanmıyor,
+  //      her iki istemci de "Waiting for your rival to accept…" ekranında
+  //      takılı kalıyordu.
+  //
+  // Çözüm: Nesneyi `useMemo` ile sararız. Tüm alanlar ya kararlı (useCallback
+  // ile memoize edilmiş fonksiyonlar) ya da ilkel değerlerdir; bu yüzden
+  // kimlik yalnızca GERÇEK bir değer değiştiğinde (code/playerId/token/name/
+  // status/opponentPresent/presenceReady) değişir. Böylece effect'ler kararlı
+  // kalır ve interval'ler gerçekten periyodik çalışır.
+  return useMemo<RoomApi>(
+    () => ({
+      code,
+      playerId,
+      token,
+      name,
+      status,
+      opponentPresent,
+      presenceReady,
+      connect,
+      disconnect,
+      setName,
+      broadcast,
+      call,
+      on,
+    }),
+    [
+      code,
+      playerId,
+      token,
+      name,
+      status,
+      opponentPresent,
+      presenceReady,
+      connect,
+      disconnect,
+      setName,
+      broadcast,
+      call,
+      on,
+    ],
+  )
 }

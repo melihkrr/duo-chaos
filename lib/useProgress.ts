@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { profileForXp, type ProfileProgress } from './config'
 import { getSupabase, hasSupabase, rpc } from './supabase'
 import type { EmoteId, Progress, TrailId } from './types'
@@ -186,13 +186,19 @@ export const useProgress = (): ProgressApi => {
     [applyServer, clientId],
   )
 
-  return {
-    clientId,
-    progress,
-    profile: profileForXp(progress.xp),
-    online,
-    award,
-    setCosmetics,
-    refresh,
-  }
+  // Dönüş nesnesini memoize ederiz. Tüm fonksiyonlar `useCallback` ile
+  // kararlıdır; kimlik yalnızca gerçek değerler (progress/online) değişince
+  // değişir. Böylece tüketici effect'leri gereksiz yere yeniden kurulmaz.
+  return useMemo<ProgressApi>(
+    () => ({
+      clientId,
+      progress,
+      profile: profileForXp(progress.xp),
+      online,
+      award,
+      setCosmetics,
+      refresh,
+    }),
+    [clientId, progress, online, award, setCosmetics, refresh],
+  )
 }

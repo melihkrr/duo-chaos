@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   BATTLE_MS,
   COUNTDOWN_MS,
@@ -222,7 +222,13 @@ export const useGameState = (serverSlot: 'p1' | 'p2' = 'p1'): GameStateApi => {
     }))
   }, [])
 
-  return { state, setState, setPhase, resetRound, resetMatch, updatePlayer, setCoins, moveLocal }
+  // Dönüş nesnesini memoize ederiz. Tüm fonksiyonlar `useCallback` ile
+  // kararlıdır; kimlik yalnızca `state` değiştiğinde değişir. Bu, tüketici
+  // effect'lerinin (ör. `useGameLoop`) gereksiz yere yeniden kurulmasını önler.
+  return useMemo<GameStateApi>(
+    () => ({ state, setState, setPhase, resetRound, resetMatch, updatePlayer, setCoins, moveLocal }),
+    [state, setState, setPhase, resetRound, resetMatch, updatePlayer, setCoins, moveLocal],
+  )
 }
 
 export { BATTLE_MS, COUNTDOWN_MS, MATCH_ROUNDS }
