@@ -24,6 +24,7 @@ import { useProgress } from './useProgress'
 import { useToast } from './useToast'
 import { blankPlayer, initialState } from './useGameState'
 import { createBotMemory, decideBot, type BotMemory } from './bot'
+import { claimSinglePlayerPickupIds } from './singlePlayerPickup'
 import type { Coin, CoinType, Objective, Player, State } from './types'
 
 /**
@@ -150,6 +151,9 @@ export const useBotGame = (): BotGameApi => {
   const botMemory = useRef<BotMemory>(createBotMemory(82, 50))
   const lastStealAt = useRef(0)
   const lastRound = useRef(1)
+  // stateRef updates after React commits; reserve coin IDs synchronously so
+  // repeated RAF collision checks cannot enqueue the same pickup twice.
+  const claimedPickupIds = useRef(new Map<number, number | null>())
   const lastPhase = useRef(state.phase)
   const objectiveIdRef = useRef<string | null>(null)
   // `chaos` nesnesi, canlı bir olay sürerken `secondsLeft` her 250 ms'de
@@ -252,6 +256,7 @@ export const useBotGame = (): BotGameApi => {
       comboRef.current = { count: 0, at: 0 }
       scorePopRef.current = []
       objectiveIdRef.current = null
+      claimedPickupIds.current.clear()
       setNextReady(false)
       setRematchReady(false)
     },
@@ -485,13 +490,25 @@ export const useBotGame = (): BotGameApi => {
     liveRivalPos.current = { x: botNextX, y: botNextY }
 
     // --- Toplama: yerel oyuncu ---
-    const meCollectIds = prev.coins
+    const meCandidates = prev.coins
       .filter((c) => !c.collectedBy && Math.hypot(c.x - nextX, c.y - nextY) <= COLLECT_RADIUS)
       .map((c) => c.id)
+    const meCollectIds = claimSinglePlayerPickupIds(
+      prev.coins,
+      meCandidates,
+      now,
+      claimedPickupIds.current,
+    )
     // --- Toplama: bot (aynı menzil) ---
-    const botCollectIds = prev.coins
+    const botCandidates = prev.coins
       .filter((c) => !c.collectedBy && Math.hypot(c.x - botNextX, c.y - botNextY) <= COLLECT_RADIUS)
       .map((c) => c.id)
+    const botCollectIds = claimSinglePlayerPickupIds(
+      prev.coins,
+      botCandidates,
+      now,
+      claimedPickupIds.current,
+    )
 
     // --- Çalma: yerel oyuncu rakibi (bot) çalabilir ---
     let meStealing = false
