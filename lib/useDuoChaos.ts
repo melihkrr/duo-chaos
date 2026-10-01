@@ -597,6 +597,12 @@ export const useDuoChaos = () => {
     }
   }, [advancePhase])
 
+  // Yerel oyuncu sunucuda `p2` ise arena X ekseninde aynalanır; böylece yerel
+  // oyuncu HER ZAMAN solda, rakip sağda görünür (bkz. `config.ts`). Bu değeri
+  // hem `useGameLoop`'a (girdi yönü için) hem de `Battle`'a (render için)
+  // aynı şekilde geçiririz; ikisi tutarlı olmazsa joystick ters çalışır.
+  const mirrored = room.playerId === 'p2'
+
   const loop = useGameLoop({
     state,
     setState,
@@ -611,6 +617,8 @@ export const useDuoChaos = () => {
     syncChaos: chaos.sync,
     advancePhase,
     remotePos,
+    // Aynalama açıkken yatay girdiyi negatiflemek için (joystick yönü).
+    mirrored,
   })
 
   // Sanal joystick girdisini döngüye bağlar. `VirtualJoystick` bu setter'ı
@@ -1886,7 +1894,9 @@ export const useDuoChaos = () => {
     celebrateRef,
     // Yerel oyuncu sunucuda `p2` ise arena X ekseninde aynalanır; böylece
     // yerel oyuncu HER ZAMAN solda, rakip sağda görünür (bkz. `config.ts`).
-    mirrored: room.playerId === 'p2',
+    // (Yukarıda hesaplanan `mirrored` ile AYNI değer — `useGameLoop`'a da
+    // geçirilir; ikisi tutarlı olmalı.)
+    mirrored,
     createRoom,
     joinRoom,
     restore,

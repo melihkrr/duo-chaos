@@ -88,6 +88,46 @@ export const useGameState = (serverSlot: 'p1' | 'p2' = 'p1'): GameStateApi => {
     serverSlotRef.current = serverSlot
   }, [serverSlot])
 
+  /**
+   * SUNUCU SLOTU DEĞİŞİNCE SPAWN'LARI YENİDEN TOHUMLA.
+   *
+   * KÖK SORUN ("biri solda biri sağda başlamış gibi gösteriyor, soldaki
+   * hareket ettiği an sağa ışınlanıyor"):
+   *
+   * `joinRoom`/`restore` akışında `room.connect(code, slot, ...)` çağrılır ve
+   * HEMEN ardından `resetMatch()` çalışır. Ancak `connect` içindeki
+   * `setPlayerId(slot)` ASENKRON bir React state güncellemesidir; `resetMatch`
+   * çalıştığı anda `serverSlotRef.current` hâlâ ESKİ değerdir (varsayılan
+   * `'p1'`). Bu yüzden misafir (`p2`) oyuncunun spawn'ı yanlışlıkla `p1`
+   * konumundan (x=18) tohumlanıyordu. `mirrored` ise `room.playerId === 'p2'`
+   * olduğu için `true` oluyor; render `18`'i aynalayıp oyuncuyu SAĞA koyuyor,
+   * `livePos` ise gerçek `18`'den tohumlandığı için ilk hareket karesinde
+   * oyuncu "ışınlanmış" gibi zıplıyordu.
+   *
+   * ÇÖZÜM: Slot gerçekten değiştiğinde (ve maç henüz başlamamışken) spawn
+   * konumlarını yeniden tohumlarız. Böylece yerel oyuncunun GERÇEK spawn'ı her
+   * zaman sunucu slotuyla eşleşir; aynalama tutarlı çalışır ve ışınlanma olmaz.
+   */
+  const seededSlotRef = useRef<'p1' | 'p2'>(serverSlot)
+  useEffect(() => {
+    if (seededSlotRef.current === serverSlot) return
+    seededSlotRef.current = serverSlot
+    serverSlotRef.current = serverSlot
+    setState((prev) => {
+      // Yalnızca maç ÖNCESİ fazlarda (home/lobby) yeniden tohumla. Aktif oyun
+      // sırasında spawn'ı değiştirmek oyuncuyu ışınlar; orada dokunmayız.
+      if (prev.phase !== 'home' && prev.phase !== 'lobby') return prev
+      return {
+        ...prev,
+        players: prev.players.map((player, index) => {
+          const spawnId = index === 0 ? serverSlot : serverSlot === 'p1' ? 'p2' : 'p1'
+          const spawn = spawnFor(spawnId)
+          return { ...player, x: spawn.x, y: spawn.y }
+        }),
+      }
+    })
+  }, [serverSlot])
+
   // Ref'i render sırasında değil, commit sonrası senkronize et.
   useEffect(() => {
     stateRef.current = state

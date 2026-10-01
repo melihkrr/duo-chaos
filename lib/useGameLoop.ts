@@ -71,6 +71,17 @@ type LoopDeps = {
    * başına render tetiklenmez ve hareket akıcı kalır.
    */
   remotePos: React.RefObject<Map<string, { x: number; y: number; at: number }>>
+  /**
+   * Arena X ekseninde aynalanıyor mu? Yerel oyuncu sunucuda `p2` ise `true`.
+   *
+   * KÖK SORUN ("joystick ters çalışıyor"): Girdi (klavye/joystick) EKRAN
+   * uzayındadır; hareket ise GERÇEK (aynalanmamış) koordinatlara uygulanır.
+   * Aynalama açıkken ekranda SAĞA gitmek, gerçek `x`'i ARTIRMAK demektir; ancak
+   * render `x' = 100 - x` uyguladığı için gerçek `x` artışı ekranda SOLA
+   * gidiş olarak görünür. Bu yüzden aynalama açıkken yatay girdiyi (`dx`) NEGATIF
+   * leriz; böylece joystick/klavye ekrandaki yönle birebir uyumlu olur.
+   */
+  mirrored: boolean
 }
 
 const keys = { up: false, down: false, left: false, right: false }
@@ -201,6 +212,7 @@ export const useGameLoop = (deps: LoopDeps) => {
       syncChaos,
       advancePhase,
       remotePos,
+      mirrored,
     } = depsRef.current
 
     // Faz geçişleri.
@@ -252,6 +264,14 @@ export const useGameLoop = (deps: LoopDeps) => {
     if (keys.right) dx += 1
     dx += joystick.current.x
     dy += joystick.current.y
+
+    // AYNALAMA: Girdi EKRAN uzayındadır, hareket ise GERÇEK koordinatlara
+    // uygulanır. Aynalama açıkken ekranda sağa gitmek gerçek `x`'i artırmak
+    // demektir; ancak render `x' = 100 - x` uyguladığı için bu ekranda SOLA
+    // gidiş olarak görünür. Yatay girdiyi negatifleyerek joystick/klavye
+    // ekrandaki yönle birebir uyumlu hale gelir ("joystick ters çalışıyor"
+    // hatasının çözümü). Dikey eksen aynalanmaz.
+    if (mirrored) dx = -dx
 
     // --- Hareket (yerel, iyimser). ---
     //
