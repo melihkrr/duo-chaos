@@ -7,10 +7,11 @@ import { VirtualJoystick } from './VirtualJoystick'
 import { Button } from '../ui/Button'
 import { ARENA, OBSTACLES, avatarGlyph, emoteById, trailById } from '../../lib/config'
 import { SCORE_POP_MS } from '../../lib/useGameLoop'
-import { missionLabel, objectiveOf, progressOf, targetOf } from '../../lib/display'
+import { objectiveOf, progressOf, targetOf } from '../../lib/display'
 import type { ChaosApi } from '../../lib/useChaos'
 import type { CosmeticsApi } from '../../lib/useCosmetics'
 import type { State } from '../../lib/types'
+import { localizedObjectiveLabel, useI18n } from '../../lib/i18n'
 
 type Props = {
   state: State
@@ -126,6 +127,7 @@ export function Battle({
   rivalLeft,
   onLeaveRoom,
 }: Props) {
+  const { language, t } = useI18n()
   const [now, setNow] = useState(0)
   // Tam ekran modu. `true` iken arena tüm ekranı kaplar; HUD üstte kalır,
   // joystick sağ altta yarı şeffaf olur ve diğer kontroller gizlenir.
@@ -387,15 +389,15 @@ export function Battle({
             <span className="hud-badge me" aria-hidden>
               {avatarGlyph(cosmetics.avatar, 'rabbit')}
             </span>
-            <strong>{me?.name ?? 'You'}</strong>
+            <strong>{me?.name === 'Bot' ? t('Bot') : me?.name ?? t('You')}</strong>
             {/* Skor = kümülatif puan (coin + çalma + görev bonusları). */}
-            <span className="hud-score" title="Total score">
+            <span className="hud-score" title={t('Total score')}>
               <AnimatedScore value={me?.score ?? 0} />
             </span>
           </div>
           <small>
-            {missionLabel(myObjective)}
-            <span className="hud-missions" title="Mission progress">
+            {localizedObjectiveLabel(myObjective, language)}
+            <span className="hud-missions" title={t('Mission progress')}>
               {' '}
               · {myCount}/{myTarget}
             </span>
@@ -405,23 +407,23 @@ export function Battle({
           </div>
         </div>
         <div className="hud-center">
-          <span className="hud-round">Round {state.round}</span>
+          <span className="hud-round">{t('Round {round}', { round: state.round })}</span>
           <span className="hud-clock">{Math.max(0, secondsLeft)}s</span>
           <button
             type="button"
             className="fs-toggle"
             onClick={toggleFullscreen}
             aria-pressed={fullscreen}
-            title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+            title={fullscreen ? t('Exit fullscreen') : t('Fullscreen')}
           >
-            {fullscreen ? '⤡ Exit' : '⛶ Fullscreen'}
+            {fullscreen ? t('⤡ Exit') : t('⛶ Fullscreen')}
           </button>
         </div>
         <div className="hud-player rival">
           <div className="hud-name">
-            <strong>{rival?.name ?? 'Rival'}</strong>
+            <strong>{rival?.name === 'Bot' ? t('Bot') : rival?.name ?? t('Rival')}</strong>
             {/* Skor = kümülatif puan. */}
-            <span className="hud-score" title="Total score">
+            <span className="hud-score" title={t('Total score')}>
               <AnimatedScore value={rival?.score ?? 0} />
             </span>
             <span className="hud-badge rival" aria-hidden>
@@ -429,8 +431,8 @@ export function Battle({
             </span>
           </div>
           <small>
-            {missionLabel(rivalObjective)}
-            <span className="hud-missions" title="Mission progress">
+            {localizedObjectiveLabel(rivalObjective, language)}
+            <span className="hud-missions" title={t('Mission progress')}>
               {' '}
               · {rivalCount}/{rivalTarget}
             </span>
@@ -456,7 +458,7 @@ export function Battle({
         {combo >= 2 && (
           <div className="combo-badge" role="status" aria-live="polite">
             <span className="combo-x">x{combo}</span>
-            <span className="combo-label">COMBO</span>
+            <span className="combo-label">{t('COMBO')}</span>
           </div>
         )}
 
@@ -465,13 +467,13 @@ export function Battle({
             <span key={countdownStep} className="countdown-num">
               {countdownStep}
             </span>
-            <span className="countdown-hint">Get ready!</span>
+            <span className="countdown-hint">{t('Get ready!')}</span>
           </div>
         )}
 
         {celebrate > 0 && (
           <div className="celebrate-overlay" role="status" aria-live="polite">
-            <span className="celebrate-badge">Mission complete!</span>
+            <span className="celebrate-badge">{t('Mission complete!')}</span>
             <span className="celebrate-bonus">+25</span>
             {Array.from({ length: 10 }, (_, i) => (
               <span key={i} className={`confetti confetti-${i % 5}`} aria-hidden />
@@ -485,17 +487,17 @@ export function Battle({
               <span className="rival-left-emoji" aria-hidden>
                 {meWon ? '🏆' : state.winner ? '🎈' : '🐻💨'}
               </span>
-              <h2>{meWon ? 'You win!' : state.winner ? 'Next time' : 'Your rival left the game'}</h2>
+              <h2>{meWon ? t('You win!') : state.winner ? t('Next time') : t('Your rival left the game')}</h2>
               <p>
                 {meWon
-                  ? `${rival?.name ?? 'Your rival'} left the match — you win. You can stay here and wait for a rematch, or leave the room.`
+                  ? t('{rival} left the match — you win. You can stay here and wait for a rematch, or leave the room.', { rival: rival?.name ?? t('Rival') })
                   : state.winner
-                    ? `${rival?.name ?? 'Your rival'} left the match. Better luck next time — you can stay for a rematch, or leave the room.`
-                    : `${rival?.name ?? 'Your rival'} disconnected. The match is paused — you can wait for them to come back, or leave the room.`}
+                    ? t('{rival} left the match. Better luck next time — you can stay for a rematch, or leave the room.', { rival: rival?.name ?? t('Your rival') })
+                    : t('{rival} disconnected. The match is paused — you can wait for them to come back, or leave the room.', { rival: rival?.name ?? t('Your rival') })}
               </p>
               <div className="rival-left-actions">
                 <Button variant="ghost" onClick={onLeaveRoom}>
-                  🚪 Leave room
+                  {t('🚪 Leave room')}
                 </Button>
               </div>
             </div>
@@ -574,7 +576,7 @@ export function Battle({
                   {avatarGlyph(isMe ? cosmetics.avatar : player.avatar, isMe ? 'rabbit' : 'bear')}
                 </span>
               </span>
-              <span className="avatar-name">{isMe ? 'You' : player.name}</span>
+              <span className="avatar-name">{isMe ? t('You') : player.name}</span>
               {/*
                 RAKİP EMOTE ETİKETİ.
                 KÖK SORUN ("emote atmadım ama 'wave' yazısı ekranda kalıyor"):

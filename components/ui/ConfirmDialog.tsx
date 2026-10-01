@@ -3,6 +3,7 @@
 import type { ReactNode } from 'react'
 import { Button } from './Button'
 import { Modal } from './Modal'
+import { useI18n } from '../../lib/i18n'
 
 type Props = {
   open: boolean
@@ -36,6 +37,7 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
 }: Props) {
+  const { t } = useI18n()
   return (
     <Modal
       open={open}
@@ -45,7 +47,7 @@ export function ConfirmDialog({
       footer={
         <>
           <Button variant="ghost" onClick={onCancel} disabled={busy}>
-            {cancelLabel}
+            {t(cancelLabel)}
           </Button>
           <Button
             variant={danger ? 'danger' : 'primary'}
@@ -53,7 +55,7 @@ export function ConfirmDialog({
             disabled={busy}
             data-autofocus
           >
-            {busy ? 'Working…' : confirmLabel}
+            {busy ? t('Working…') : t(confirmLabel)}
           </Button>
         </>
       }

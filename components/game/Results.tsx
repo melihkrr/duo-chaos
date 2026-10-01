@@ -5,6 +5,7 @@ import { Panel } from '../ui/Panel'
 import { avatarGlyph } from '../../lib/config'
 import { resultScoreForPlayer } from '../../lib/results'
 import type { State } from '../../lib/types'
+import { useI18n } from '../../lib/i18n'
 
 type Props = {
   state: State
@@ -32,28 +33,29 @@ export function Results({
   onRematch,
   busy,
 }: Props) {
+  const { t } = useI18n()
   const isMatchOver = state.phase === 'matchover'
   const winner = state.winner
   const meWon = winner === 'p1'
 
   return (
     <Panel
-      title={isMatchOver ? 'Match over' : `Round ${state.round} results`}
+      title={isMatchOver ? t('Match over') : t('Round {round} results', { round: state.round })}
       subtitle={
         isMatchOver
           ? winner
             ? meWon
-              ? 'You win the match!'
-              : 'Your rival takes the match.'
-            : 'Match complete'
-          : 'Next round starting soon'
+              ? t('You win the match!')
+              : t('Your rival takes the match.')
+            : t('Match complete')
+          : t('Next round starting soon')
       }
       className="results"
     >
       {isMatchOver && winner && (
         <div className="results-celebrate" aria-hidden>
           <span>{meWon ? '🏆' : '🎈'}</span>
-          <strong>{meWon ? 'Victory!' : 'Good game!'}</strong>
+          <strong>{meWon ? t('Victory!') : t('Good game!')}</strong>
         </div>
       )}
 
@@ -96,28 +98,28 @@ export function Results({
                 </span>
                 <div>
                   <strong>{player.name}</strong>
-                  <small className="muted">{index === 0 ? 'You' : 'Rival'}</small>
+                  <small className="muted">{index === 0 ? t('You') : t('Rival')}</small>
                 </div>
               </div>
               <div className="score-values">
                 <span className="score-big">
-                  <small>Score</small>
+                  <small>{t('Score')}</small>
                   {score}
                 </span>
                 {/* Tur içi performans kırılımı: toplanan coin, çalınan coin ve
                     tamamlanan görev. Maç sonunda tur istatistikleri sıfırlandığı
                     için yalnızca tur sonuçlarında gösterilir. */}
                 {!isMatchOver && (
-                  <span className="score-stats" aria-label="Round stats">
-                    <span className="stat-chip" title="Coins collected">
+                  <span className="score-stats" aria-label={t('Round stats')}>
+                    <span className="stat-chip" title={t('Coins collected')}>
                       <span aria-hidden>🪙</span>
                       {roundCoins}
                     </span>
-                    <span className="stat-chip" title="Coins stolen">
+                    <span className="stat-chip" title={t('Coins stolen')}>
                       <span aria-hidden>🦹</span>
                       {roundStolen}
                     </span>
-                    <span className="stat-chip" title="Missions completed">
+                    <span className="stat-chip" title={t('Missions completed')}>
                       <span aria-hidden>🎯</span>
                       {player.objectivesDone ?? 0}
                     </span>
@@ -136,16 +138,16 @@ export function Results({
                 buton "Rematch"; verdikten sonra rakip beklenir. Sunucu iki
                 onayı da görünce odayı lobiye çeker. */}
             <Button onClick={onRematch} disabled={busy || rematchReady}>
-              {rematchReady ? '✅ Rematch — waiting for rival' : 'Rematch'}
+              {rematchReady ? t('✅ Rematch — waiting for rival') : t('Rematch')}
             </Button>
             <p className="muted next-ready-status" aria-live="polite">
               {rematchReady && rivalRematchReady
-                ? 'Both ready — starting a new match…'
+                ? t('Both ready — starting a new match…')
                 : rematchReady
-                  ? 'Waiting for your rival to accept…'
+                  ? t('Waiting for your rival to accept…')
                   : rivalRematchReady
-                    ? 'Your rival wants a rematch. Your turn!'
-                    : 'Both players must accept to start a rematch.'}
+                    ? t('Your rival wants a rematch. Your turn!')
+                    : t('Both players must accept to start a rematch.')}
             </p>
           </>
         ) : (
@@ -153,16 +155,16 @@ export function Results({
             {/* Tur, İKİ oyuncunun da onayıyla başlar. Onay vermeden önce
                 buton "Ready for next round"; verdikten sonra rakip beklenir. */}
             <Button onClick={onApproveNextRound} disabled={busy || nextReady}>
-              {nextReady ? '✅ Ready — waiting for rival' : 'Ready for next round'}
+              {nextReady ? t('✅ Ready — waiting for rival') : t('Ready for next round')}
             </Button>
             <p className="muted next-ready-status" aria-live="polite">
               {nextReady && rivalNextReady
-                ? 'Both ready — starting…'
+                ? t('Both ready — starting…')
                 : nextReady
-                  ? 'Waiting for your rival to accept…'
+                  ? t('Waiting for your rival to accept…')
                   : rivalNextReady
-                    ? 'Your rival is ready. Your turn!'
-                    : 'Both players must accept to start the next round.'}
+                    ? t('Your rival is ready. Your turn!')
+                    : t('Both players must accept to start the next round.')}
             </p>
           </>
         )}

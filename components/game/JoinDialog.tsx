@@ -3,6 +3,7 @@
 import { useRef, useState } from 'react'
 import { Button } from '../ui/Button'
 import { Modal } from '../ui/Modal'
+import { useI18n } from '../../lib/i18n'
 
 type Props = {
   open: boolean
@@ -34,6 +35,7 @@ const sanitize = (value: string) =>
  * join flow matches the rest of the UI.
  */
 export function JoinDialog({ open, onClose, onJoin, busy, backdrop = 'dim' }: Props) {
+  const { t } = useI18n()
   const [code, setCode] = useState('')
   const [touched, setTouched] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -56,17 +58,17 @@ export function JoinDialog({ open, onClose, onJoin, busy, backdrop = 'dim' }: Pr
   return (
     <Modal
       open={open}
-      title="Join a game"
-      subtitle="Enter the 6-character code your friend shared."
+      title={t('Join a game')}
+      subtitle={t('Enter the 6-character code your friend shared.')}
       onClose={onClose}
       backdrop={backdrop}
       footer={
         <>
           <Button variant="ghost" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('Cancel')}
           </Button>
           <Button onClick={submit} disabled={busy || !valid}>
-            {busy ? 'Joining…' : '🔗 Join game'}
+            {busy ? t('Joining…') : t('🔗 Join game')}
           </Button>
         </>
       }
@@ -79,7 +81,7 @@ export function JoinDialog({ open, onClose, onJoin, busy, backdrop = 'dim' }: Pr
         }}
       >
         <label className="field">
-          <span className="field-label">Room code</span>
+          <span className="field-label">{t('Room code')}</span>
           <input
             ref={inputRef}
             data-autofocus
@@ -101,8 +103,7 @@ export function JoinDialog({ open, onClose, onJoin, busy, backdrop = 'dim' }: Pr
         </label>
         {showError && (
           <p id="join-code-error" className="field-error">
-            Codes are {CODE_LENGTH} characters (letters/numbers, e.g. ABC234). Letters I, O and
-            digits 0, 1 are not used.
+            {t('Codes are 6 characters (letters/numbers, e.g. ABC234). Letters I, O and digits 0, 1 are not used.')}
           </p>
         )}
       </form>

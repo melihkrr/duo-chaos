@@ -7,6 +7,7 @@ import { AvatarPicker } from './AvatarPicker'
 import { JoinDialog } from './JoinDialog'
 import type { ProgressApi } from '../../lib/useProgress'
 import { saveName } from '../../lib/useRoom'
+import { useI18n } from '../../lib/i18n'
 
 type Props = {
   progress: ProgressApi
@@ -29,6 +30,7 @@ const STEPS = [
 const NAME_MAX = 16
 
 export function Home({ progress, onCreate, onJoin, onPlayBot, busy, error, initialName = '' }: Props) {
+  const { t } = useI18n()
   const { profile, progress: raw, online } = progress
   const [joinOpen, setJoinOpen] = useState(false)
   const [name, setName] = useState(initialName)
@@ -67,13 +69,12 @@ export function Home({ progress, onCreate, onJoin, onPlayBot, busy, error, initi
 
       <div className="home-grid">
         <section className="hero">
-          <p className="eyebrow">✨ 2-player realtime party duel</p>
+          <p className="eyebrow">{t('✨ 2-player realtime party duel')}</p>
           <h1>
             DUO <span>CHAOS</span>
           </h1>
           <p className="lede">
-            Two players. One arena. Grab the coins your mission asks for, steal from your rival, and
-            finish with the highest score. Fast, chaotic, and best played with a friend.
+            {t('Two players. One arena. Grab the coins your mission asks for, steal from your rival, and finish with the highest score. Fast, chaotic, and best played with a friend.')}
           </p>
 
           <div className="name-row">
@@ -81,11 +82,11 @@ export function Home({ progress, onCreate, onJoin, onPlayBot, busy, error, initi
               avatar={raw.avatar}
               level={profile.level}
               onSelect={(id) => void progress.setCosmetics({ avatar: id })}
-              label="Choose your animal"
+              label={t('Choose your animal')}
               backdrop="light"
             />
             <label className="field name-field">
-              <span className="field-label">Your name</span>
+              <span className="field-label">{t('Your name')}</span>
               <input
                 className="name-input"
                 value={name}
@@ -95,17 +96,17 @@ export function Home({ progress, onCreate, onJoin, onPlayBot, busy, error, initi
                   setName(nextName)
                   saveName(nextName)
                 }}
-                placeholder="e.g. Little Panda"
+                placeholder={t('e.g. Little Panda')}
                 maxLength={NAME_MAX}
                 autoComplete="nickname"
                 spellCheck={false}
-                aria-label="Your display name"
+                aria-label={t('Your display name')}
               />
-              <small className="muted">Your rival will see this name and animal.</small>
+              <small className="muted">{t('Your rival will see this name and animal.')}</small>
             </label>
           </div>
 
-          <div className="mode-toggle" role="tablist" aria-label="Game mode">
+          <div className="mode-toggle" role="tablist" aria-label={t('Game mode')}>
             <button
               type="button"
               role="tab"
@@ -114,7 +115,7 @@ export function Home({ progress, onCreate, onJoin, onPlayBot, busy, error, initi
               onClick={() => setMode('friend')}
               disabled={busy}
             >
-              <span aria-hidden>👥</span> Play with a Friend
+              <span aria-hidden>👥</span> {t('Play with a Friend')}
             </button>
             <button
               type="button"
@@ -124,7 +125,7 @@ export function Home({ progress, onCreate, onJoin, onPlayBot, busy, error, initi
               onClick={() => setMode('bot')}
               disabled={busy}
             >
-              <span aria-hidden>🤖</span> Play vs Bot
+              <span aria-hidden>🤖</span> {t('Play vs Bot')}
             </button>
           </div>
 
@@ -132,42 +133,42 @@ export function Home({ progress, onCreate, onJoin, onPlayBot, busy, error, initi
             {mode === 'friend' ? (
               <>
                 <Button onClick={() => onCreate(trimmed)} disabled={busy || !nameValid}>
-                  {busy ? 'Creating…' : '🎉 Create a game'}
+                  {busy ? t('Creating…') : t('🎉 Create a game')}
                 </Button>
                 <Button variant="ghost" onClick={() => setJoinOpen(true)} disabled={busy || !nameValid}>
-                  🔗 Join with code
+                  {t('🔗 Join with code')}
                 </Button>
               </>
             ) : (
               <Button onClick={() => onPlayBot(trimmed)} disabled={busy || !nameValid}>
-                {busy ? 'Starting…' : '🤖 Play vs Bot'}
+                {busy ? t('Starting…') : `🤖 ${t('Play vs Bot')}`}
               </Button>
             )}
           </div>
           {mode === 'bot' && (
             <p className="muted bot-hint">
-              Single-player match against a medium-difficulty bot. Same rules, same arena.
+              {t('Single-player match against a medium-difficulty bot. Same rules, same arena.')}
             </p>
           )}
           {!nameValid && (
-            <p className="muted name-hint">Pick a name (at least 2 characters) to start.</p>
+            <p className="muted name-hint">{t('Pick a name (at least 2 characters) to start.')}</p>
           )}
-          {error && <p className="error">{error}</p>}
+          {error && <p className="error">{t(error)}</p>}
         </section>
 
         <aside className="home-side">
           <Panel
-            title="Your profile"
+            title={t('Your profile')}
             className="profile-card"
           >
             <div className="profile-row">
               <div className="profile-level">
                 <strong>{profile.level}</strong>
-                <small>Level</small>
+                <small>{t('Level')}</small>
               </div>
               <div className="profile-meta">
-                <p className="profile-title">{profile.title}</p>
-                <div className="xp-bar" aria-label="XP progress">
+                <p className="profile-title">{t(profile.title)}</p>
+                <div className="xp-bar" aria-label={t('XP progress')}>
                   <span style={{ width: `${Math.round(profile.progress * 100)}%` }} />
                 </div>
                 <small className="muted">
@@ -184,8 +185,8 @@ export function Home({ progress, onCreate, onJoin, onPlayBot, busy, error, initi
                   {step.icon}
                 </span>
                 <div className="step-text">
-                  <strong>{step.title}</strong>
-                  <small>{step.text}</small>
+                  <strong>{t(step.title)}</strong>
+                  <small>{t(step.text)}</small>
                 </div>
                 <span className="step-num">{index + 1}</span>
               </li>

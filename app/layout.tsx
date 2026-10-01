@@ -1,6 +1,7 @@
 import { Analytics } from '@vercel/analytics/next'
 import type { Metadata, Viewport } from 'next'
 import { Nunito } from 'next/font/google'
+import { I18nProvider } from '../lib/i18n'
 import {
   OG_IMAGE,
   SITE_DESCRIPTION,
@@ -115,7 +116,7 @@ export default function RootLayout({
         />
       </head>
       <body className="antialiased">
-        {children}
+        <I18nProvider>{children}</I18nProvider>
         {process.env.NODE_ENV === 'production' && <Analytics />}
       </body>
     </html>

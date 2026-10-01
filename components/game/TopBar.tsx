@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Button } from '../ui/Button'
 import { isMuted, toggleMuted, unlockAudio } from '../../lib/sound'
+import { useI18n } from '../../lib/i18n'
 
 type Props = {
   code: string | null
@@ -30,6 +31,7 @@ type Props = {
  * KESİN karar veririz ve `topbar-wrapped` sınıfını buna göre uygularız.
  */
 export function TopBar({ code, onLeave, showLeave = false }: Props) {
+  const { language, setLanguage, t } = useI18n()
   const [muted, setMuted] = useState(() => isMuted())
   // Üç öğe tek satıra sığmıyor mu? True iken oda kodu alt satıra iner.
   const [wrapped, setWrapped] = useState(false)
@@ -129,11 +131,22 @@ export function TopBar({ code, onLeave, showLeave = false }: Props) {
 
       {code && (
         <div className="topbar-meta" ref={metaRef}>
-          <span className="room-code">Room {code}</span>
+          <span className="room-code">{t('Room {code}', { code })}</span>
         </div>
       )}
 
       <div className="topbar-actions" ref={actionsRef}>
+        <label className="language-picker">
+          <span className="sr-only">{t('Select language')}</span>
+          <select
+            value={language}
+            onChange={(event) => setLanguage(event.target.value as 'en' | 'tr')}
+            aria-label={t('Select language')}
+          >
+            <option value="en">🇬🇧 EN</option>
+            <option value="tr">🇹🇷 TR</option>
+          </select>
+        </label>
         <Button
           variant="ghost"
           className="icon-btn"
@@ -141,13 +154,13 @@ export function TopBar({ code, onLeave, showLeave = false }: Props) {
             unlockAudio()
             setMuted(toggleMuted())
           }}
-          aria-label={muted ? 'Unmute' : 'Mute'}
+          aria-label={muted ? t('Unmute') : t('Mute')}
         >
           {muted ? '🔇' : '🔊'}
         </Button>
         {(code || showLeave) && (
           <Button variant="ghost" onClick={onLeave}>
-            Leave
+            {t('Leave')}
           </Button>
         )}
       </div>

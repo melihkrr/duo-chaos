@@ -6,6 +6,7 @@ import { Panel } from '../ui/Panel'
 import { AvatarPicker } from './AvatarPicker'
 import { avatarGlyph } from '../../lib/config'
 import type { AvatarId, Player } from '../../lib/types'
+import { useI18n } from '../../lib/i18n'
 
 type Props = {
   code: string
@@ -44,6 +45,7 @@ export function Lobby({
   busy,
   error,
 }: Props) {
+  const { t } = useI18n()
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(players[0]?.name ?? '')
 
@@ -55,11 +57,11 @@ export function Lobby({
 
   return (
     <Panel
-      title="Lobby"
-      subtitle={`Room ${code}`}
+      title={t('Lobby')}
+      subtitle={t('Room {code}', { code })}
       actions={
         <Button variant="soft" onClick={onCopy}>
-          Copy invite
+          {t('Copy invite')}
         </Button>
       }
       className="lobby"
@@ -81,7 +83,7 @@ export function Lobby({
                   level={level}
                   onSelect={onSelectAvatar}
                   variant="seat"
-                  label="Change your animal"
+                  label={t('Change your animal')}
                 />
               ) : (
                 <span className="seat-avatar" aria-hidden>
@@ -101,12 +103,12 @@ export function Lobby({
                     }}
                     maxLength={NAME_MAX}
                     autoFocus
-                    aria-label="Your display name"
+                    aria-label={t('Your display name')}
                   />
                 ) : (
-                  <strong>{filled ? player?.name ?? 'Player' : 'Waiting…'}</strong>
+                  <strong>{filled ? player?.name ?? t('Player') : t('Waiting…')}</strong>
                 )}
-                <small className="muted">{isMe ? 'You' : 'Rival'}</small>
+                <small className="muted">{isMe ? t('You') : t('Rival')}</small>
               </div>
               {isMe && !editing ? (
                 <button
@@ -116,7 +118,7 @@ export function Lobby({
                     setDraft(player?.name ?? '')
                     setEditing(true)
                   }}
-                  aria-label="Edit your name"
+                  aria-label={t('Edit your name')}
                 >
                   ✏️
                 </button>
@@ -131,14 +133,14 @@ export function Lobby({
       <div className="lobby-foot">
         {isHost ? (
           <Button onClick={onStart} disabled={!ready || busy}>
-            {ready ? 'Start match' : 'Waiting for rival…'}
+            {ready ? t('Start match') : t('Waiting for rival…')}
           </Button>
         ) : (
-          <p className="muted">Waiting for the host to start…</p>
+          <p className="muted">{t('Waiting for the host to start…')}</p>
         )}
         {error ? (
           <p className="form-error" role="alert">
-            {error}
+            {t(error)}
           </p>
         ) : null}
       </div>

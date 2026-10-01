@@ -10,8 +10,10 @@ import { ConfirmDialog } from '../components/ui/ConfirmDialog'
 import { ToastStack } from '../components/ui/Toast'
 import { useBotGame } from '../lib/useBotGame'
 import { useDuoChaos } from '../lib/useDuoChaos'
+import { useI18n } from '../lib/i18n'
 
 export default function Page() {
+  const { t } = useI18n()
   const multiplayer = useDuoChaos()
   const bot = useBotGame()
   // Aktif mod: 'multiplayer' (2 oyunculu, sunucu otoriteli) veya 'bot' (tek
@@ -109,15 +111,15 @@ export default function Page() {
 
         <ConfirmDialog
           open={confirmLeave}
-          title="Leave this game?"
-          subtitle="You'll return to the home screen."
-          confirmLabel="Leave game"
-          cancelLabel="Stay"
+          title={t('Leave this game?')}
+          subtitle={t("You'll return to the home screen.")}
+          confirmLabel={t('Leave game')}
+          cancelLabel={t('Stay')}
           danger
           onConfirm={handleLeave}
           onCancel={() => setConfirmLeave(false)}
         >
-          <p className="muted">Your bot match will be abandoned.</p>
+          <p className="muted">{t('Your bot match will be abandoned.')}</p>
         </ConfirmDialog>
 
         <ToastStack toasts={toast.toasts} onDismiss={toast.dismiss} />
@@ -201,18 +203,18 @@ export default function Page() {
 
       <ConfirmDialog
         open={confirmLeave}
-        title="Leave this game?"
-        subtitle="You'll return to the home screen. Your rival will be notified."
-        confirmLabel="Leave game"
-        cancelLabel="Stay"
+        title={t('Leave this game?')}
+        subtitle={t("You'll return to the home screen. Your rival will be notified.")}
+        confirmLabel={t('Leave game')}
+        cancelLabel={t('Stay')}
         danger
         onConfirm={handleLeave}
         onCancel={() => setConfirmLeave(false)}
       >
         <p className="muted">
           {isHost
-            ? 'As the host, leaving will end the room for both players.'
-            : 'You can rejoin later with the same invite link.'}
+            ? t('As the host, leaving will end the room for both players.')
+            : t('You can rejoin later with the same invite link.')}
         </p>
       </ConfirmDialog>
 

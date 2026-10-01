@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { AVATARS, avatarGlyph } from '../../lib/config'
 import { Modal } from '../ui/Modal'
 import type { AvatarId } from '../../lib/types'
+import { useI18n } from '../../lib/i18n'
 
 type Props = {
   /** Şu an seçili avatar. */
@@ -53,6 +54,7 @@ export function AvatarPicker({
   className,
   backdrop = 'dim',
 }: Props) {
+  const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const glyph = avatarGlyph(avatar)
 
@@ -69,8 +71,8 @@ export function AvatarPicker({
           .filter(Boolean)
           .join(' ')}
         onClick={() => setOpen(true)}
-        aria-label={label}
-        title={label}
+        aria-label={t(label)}
+        title={t(label)}
       >
         <span className="avatar-trigger-glyph" aria-hidden>
           {glyph}
@@ -82,12 +84,12 @@ export function AvatarPicker({
 
       <Modal
         open={open}
-        title="Choose your animal"
-        subtitle="Your rival sees this avatar in the arena."
+        title={t('Choose your animal')}
+        subtitle={t('Your rival sees this avatar in the arena.')}
         onClose={() => setOpen(false)}
         backdrop={backdrop}
       >
-        <div className="avatar-grid" role="radiogroup" aria-label="Choose your animal avatar">
+        <div className="avatar-grid" role="radiogroup" aria-label={t('Choose your animal avatar')}>
           {AVATARS.map((option) => {
             const locked = level < option.minLevel
             const active = avatar === option.id
@@ -101,13 +103,13 @@ export function AvatarPicker({
                   .filter(Boolean)
                   .join(' ')}
                 disabled={locked}
-                title={locked ? `Unlocks at level ${option.minLevel}` : option.label}
+                title={locked ? t('Unlocks at level {level}', { level: option.minLevel }) : t(option.label)}
                 onClick={() => choose(option.id)}
               >
                 <span className="avatar-glyph" aria-hidden>
                   {option.glyph}
                 </span>
-                <small>{option.label}</small>
+                <small>{t(option.label)}</small>
                 {locked ? (
                   <span className="avatar-lock" aria-hidden>
                     🔒

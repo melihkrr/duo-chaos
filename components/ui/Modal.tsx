@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useSyncExternalStore, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { useI18n } from '../../lib/i18n'
 
 type Props = {
   open: boolean
@@ -40,6 +41,7 @@ type Props = {
  * kaldırır.
  */
 export function Modal({ open, title, subtitle, onClose, children, footer, backdrop = 'dim' }: Props) {
+  const { t } = useI18n()
   const panelRef = useRef<HTMLDivElement>(null)
   const previouslyFocused = useRef<HTMLElement | null>(null)
   // Portal yalnızca istemcide çalışır. `useSyncExternalStore` ile sunucuda
@@ -136,7 +138,7 @@ export function Modal({ open, title, subtitle, onClose, children, footer, backdr
             <h2>{title}</h2>
             {subtitle && <p className="muted">{subtitle}</p>}
           </div>
-          <button type="button" className="modal-close" onClick={onClose} aria-label="Close dialog">
+          <button type="button" className="modal-close" onClick={onClose} aria-label={t('Close dialog')}>
             ✕
           </button>
         </header>

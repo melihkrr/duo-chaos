@@ -1,6 +1,7 @@
 'use client'
 
 import type { CosmeticsApi } from '../../lib/useCosmetics'
+import { useI18n } from '../../lib/i18n'
 
 type Props = {
   cosmetics: CosmeticsApi
@@ -9,6 +10,7 @@ type Props = {
 
 /** Emote ve iz (trail) seçimi. Seviye kilidi uygulanır. */
 export function CosmeticsPicker({ cosmetics, level }: Props) {
+  const { t } = useI18n()
   const {
     emote,
     trail,
@@ -23,7 +25,7 @@ export function CosmeticsPicker({ cosmetics, level }: Props) {
   return (
     <div className="cosmetics">
       <div className="cosmetics-group">
-        <span className="cosmetics-label">Emote</span>
+        <span className="cosmetics-label">{t('Emote')}</span>
         <div className="chip-row">
           {emoteOptions.map((option) => {
             const locked = level < option.minLevel
@@ -44,10 +46,10 @@ export function CosmeticsPicker({ cosmetics, level }: Props) {
                 disabled={disabled}
                 title={
                   locked
-                    ? `Unlocks at level ${option.minLevel}`
+                    ? t('Unlocks at level {level}', { level: option.minLevel })
                     : emoteOnCooldown
-                      ? 'Emote cooldown…'
-                      : option.label
+                      ? t('Emote cooldown…')
+                      : t(option.label)
                 }
                 onClick={() => {
                   setEmote(option.id)
@@ -55,7 +57,7 @@ export function CosmeticsPicker({ cosmetics, level }: Props) {
                 }}
               >
                 <span aria-hidden>{option.glyph}</span>
-                <small>{option.label}</small>
+                <small>{t(option.label)}</small>
               </button>
             )
           })}
@@ -63,7 +65,7 @@ export function CosmeticsPicker({ cosmetics, level }: Props) {
       </div>
 
       <div className="cosmetics-group">
-        <span className="cosmetics-label">Trail</span>
+        <span className="cosmetics-label">{t('Trail')}</span>
         <div className="chip-row">
           {trailOptions.map((option) => {
             const locked = level < option.minLevel
@@ -73,11 +75,11 @@ export function CosmeticsPicker({ cosmetics, level }: Props) {
                 type="button"
                 className={['chip', trail === option.id ? 'active' : '', locked ? 'locked' : ''].join(' ')}
                 disabled={locked}
-                title={locked ? `Unlocks at level ${option.minLevel}` : option.label}
+                title={locked ? t('Unlocks at level {level}', { level: option.minLevel }) : t(option.label)}
                 onClick={() => setTrail(option.id)}
               >
                 <span className="trail-swatch" style={{ background: option.color }} aria-hidden />
-                <small>{option.label}</small>
+                <small>{t(option.label)}</small>
               </button>
             )
           })}
