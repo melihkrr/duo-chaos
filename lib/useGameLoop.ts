@@ -898,49 +898,65 @@ export const useGameLoop = (deps: LoopDeps) => {
       // istemci ile sunucu arasında ayrışıyordu.
       //
       // OTORİTE DURUM (0035): `duo_collect` artık eylem sonrası TAM durumu
-      // (`state`) döndürür. Yanıtı SIRAYLA uygularız; böylece aynı karede
-      // birden fazla coin toplandığında bile ilerleme/sayaçlar sunucunun
-      // onayladığı SON değere yakınsar ve görev tamamlanması + yeni görev
-      // ataması ANINDA (yoklamayı beklemeden) yansır.
-      void (async () => {
-        // ÖNCE konumu tazele (await) — sunucu menzili bu konumla doğrular.
-        try {
-          await call('duo_move', { p_token: token, p_x: nextX, p_y: nextY })
-        } catch {
-          // Konum tazeleme başarısız olsa bile toplamayı yine de deneriz.
-        }
+      // (`state`) döndürür. Yanıtı uygularız; böylece aynı karede birden fazla
+      // coin toplandığında bile ilerleme/sayaçlar sunucunun onayladığı SON
+      // değere yakınsar ve görev tamamlanması + yeni görev ataması ANINDA
+      // (yoklamayı beklemeden) yansır.
+      //
+      // GECİKME OPTİMİZASYONU (KÖK SORUN: "görev ilerlemesi geç görünüyor"):
+      //   Eski kod `await duo_move` → SONRA her coin için `await duo_collect`
+      //   şeklinde SIRALI bir zincir kuruyordu. Bu, ilerlemenin ekrana
+      //   yansımasından önce EN AZ 2 tam ağ gidiş-dönüşü (RTT) beklemek
+      //   demekti: bir RTT konum tazeleme, bir RTT de toplama. Gerçek ağda bu
+      //   100–400 ms'lik bir gecikme yaratıyordu.
+      //
+      //   ÇÖZÜM: Konum tazelemeyi ve TÜM toplamaları EŞZAMANLI (concurrent)
+      //   göndeririz. Bu GÜVENLİDİR çünkü:
+      //     * `duo_move` idempotenttir (yalnızca `x/y` yazar).
+      //     * `duo_collect` sunucuda oyuncu satırını `FOR UPDATE` ile
+      //       serileştirir (0039) ve menzili kendi sakladığı konumla doğrular;
+      //       eşzamanlı çağrılar atomik olarak sıraya girer, hiçbiri kaybolmaz
+      //       veya çift sayılmaz.
+      //     * Konum tazeleme yine de gönderilir (fire-and-forget), böylece
+      //       "oyuncu coine yeni vardı, sunucudaki konum bayat" yarışı
+      //       düzelmeye devam eder. `duo_collect` menzil doğrulaması sunucunun
+      //       EN SON konumunu kullanır; 60 Hz `publishMove` heartbeat'i de
+      //       konumu sürekli tazeler.
+      //   Böylece ilerleme, ilk `duo_collect` yanıtı döner dönmez (tek RTT)
+      //   uygulanır — sıralı zincirin ekstra RTT'si ortadan kalkar.
+      //
+      //   NOT: Bu bir gecikme/debounce/retry DEĞİLDİR ve iyimser/sahte
+      //   ilerleme ÜRETMEZ. İlerleme yine YALNIZCA sunucunun döndürdüğü
+      //   otoriter `state`'ten gelir; yalnızca ağ sıralaması optimize edilir.
+      if (collectedIds.length > 0) {
+        // Konum tazeleme: eşzamanlı gönderilir, yanıtı beklenmez.
+        void call('duo_move', { p_token: token, p_x: nextX, p_y: nextY }).catch(() => undefined)
+        // Tüm toplamaları EŞZAMANLI gönder; her yanıt geldiği anda uygula.
         for (const coinId of collectedIds) {
-          try {
-            const res = await call('duo_collect', { p_token: token, p_coin_id: coinId })
-            applyServerState(res)
-          } catch {
-            // Sunucu reddederse (too_far / already_collected) sessizce geç.
-          }
+          void call('duo_collect', { p_token: token, p_coin_id: coinId })
+            .then((res) => applyServerState(res))
+            .catch(() => undefined)
         }
-      })()
+      }
     }
     if (stealing) {
       broadcast('steal', { by: playerId })
       // YARIŞ ÖNLEME (KRİTİK): Sunucu `duo_steal` menzilini KENDİ sakladığı
-      // `x/y` ile doğrular. Yukarıdaki `duo_move` çağrısı "fire-and-forget"
-      // olduğundan, `duo_steal` ondan ÖNCE işlenirse sunucudaki konum BAYAT
-      // kalır ve çalma `too_far` ile REDDEDİLİR → "steal çalışmıyor". Bu yüzden
-      // önce konumu tazeleyip (await) SONRA çalmayı göndeririz.
-      void (async () => {
-        try {
-          await call('duo_move', { p_token: token, p_x: nextX, p_y: nextY })
-        } catch {
-          // Konum tazeleme başarısız olsa bile çalmayı yine de deneriz.
-        }
-        try {
-          const res = await call('duo_steal', { p_token: token })
-          applyServerState(res)
-        } catch {
-          // Sunucu reddederse (too_far vb.) sessizce yut; yerel iyimser
-          // geri bildirim zaten verildi, sunucu otoritesi sonraki yoklamada
-          // düzeltir.
-        }
-      })()
+      // `x/y` ile doğrular. Konumu tazelemezsek, `duo_steal` sunucudaki BAYAT
+      // konumla doğrulanır ve çalma `too_far` ile REDDEDİLİR → "steal
+      // çalışmıyor".
+      //
+      // GECİKME OPTİMİZASYONU: Eski kod `await duo_move` → SONRA `await
+      // duo_steal` şeklinde SIRALI iki RTT bekliyordu. Artık konum tazelemeyi
+      // ve çalmayı EŞZAMANLI göndeririz (collect yolundaki ile aynı gerekçe):
+      // `duo_move` idempotent, `duo_steal` sunucuda `FOR UPDATE` ile
+      // serileştirilir (0039). Konum tazeleme yine gönderilir (fire-and-forget)
+      // ve 60 Hz `publishMove` heartbeat'i sunucu konumunu sürekli tazeler;
+      // böylece menzil doğrulaması doğru kalırken ekstra RTT ortadan kalkar.
+      void call('duo_move', { p_token: token, p_x: nextX, p_y: nextY }).catch(() => undefined)
+      void call('duo_steal', { p_token: token })
+        .then((res) => applyServerState(res))
+        .catch(() => undefined)
     }
     // SKOR YAYINI YOK: puan artık sunucunun tekelindedir. İstemci skoru ne
     // üretir ne de rakibe yayınlar; her iki taraf da `duo_public_state`
