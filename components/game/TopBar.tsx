@@ -33,12 +33,30 @@ type Props = {
 export function TopBar({ code, onLeave, showLeave = false }: Props) {
   const { language, setLanguage, t } = useI18n()
   const [muted, setMuted] = useState(() => isMuted())
+  const [languageMenuOpen, setLanguageMenuOpen] = useState(false)
   // Üç öğe tek satıra sığmıyor mu? True iken oda kodu alt satıra iner.
   const [wrapped, setWrapped] = useState(false)
   const barRef = useRef<HTMLElement | null>(null)
   const brandRef = useRef<HTMLDivElement | null>(null)
   const metaRef = useRef<HTMLDivElement | null>(null)
   const actionsRef = useRef<HTMLDivElement | null>(null)
+  const languagePickerRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (!languageMenuOpen) return
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (!languagePickerRef.current?.contains(event.target as Node)) setLanguageMenuOpen(false)
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setLanguageMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', closeOnOutsideClick)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsideClick)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [languageMenuOpen])
 
   // Ölçüm: marka + oda kodu + butonların doğal genişlikleri + aralarındaki
   // boşluklar, çubuğun iç genişliğine sığıyor mu? Sığmıyorsa `wrapped = true`.
@@ -136,17 +154,43 @@ export function TopBar({ code, onLeave, showLeave = false }: Props) {
       )}
 
       <div className="topbar-actions" ref={actionsRef}>
-        <label className="language-picker">
-          <span className="sr-only">{t('Select language')}</span>
-          <select
-            value={language}
-            onChange={(event) => setLanguage(event.target.value as 'en' | 'tr')}
+        <div className="language-picker" ref={languagePickerRef}>
+          <button
+            type="button"
+            className="language-trigger"
             aria-label={t('Select language')}
+            aria-expanded={languageMenuOpen}
+            aria-haspopup="listbox"
+            onClick={() => setLanguageMenuOpen((open) => !open)}
           >
-            <option value="en">🇬🇧 EN</option>
-            <option value="tr">🇹🇷 TR</option>
-          </select>
-        </label>
+            <LanguageFlag language={language} />
+            <span>{language.toUpperCase()}</span>
+            <svg className="language-chevron" viewBox="0 0 12 8" aria-hidden="true">
+              <path d="m1 1 5 5 5-5" />
+            </svg>
+          </button>
+          {languageMenuOpen && (
+            <div className="language-menu" role="listbox" aria-label={t('Select language')}>
+              {(['tr', 'en'] as const).map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  role="option"
+                  aria-selected={language === option}
+                  className={`language-option${language === option ? ' selected' : ''}`}
+                  onClick={() => {
+                    setLanguage(option)
+                    setLanguageMenuOpen(false)
+                  }}
+                >
+                  <LanguageFlag language={option} />
+                  <span>{option === 'tr' ? t('Turkish') : t('English')}</span>
+                  <span className="language-option-code">{option.toUpperCase()}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <Button
           variant="ghost"
           className="icon-btn"
@@ -165,5 +209,24 @@ export function TopBar({ code, onLeave, showLeave = false }: Props) {
         )}
       </div>
     </header>
+  )
+}
+
+function LanguageFlag({ language }: { language: 'en' | 'tr' }) {
+  return language === 'tr' ? (
+    <svg className="language-flag" viewBox="0 0 24 16" aria-hidden="true">
+      <rect width="24" height="16" rx="2" fill="#e30a17" />
+      <circle cx="10" cy="8" r="4.2" fill="#fff" />
+      <circle cx="11.3" cy="8" r="3.35" fill="#e30a17" />
+      <path d="m15.1 5.35.8 1.86 2-.15-1.53 1.3.5 1.94-1.77-1.05-1.7 1.16.42-1.96-1.58-1.21 2 .04z" fill="#fff" />
+    </svg>
+  ) : (
+    <svg className="language-flag" viewBox="0 0 24 16" aria-hidden="true">
+      <rect width="24" height="16" rx="2" fill="#012169" />
+      <path d="m0 0 24 16M24 0 0 16" stroke="#fff" strokeWidth="4" />
+      <path d="m0 0 24 16M24 0 0 16" stroke="#c8102e" strokeWidth="1.7" />
+      <path d="M12 0v16M0 8h24" stroke="#fff" strokeWidth="6" />
+      <path d="M12 0v16M0 8h24" stroke="#c8102e" strokeWidth="3" />
+    </svg>
   )
 }

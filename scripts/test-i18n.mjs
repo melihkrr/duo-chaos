@@ -22,6 +22,11 @@ const checks = [
     'Round 2 results',
   ],
   [
+    'translates the complete multiplayer leave confirmation subtitle',
+    translateForLanguage("You'll return to the home screen. Your rival will be notified.", 'tr'),
+    'Ana ekrana döneceksin. Rakibine haber verilecek.',
+  ],
+  [
     'translates an objective by stable objective ID',
     localizedObjectiveLabel({ id: 'red-burn', label: 'Collect 2 Red + 1 Emerald' }, 'tr'),
     '2 Kırmızı + 1 Zümrüt Topla',
@@ -42,4 +47,4 @@ const event = localizedChaosEvent({
 assert.equal(event.name, 'Altına Hücum')
 assert.equal(event.description, '15 saniye boyunca daha fazla altın çıkar.')
 console.log('✔ translates dynamic chaos-event content')
-console.log('✔ ALL CHECKS PASSED — 5 localization checks')
+console.log('✔ ALL CHECKS PASSED — 6 localization checks')

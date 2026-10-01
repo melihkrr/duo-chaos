@@ -70,6 +70,8 @@ const TRANSLATIONS: Record<string, string> = {
   Leave: 'Ayrıl',
   'Leave this game?': 'Bu oyundan ayrılmak istiyor musun?',
   "You'll return to the home screen.": 'Ana ekrana döneceksin.',
+  "You'll return to the home screen. Your rival will be notified.":
+    'Ana ekrana döneceksin. Rakibine haber verilecek.',
   'Your bot match will be abandoned.': 'Bot maçın sonlandırılacak.',
   'Leave game': 'Oyundan ayrıl',
   Stay: 'Kal',
