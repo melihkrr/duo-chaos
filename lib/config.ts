@@ -62,37 +62,17 @@ export const ARENA = { minX: 5, maxX: 95, minY: 7, maxY: 93 }
 export const SPAWN = { p1: { x: 18, y: 50 }, p2: { x: 82, y: 50 } }
 
 /**
- * AYNALAMA (mirroring) — yerel oyuncu HER ZAMAN solda başlar.
+ * SPAWN KONUMLARI — AYNALAMA YOK.
  *
- * Kök sorun: Oyun "yerel slot" modeli kullanır — `state.players[0]` her zaman
- * "ben", `state.players[1]` her zaman "rakip"tir (sunucu slotu `p1`/`p2` ne
- * olursa olsun). Ancak spawn konumları sunucu slotuna göre sabittir:
- * `p1 → x=18` (sol), `p2 → x=82` (sağ). Yerel oyuncu sunucuda `p2` olduğunda
- * bile yerel slot 0'a `p1` spawn'ı (18) atanıyordu; kendi konumunu 18'den
- * yayınlıyor, rakip de onu ham 18'de çiziyordu. Sonuç: İKİ oyuncu da kendini
- * solda (18) görüyor, rakip hareket edince "soldaki başlama noktasına
- * ışınlanıyor" gibi görünüyordu.
+ * Online oyunda aynalama (mirroring) YOKTUR. Dünya her iki istemcide de
+ * AYNEN çizilir: `p1` her zaman solda (x=18), `p2` her zaman sağda (x=82)
+ * başlar. Her oyuncu kendi gerçek konumunu görür; biri solda, diğeri sağda.
  *
- * ÇÖZÜM: Yerel oyuncu sunucuda `p2` ise TÜM dünyayı X ekseninde aynalarız
- * (`x' = 100 - x`). Böylece:
- *   - Yerel oyuncu (gerçek x=82) → aynalanır → 18 → ekranda SOLDA ✓
- *   - Rakip (gerçek x=18) → aynalanır → 82 → ekranda SAĞDA ✓
- *   - Her iki istemci de kendini solda, rakibini sağda görür ✓
- *   - Işınlanma yok: rakip yayını (gerçek x) tutarlı biçimde aynalanır ✓
- *
- * Aynalama hem yerel konuma, hem yayınlanan/alınan koordinatlara, hem de
- * arena render'ına (avatar, coin, engel) uygulanır.
+ * Önceki sürümde "yerel oyuncu her zaman solda görünsün" diye tüm dünya
+ * `x' = 100 - x` ile aynalanıyordu. Bu, joystick yönünün ters dönmesi,
+ * rakip konumunun ışınlanması ve skor/konum senkronunun bozulması gibi bir
+ * dizi hataya yol açıyordu. Aynalama tamamen kaldırıldı.
  */
-export const mirrorX = (x: number, mirrored: boolean): number => (mirrored ? 100 - x : x)
-
-/**
- * Yerel oyuncunun EKRANDAKİ spawn konumu. Sunucu slotu `p2` ise `p1` spawn'ı
- * aynalanır; böylece yerel oyuncu her zaman solda başlar.
- */
-export const spawnForLocal = (serverSlot: string): { x: number; y: number } => {
-  const base = spawnFor(serverSlot)
-  return { x: mirrorX(base.x, serverSlot === 'p2'), y: base.y }
-}
 
 /** Arena % koordinatlarında engeller (CSS .obstacle.one / .two ile eşleşir) */
 export const OBSTACLES: Array<{ cx: number; cy: number; w: number; h: number; angleDeg: number }> = [

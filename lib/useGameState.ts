@@ -13,9 +13,12 @@ import type { Coin, Phase, Player, State } from './types'
 
 /**
  * Boş oyuncu. `spawnId` verilirse spawn konumu ONDAN alınır; aksi halde
- * `id`'den. Bu, "yerel slot" (id) ile "sunucu slotu" (spawnId) ayrımını
- * mümkün kılar: yerel oyuncu her zaman `id='p1'` (slot 0) olsa da GERÇEK
- * spawn'ı sunucu slotuna göre belirlenir (bkz. aynalama notu, `config.ts`).
+ * `id`'den.
+ *
+ * AYNALAMA YOK: Yerel state'te slot 0 her zaman "ben", slot 1 her zaman
+ * "rakip"tir. Ancak GERÇEK spawn konumu sunucu slotuna göre belirlenir:
+ * yerel oyuncu sunucuda `p2` ise gerçekten SAĞDA (x=82) başlar ve ekranda da
+ * sağda görünür. Dünya her iki istemcide de aynıdır; kimse aynalanmaz.
  */
 export const blankPlayer = (id: 'p1' | 'p2', spawnId: string = id): Player => ({
   id,
@@ -73,10 +76,8 @@ export type GameStateApi = {
  * `serverSlot`: yerel oyuncunun SUNUCUDAKİ slotu (`'p1'`/`'p2'`). Yerel state
  * her zaman slot 0 = "ben", slot 1 = "rakip" düzenini kullanır; ancak GERÇEK
  * spawn konumları sunucu slotuna göre belirlenir. Yerel oyuncu sunucuda `p2`
- * ise gerçek spawn'ı sağdadır (x=82); render sırasında aynalanarak ekranda
- * SOLDA gösterilir (bkz. `config.ts` aynalama notu). Bu ayrım olmadan iki
- * oyuncu da kendini solda görüp rakibi "soldaki başlama noktasına ışınlanıyor"
- * gibi görünüyordu.
+ * ise gerçek spawn'ı sağdadır (x=82) ve ekranda da SAĞDA görünür. Aynalama
+ * yoktur; dünya her iki istemcide de aynıdır (biri solda, diğeri sağda).
  */
 export const useGameState = (serverSlot: 'p1' | 'p2' = 'p1'): GameStateApi => {
   const [state, setState] = useState<State>(initialState)
@@ -91,22 +92,17 @@ export const useGameState = (serverSlot: 'p1' | 'p2' = 'p1'): GameStateApi => {
   /**
    * SUNUCU SLOTU DEĞİŞİNCE SPAWN'LARI YENİDEN TOHUMLA.
    *
-   * KÖK SORUN ("biri solda biri sağda başlamış gibi gösteriyor, soldaki
-   * hareket ettiği an sağa ışınlanıyor"):
-   *
    * `joinRoom`/`restore` akışında `room.connect(code, slot, ...)` çağrılır ve
    * HEMEN ardından `resetMatch()` çalışır. Ancak `connect` içindeki
    * `setPlayerId(slot)` ASENKRON bir React state güncellemesidir; `resetMatch`
    * çalıştığı anda `serverSlotRef.current` hâlâ ESKİ değerdir (varsayılan
    * `'p1'`). Bu yüzden misafir (`p2`) oyuncunun spawn'ı yanlışlıkla `p1`
-   * konumundan (x=18) tohumlanıyordu. `mirrored` ise `room.playerId === 'p2'`
-   * olduğu için `true` oluyor; render `18`'i aynalayıp oyuncuyu SAĞA koyuyor,
-   * `livePos` ise gerçek `18`'den tohumlandığı için ilk hareket karesinde
-   * oyuncu "ışınlanmış" gibi zıplıyordu.
+   * konumundan (x=18) tohumlanıyordu; oyuncu ilk hareket karesinde gerçek
+   * konumuna "ışınlanmış" gibi zıplıyordu.
    *
    * ÇÖZÜM: Slot gerçekten değiştiğinde (ve maç henüz başlamamışken) spawn
    * konumlarını yeniden tohumlarız. Böylece yerel oyuncunun GERÇEK spawn'ı her
-   * zaman sunucu slotuyla eşleşir; aynalama tutarlı çalışır ve ışınlanma olmaz.
+   * zaman sunucu slotuyla eşleşir (p1 → sol, p2 → sağ) ve ışınlanma olmaz.
    */
   const seededSlotRef = useRef<'p1' | 'p2'>(serverSlot)
   useEffect(() => {

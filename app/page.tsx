@@ -88,7 +88,6 @@ export default function Page() {
           liveRivalPos={game.liveRivalPos}
           celebrateRef={game.celebrateRef}
           rivalLeft={game.rivalLeft}
-          mirrored={game.mirrored}
           onLeaveRoom={() => setConfirmLeave(true)}
         />
       )}

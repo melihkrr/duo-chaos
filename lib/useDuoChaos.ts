@@ -118,42 +118,10 @@ const mapPlayerId = (rawId: string, meId: string): string => (rawId === meId ? '
 const roundSeedFor = (code: string | null | undefined, round: number): string =>
   code ? `${code}:${round}` : `round-${round}`
 
-/**
- * Skor kalıcılığı. `duo_tick` çağrılmadığı için sunucu skoru saklamaz; sayfa
- * yenilendiğinde yerel skor sıfırlanıyordu ("yenileyince puanım sıfırlanıyor").
- * Skoru oda bazında localStorage'da tutarız; `restore` sırasında geri yükleriz.
- */
-const scoreKey = (code: string) => `duo-chaos:score:${code}`
-
-const readScores = (code: string): { p1: number; p2: number } | null => {
-  if (typeof window === 'undefined') return null
-  try {
-    const raw = window.localStorage.getItem(scoreKey(code))
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as { p1?: number; p2?: number }
-    return { p1: Number(parsed.p1) || 0, p2: Number(parsed.p2) || 0 }
-  } catch {
-    return null
-  }
-}
-
-const writeScores = (code: string, scores: { p1: number; p2: number }) => {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.setItem(scoreKey(code), JSON.stringify(scores))
-  } catch {
-    // Kota dolu / gizli mod — sessizce yoksay.
-  }
-}
-
-const clearScores = (code: string) => {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.removeItem(scoreKey(code))
-  } catch {
-    // yoksay
-  }
-}
+// NOT: Skor artık SUNUCUDA tutulur (`duo_players.score`). `duo_tick` periyodik
+// çağrıldığı için `duo_public_state` her zaman gerçek skoru döndürür; sayfa
+// yenilendiğinde `restore` sunucudan skoru geri alır. Bu yüzden istemci-taraflı
+// localStorage skor kalıcılığı (eski workaround) tamamen kaldırıldı.
 
 /**
  * Sunucudan gelen coin satırı. `duo_public_state` / `duo_sync_coins` artık
@@ -243,6 +211,10 @@ type PublicSnapshot = {
   endsAt?: number
   countdownEndsAt?: number
   winner?: string
+  /** Sunucunun tur bazlı skorları (`{ p1, p2 }`). */
+  roundScores?: Record<string, number>
+  /** Sunucunun maç bazlı kümülatif skorları (`{ p1, p2 }`). */
+  matchScores?: Record<string, number>
   /** Sunucu chaos olayını `chaosEvent` adıyla döndürür (id/name/description/boost). */
   chaosEvent?: { id?: string; name?: string; description?: string; boost?: string } | null
   /** Chaos olayının bitiş anı (sunucu epoch ms). */
@@ -399,24 +371,36 @@ export const useDuoChaos = () => {
     return () => window.clearInterval(id)
   }, [state.phase])
 
-  // SKOR HEARTBEAT: Skorumuzu periyodik olarak MUTLAK değerle yeniden yayınlarız.
-  // Skor değişiminde zaten anlık yayın yapılır (bkz. useGameLoop); ancak tek bir
-  // paket kaybolursa rakip yanlış puan görür. Bu heartbeat her iki tarafın da
-  // skorunu birkaç saniye içinde yakınsar ("puanlar birbirinden farklı görünüyor"
-  // sorununun kalıcı çözümü). Yalnızca aktif fazlarda ve sekme görünürken çalışır.
+  // SUNUCU TİKİ (duo_tick) — DÜNYANIN OTORİTESİ.
+  //
+  // KÖK SORUN: `duo_tick` hiç çağrılmadığı için sunucu dünyayı İLERLETMİYORDU:
+  // countdown→battle geçişi, chaos olayları, kaynak dalgaları ve coin
+  // yeniden doğuşu sunucuda hiç tetiklenmiyordu. Bu yüzden istemci skoru ve
+  // konumu "yerel olarak" yönetmek zorunda kalmıştı (kırılgan bir yığın
+  // workaround: localStorage skor, broadcast skor senkronu, istemci-taraflı
+  // kazanan hesabı). Kullanıcı bu yerel yönetimi açıkça reddetti.
+  //
+  // ÇÖZÜM: Aktif fazlarda periyodik olarak `duo_tick` çağırırız. Sunucu artık
+  // fazı ilerletir, chaos'u zamanlar ve coinleri canlandırır. Skor/konum
+  // otoritesi sunucuya döner; istemci yalnızca kendi hareketini yayınlar ve
+  // sunucu snapshot'ını tüketir. İki istemci de aynı `duo_tick`'i çağırsa bile
+  // fonksiyon idempotenttir (zaman damgalarına göre çalışır).
   useEffect(() => {
     if (state.phase !== 'countdown' && state.phase !== 'battle') return
+    const myToken = room.token ?? room.playerId
     const id = window.setInterval(() => {
       if (typeof document !== 'undefined' && document.hidden) return
-      const me = stateRef.current.players[0]
-      const myScore = me?.score ?? 0
-      const myRoundScore = me?.roundScore ?? 0
-      // MUTLAK skor + tur skoru yayınlanır; rakip her heartbeat'te kendini
-      // düzeltir. Böylece kaçan bir paket kalıcı sapma yaratmaz.
-      room.broadcast('score', { by: room.playerId, score: myScore, roundScore: myRoundScore })
-    }, 1_500)
+      void room.call('duo_tick', { p_token: myToken }).catch(() => undefined)
+    }, 1_000)
+    // Faz geçişini geciktirmemek için hemen bir tik at.
+    void room.call('duo_tick', { p_token: myToken }).catch(() => undefined)
     return () => window.clearInterval(id)
   }, [room, state.phase])
+
+  // SKOR HEARTBEAT KALDIRILDI: Skor artık sunucunun tekelindedir. İstemci skoru
+  // ne üretir ne de rakibe yayınlar; her iki taraf da `duo_public_state`
+  // yoklamasından aynı mutlak skoru okur. Böylece "puanlar birbirinden farklı
+  // görünüyor" sorunu kökten çözülür (tek doğruluk kaynağı sunucu).
 
   const cosmetics = useCosmetics(
     { emote: progress.progress.emote, trail: progress.progress.trail },
@@ -502,22 +486,13 @@ export const useDuoChaos = () => {
         noteServerNow(data.serverNow)
         const localEndsAt = toLocal(data.endsAt)
         setState((prev) => {
-          // SKOR OTORİTESİ (İSTEMCİ): `duo_tick` çağrılmadığı için sunucu
-          // `score` sütununu GÜNCELLEMEZ; `duo_advance_phase` bu yüzden
-          // `roundScores`/`matchScores`'u her zaman `{"p1":0,"p2":0}` döndürür.
-          // Sunucu değerlerini körü körüne uygularsak tur sonunda oyuncuların
-          // GERÇEK puanları 0'a düşer ("skorum tur bitince sıfırlandı" hatası).
-          // Bu yüzden sunucu skorları YALNIZCA sıfırdan farklıysa (yani sunucu
-          // gerçekten skor tutuyorsa) uygularız; aksi halde istemci skorunu
-          // koruruz.
+          // SKOR OTORİTESİ (SUNUCU): `duo_tick` artık periyodik çağrıldığı için
+          // sunucu `score` sütununu GERÇEKTEN günceller; `duo_advance_phase`
+          // gerçek `roundScores`/`matchScores`/`winner` döndürür. Bu yüzden
+          // sunucu değerlerini doğrudan uygularız. Sunucu değeri yoksa (eski oda
+          // / geçiş anı) yerel roundScore'lardan üretiriz.
           const serverRound = data.roundScores
           const serverMatch = data.matchScores
-          const serverRoundHasData =
-            !!serverRound && Object.values(serverRound).some((value) => (value ?? 0) !== 0)
-          const serverMatchHasData =
-            !!serverMatch && Object.values(serverMatch).some((value) => (value ?? 0) !== 0)
-          // Tur bittiğinde (`battle` → `results`/`matchover`) istemci kendi
-          // roundScore'larından roundScores'u ve kümülatif matchScores'u üretir.
           let roundScores = prev.roundScores
           let matchScores = prev.matchScores
           if (from === 'battle' && data.phase !== 'battle') {
@@ -530,18 +505,12 @@ export const useDuoChaos = () => {
               p2: (prev.matchScores?.p2 ?? 0) + roundScores.p2,
             }
           }
-          if (serverRoundHasData) roundScores = serverRound as Record<string, number>
-          if (serverMatchHasData) matchScores = serverMatch as Record<string, number>
-          // KAZANAN: Sunucunun `winner` alanına GÜVENMEYİZ (sunucu skoru hep 0
-          // olduğu için eşitlikte `slot asc` ile daima 'p1' döner ve iki oyuncu
-          // da "Victory!" görür). Kazananı kendi `matchScores`'umuzdan hesaplarız.
+          if (serverRound) roundScores = serverRound as Record<string, number>
+          if (serverMatch) matchScores = serverMatch as Record<string, number>
+          // KAZANAN: Sunucu artık skoru tuttuğu için `winner` alanı güvenilirdir.
           const nextPhase = data.phase as Phase
           const winner =
-            nextPhase === 'matchover'
-              ? winnerFromScores(matchScores)
-              : nextPhase === 'results'
-                ? undefined
-                : prev.winner
+            data.winner ?? (nextPhase === 'matchover' ? winnerFromScores(matchScores) : prev.winner)
           return {
             ...prev,
             phase: nextPhase,
@@ -597,12 +566,9 @@ export const useDuoChaos = () => {
     }
   }, [advancePhase])
 
-  // Yerel oyuncu sunucuda `p2` ise arena X ekseninde aynalanır; böylece yerel
-  // oyuncu HER ZAMAN solda, rakip sağda görünür (bkz. `config.ts`). Bu değeri
-  // hem `useGameLoop`'a (girdi yönü için) hem de `Battle`'a (render için)
-  // aynı şekilde geçiririz; ikisi tutarlı olmazsa joystick ters çalışır.
-  const mirrored = room.playerId === 'p2'
-
+  // AYNALAMA YOK. Dünya her iki istemcide de aynen çizilir: `p1` solda,
+  // `p2` sağda başlar. Girdi ve render aynı (ekran = dünya) koordinat
+  // uzayındadır; bu yüzden `useGameLoop`'a ayrıca bir yön bayrağı geçmiyoruz.
   const loop = useGameLoop({
     state,
     setState,
@@ -617,8 +583,6 @@ export const useDuoChaos = () => {
     syncChaos: chaos.sync,
     advancePhase,
     remotePos,
-    // Aynalama açıkken yatay girdiyi negatiflemek için (joystick yönü).
-    mirrored,
   })
 
   // Sanal joystick girdisini döngüye bağlar. `VirtualJoystick` bu setter'ı
@@ -767,11 +731,18 @@ export const useDuoChaos = () => {
     })
 
     // Rakip oyundan ayrıldığında oyunu duraklat ve kullanıcıyı bilgilendir.
+    //
+    // ÖNEMLİ: 'leave' yayını TEK BAŞINA "rakip gitti" demek için yeterli
+    // DEĞİLDİR. Kanal yeniden abone olurken (reconnect) veya sekme arka plana
+    // düşüp geri geldiğinde Supabase istemcisi kısa bir 'leave'/'join' döngüsü
+    // üretebiliyor; bu da iki oyuncu da oynarken yanlış "rakip ayrıldı"
+    // uyarısına yol açıyordu. Bu yüzden yalnızca bir "aday" işaretleriz;
+    // gerçek kararı aşağıdaki `rivalGone` (sürekli yokluk + canlı sinyal yok)
+     // verir.
     const offLeave = room.on('leave', (payload) => {
       const data = payload as { by?: string }
       if (!data || data.by === room.playerId) return
       setRivalLeft(true)
-      playSound('lose')
     })
 
     // RAKİP HÂLÂ OYNUYOR SİNYALİ: Rakip her `move`/`collect`/`steal`/`score`
@@ -832,35 +803,17 @@ export const useDuoChaos = () => {
     // skorunu bu değere EŞİTLERİZ. Delta eklemek yerine eşitlemek, kaçan bir
     // paketin kalıcı sapmaya yol açmasını engeller (her yayın kendini düzeltir).
     // Geriye dönük uyumluluk için `delta` alanı da desteklenir.
+    // SKOR YAYINI — yalnızca CANLILIK sinyali olarak kullanılır.
+    //
+    // Skor artık SUNUCUDA tutulur (`duo_players.score`) ve `duo_public_state`
+    // yoklaması gerçek değeri uygular. Bu yüzden burada rakibin skorunu
+    // broadcast'ten EZMEYİZ; aksi halde iki kaynak (broadcast vs sunucu)
+    // çakışır ve "puanlar birbirinden farklı görünüyor" hatası geri gelir.
+    // Yayını yalnızca "rakip hâlâ oyunda" sinyali olarak değerlendiririz.
     const offScore = room.on('score', (payload) => {
-      const data = payload as { by?: string; score?: number; delta?: number; roundScore?: number }
+      const data = payload as { by?: string }
       if (!data || data.by === room.playerId) return
       noteRivalAlive()
-      const absolute = typeof data.score === 'number' ? data.score : null
-      const delta = typeof data.delta === 'number' ? data.delta : 0
-      if (absolute === null && !delta) return
-      setState((prev) => ({
-        ...prev,
-        players: prev.players.map((player, index) => {
-          if (index !== 1) return player
-          const nextScore = absolute !== null ? absolute : player.score + delta
-          const diff = nextScore - player.score
-          // `roundScore`'u da MUTLAK değerle eşitleyebiliriz (varsa). Aksi halde
-          // diff ile ilerletiriz. Böylece kaçan bir paket kalıcı sapma yaratmaz.
-          const nextRoundScore =
-            typeof data.roundScore === 'number'
-              ? data.roundScore
-              : Math.max(0, (player.roundScore ?? 0) + diff)
-          return {
-            ...player,
-            score: nextScore,
-            roundScore: nextRoundScore,
-            // `totalScore` (maç toplamı) da mutlak skorla birlikte güncellenir;
-            // aksi halde sonuç ekranındaki toplamlar iki tarafta tutmuyordu.
-            totalScore: (player.totalScore ?? 0) + diff,
-          }
-        }),
-      }))
     })
 
     return () => {
@@ -916,66 +869,36 @@ export const useDuoChaos = () => {
           // Sunucudan gelen adı koru; boşsa mevcut adı bırak.
           const serverName = typeof server.name === 'string' && server.name.trim() ? server.name : player.name
           const merged = { ...player, ...server, id: player.id, name: serverName } as Player
-          // OYUN İLERLEMESİ OTORİTESİ (p1): `duo_tick` artık çağrılmadığı için
-          // sunucu coin/görev ilerlemesini GÜNCELLEMEZ. Sunucu snapshot'ındaki
-          // `objectivesDone`, `collectedTypes`, `coins`, `stolen`, `missionDone`,
-          // `objective`, `score` alanları her zaman 0/boş gelir. Bunları
-          // uygularsak her yoklamada (1 sn) oyuncunun ilerlemesi SIFIRLANIR:
-          // "görevi tamamladım ama sayaç artmadı, yeni görev gelmedi" hatası
-          // tam olarak buydu. Bu yüzden p1 için bu alanları client'tan koruruz.
+          // SUNUCU OTORİTESİ (skor + ilerleme): `duo_tick` artık periyodik
+          // çağrıldığı için sunucu skoru, coin/görev ilerlemesini ve
+          // `missionDone`'ı GERÇEKTEN günceller. Bu yüzden bu alanları
+          // sunucudan uygularız — istemci-taraflı skor yönetimi kaldırıldı.
+          // (Kullanıcı "konum ve puan konularını localle yönetmicez" dedi.)
           //
-          // KONUM OTORİTESİ: yerel oyuncunun (p1) x/y'si de HER ZAMAN client'a
-          // aittir. Sunucu snapshot'ı gecikmeli gelir; onu uygularsak oyuncu
-          // her yoklamada geriye zıplar ("donma + birden ilerleme").
-          //
-          // `slowedUntil` de client'a aittir: sunucu bunu KENDİ saatiyle
-          // damgalar; saat farkı yüzünden yanlış yorumlanıp oyuncuyu kalıcı
-          // yavaşlatabilir. Yavaşlama zaten yerel olarak (steal anında) kurulur.
+          // KONUM: yerel oyuncunun (index 0) x/y'si HER ZAMAN yerel döngüye
+          // aittir; sunucu snapshot'ı gecikmeli gelir ve uygularsak oyuncu her
+          // yoklamada geriye zıplar. Rakip (index 1) konumu ise canlı `move`
+          // broadcast'i tazeyse broadcast'ten, değilse sunucudan alınır.
           if (player.id === 'p1') {
             merged.x = player.x
             merged.y = player.y
+            // `slowedUntil` sunucu saatine göre damgalanır; saat farkı yüzünden
+            // yanlış yorumlanmasın diye yerel değeri koruruz.
             merged.slowedUntil = player.slowedUntil
-            merged.coins = player.coins
-            merged.stolen = player.stolen
-            merged.collectedTypes = player.collectedTypes
-            merged.objectivesDone = player.objectivesDone
-            merged.missionDone = player.missionDone
-            merged.objective = player.objective
-            merged.score = player.score
-            merged.roundScore = player.roundScore
           }
-          // Rakip (p2) verisi: sunucu `duo_tick` çağrılmadığı için skoru,
-          // kozmetikleri ve adı GÜNCELLEMEZ (hep 0/boş döner). Bu alanları
-          // sunucudan uygularsak rakip skoru her yoklamada 0'a düşer ve
-          // "rakibim beni 0 görüyor" hatası oluşur. Bu yüzden rakip için de
-          // client-authoritative alanları (broadcast ile gelen) koruruz.
           if (player.id === 'p2') {
-            merged.score = player.score
-            merged.roundScore = player.roundScore
-            merged.totalScore = player.totalScore
-            merged.trail = player.trail
-            merged.emote = player.emote
-            merged.name = player.name
-            merged.objectivesDone = player.objectivesDone
-            merged.missionDone = player.missionDone
             // Rakip konumu: taze bir `move` broadcast'i varsa sunucunun
             // gecikmeli x/y'si ile ezme; broadcast yoksa sunucu değeri
             // otoritedir (yeniden bağlanma / ışınlanma).
-            //
-            // ÖNEMLİ: `move` broadcast'i gönderenin SLOTU ile anahtarlanır.
-            // Yerel oyuncu `p2` ise rakip `p1`'dir; eski kod yalnızca `'rival'`
-            // veya `'p2'` aradığı için `p1` anahtarını bulamıyordu. Bu blok
-            // yalnızca rakip (`p2`) için çalıştığından rakibin slotu `p2`'dir;
-            // yine de `'rival'` geriye dönük anahtarını da deneriz.
-            // Bu turda rakipten canlı broadcast aldıysak sunucu konumunu ASLA
-            // uygulamayız: sunucu x/y'si gecikmeli/bayat olabilir ve rakibi
-            // geriye (spawn'a) zıplatırdı. Yalnızca hiç broadcast görmediysek
-            // (geç katılma / yeniden bağlanma) sunucu konumunu benimseriz.
             const remote = remotePos.current.get('p2') ?? remotePos.current.get('rival')
             if (rivalBroadcastSeenRef.current || (remote && Date.now() - remote.at < REMOTE_POS_TTL)) {
               merged.x = player.x
               merged.y = player.y
             }
+            // Kozmetikler (trail/emote) broadcast ile gelir; sunucu bunları
+            // güncellemez, bu yüzden yerel değerleri koruruz.
+            merged.trail = player.trail
+            merged.emote = player.emote
           }
           return merged
         })
@@ -1007,20 +930,24 @@ export const useDuoChaos = () => {
           // o turun `roundScore`'larını kümülatif `matchScores`'a ekleriz. Bu
           // yol faz geçişini `advancePhase`'ten önce yakalayabilir; biriktirme
           // yapmazsak kazanan eksik skordan hesaplanır.
+          // SKOR OTORİTESİ: `duo_tick` artık çağrıldığı için sunucu
+          // `round_scores`/`match_scores`/`winner` alanlarını GERÇEKTEN
+          // hesaplar. Bu yüzden bunları sunucudan alırız; istemci-taraflı
+          // biriktirme/kazanan hesabı kaldırıldı. Sunucu değeri yoksa (eski
+          // oda / geçiş anı) yerel birikime geri düşeriz.
+          const serverMatchScores =
+            data.matchScores && Object.keys(data.matchScores).length > 0
+              ? data.matchScores
+              : null
           const leavingBattle = prev.phase === 'battle' && phase !== 'battle'
-          const matchScores = leavingBattle
-            ? accumulateMatchScores(prev.matchScores, players)
-            : prev.matchScores
-          // KAZANAN: Sunucunun `winner` alanına GÜVENMEYİZ (sunucu skoru hep 0
-          // olduğu için eşitlikte daima 'p1' döner → iki oyuncu da "Victory!"
-          // görür). `matchover`'a geçildiğinde kazananı kendi `matchScores`'umuzdan
-          // hesaplarız; diğer fazlarda mevcut değeri koruruz.
+          const matchScores =
+            serverMatchScores ??
+            (leavingBattle ? accumulateMatchScores(prev.matchScores, players) : prev.matchScores)
+          // KAZANAN: Sunucunun `winner` alanı artık güvenilirdir (skor sunucuda
+          // tutulur). Sunucu bir kazanan döndürdüyse onu kullanırız; yoksa
+          // `matchover`'da yerel skorlardan hesaplarız.
           const winner =
-            phase === 'matchover'
-              ? winnerFromScores(matchScores)
-              : phase === 'results'
-                ? undefined
-                : prev.winner
+            data.winner ?? (phase === 'matchover' ? winnerFromScores(matchScores) : prev.winner)
           return {
             ...prev,
             phase,
@@ -1144,22 +1071,18 @@ export const useDuoChaos = () => {
         const phaseChanged = nextPhase !== prev.phase
         const coinsChanged = coins !== prev.coins
         if (!phaseChanged && !coinsChanged) return prev
-        // TUR SONU SKOR BİRİKİMİ: `battle`'dan çıkıyorsak o turun
-        // `roundScore`'larını kümülatif `matchScores`'a ekleriz (bkz. battle poll).
+        // SKOR OTORİTESİ: sunucu `match_scores`/`winner` alanlarını hesaplar
+        // (bkz. battle poll). Sunucu değeri varsa onu kullanırız.
+        const serverMatchScores =
+          data.matchScores && Object.keys(data.matchScores).length > 0
+            ? data.matchScores
+            : null
         const leavingBattle = prev.phase === 'battle' && nextPhase !== 'battle'
-        const matchScores = leavingBattle
-          ? accumulateMatchScores(prev.matchScores, prev.players)
-          : prev.matchScores
-        // KAZANAN: Sunucunun `winner` alanına GÜVENMEYİZ (sunucu skoru hep 0
-        // olduğu için eşitlikte daima 'p1' döner → iki oyuncu da "Victory!"
-        // görür). `matchover`'a geçildiğinde kazananı kendi `matchScores`'umuzdan
-        // hesaplarız; diğer fazlarda mevcut değeri koruruz.
+        const matchScores =
+          serverMatchScores ??
+          (leavingBattle ? accumulateMatchScores(prev.matchScores, prev.players) : prev.matchScores)
         const winner =
-          nextPhase === 'matchover'
-            ? winnerFromScores(matchScores)
-            : nextPhase === 'results'
-              ? undefined
-              : prev.winner
+          data.winner ?? (nextPhase === 'matchover' ? winnerFromScores(matchScores) : prev.winner)
         return {
           ...prev,
           phase: nextPhase,
@@ -1230,19 +1153,6 @@ export const useDuoChaos = () => {
       }
     }
   }, [resetRound, room.code, setState, state.phase, state.round])
-
-  // Skoru kalıcı hale getir. `duo_tick` çağrılmadığı için sunucu skoru
-  // saklamaz; sayfa yenilendiğinde yerel skor sıfırlanıyordu. Burada skoru
-  // oda bazında localStorage'a yazarız; `restore` bunu geri yükler.
-  // Yalnızca aktif oyun fazlarında yazarız (home/lobby'de gereksiz yazma yok).
-  useEffect(() => {
-    const code = room.code
-    if (!code) return
-    if (state.phase !== 'countdown' && state.phase !== 'battle' && state.phase !== 'results' && state.phase !== 'matchover') {
-      return
-    }
-    writeScores(code, { p1: state.players[0]?.score ?? 0, p2: state.players[1]?.score ?? 0 })
-  }, [room.code, state.phase, state.players])
 
   // Lobi yoklaması.
   //
@@ -1533,19 +1443,10 @@ export const useDuoChaos = () => {
         await room.connect(normalized, slot, token, data?.name ?? room.name)
         resetMatch()
         if (data?.name) updatePlayer('p1', { name: data.name })
-        // Skoru geri yükle: sayfa yenilendiğinde puan sıfırlanmasın.
-        //
-        // ÖNEMLİ: `writeScores` KÜMÜLATİF maç skorunu (`score`) saklar, tur
-        // skorunu (`roundScore`) DEĞİL. Eski kod `roundScore`'u da kümülatif
-        // skora eşitliyordu; bu yüzden sayfa yenilendiğinde tur skoru yapay
-        // olarak şişiyordu ("yenileyince puanım uçtu" hatası). Burada yalnızca
-        // kümülatif skoru geri yükleriz; `roundScore` `resetMatch` ile 0'da
-        // kalır (yeni tur başlayınca zaten sıfırdan sayılır).
-        const saved = readScores(normalized)
-        if (saved) {
-          updatePlayer('p1', { score: saved.p1 })
-          updatePlayer('p2', { score: saved.p2 })
-        }
+        // Skor sunucudan gelir: `duo_public_state` yoklaması (lobi/battle)
+        // gerçek `score`/`roundScore` değerlerini uygular. Bu yüzden burada
+        // yerel skor geri yüklemesi YAPMAYIZ (istemci-taraflı workaround
+        // kaldırıldı).
         setPhase('lobby')
         syncUrl(`/play/${normalized}`)
         return true
@@ -1792,8 +1693,6 @@ export const useDuoChaos = () => {
     } catch {
       /* yoksay — yerel çıkış yine de gerçekleşmeli */
     }
-    // Odadan ayrılınca kayıtlı skoru temizle; yeni oyun sıfırdan başlasın.
-    if (room.code) clearScores(room.code)
     await room.disconnect()
     resetMatch()
     setRivalLeft(false)
@@ -1867,12 +1766,20 @@ export const useDuoChaos = () => {
   // `sync` döndürebiliyor; bu yüzden "rakip ayrıldı" kararını presence'a tek
   // başına bırakmayız. Canlı yayın varsa uyarıyı GÖSTERMEYİZ.
   const rivalAliveRecently = rivalAliveAt > 0 && now - rivalAliveAt < RIVAL_ALIVE_TTL_MS
+  // SÜREKLİ YOKLUK: Presence düştüğü ANDA değil, düştükten sonra bir süre
+  // (RIVAL_ALIVE_TTL_MS) boyunca HİÇ canlı sinyal gelmediyse "gitti" deriz.
+  // Bu, kanal yeniden abone olurken oluşan kısa presence boşluklarının yanlış
+  // pozitif üretmesini engeller. `rivalAliveAt === 0` ise (rakip hiç sinyal
+  // göndermedi) presence düşüşünü bekletmeden kabul ederiz.
+  const rivalSilentLongEnough =
+    rivalAliveAt === 0 || now - rivalAliveAt >= RIVAL_ALIVE_TTL_MS
   const rivalGone =
     Boolean(room.code) &&
     presenceTrusted &&
     !withinMatchGrace &&
     !rivalAliveRecently &&
     !room.opponentPresent &&
+    rivalSilentLongEnough &&
     (rivalLeft || inActiveMatch)
 
   return {
@@ -1892,11 +1799,6 @@ export const useDuoChaos = () => {
     livePos,
     liveRivalPos,
     celebrateRef,
-    // Yerel oyuncu sunucuda `p2` ise arena X ekseninde aynalanır; böylece
-    // yerel oyuncu HER ZAMAN solda, rakip sağda görünür (bkz. `config.ts`).
-    // (Yukarıda hesaplanan `mirrored` ile AYNI değer — `useGameLoop`'a da
-    // geçirilir; ikisi tutarlı olmalı.)
-    mirrored,
     createRoom,
     joinRoom,
     restore,

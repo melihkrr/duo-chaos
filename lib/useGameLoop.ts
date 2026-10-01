@@ -17,7 +17,6 @@ import {
   REMOTE_SNAP_DISTANCE,
   STEAL_COOLDOWN_MS,
   STEAL_RADIUS,
-  getCoinValue,
   randomObjective,
 } from './config'
 import { objectiveSatisfied } from './display'
@@ -36,12 +35,6 @@ const REMOTE_SETTLE = 0.25
  * kadar görüneceğini belirler; oyun akışını bloklamaz.
  */
 const OBJECTIVE_CELEBRATE_MS = 1_400
-
-/**
- * Bir görev tamamlandığında kümülatif skora eklenen bonus puan. Skor artık
- * "görev sayısı" değil, toplanan coin + çalınan + görev bonuslarının toplamıdır.
- */
-const OBJECTIVE_BONUS = 25
 
 type LoopDeps = {
   state: State
@@ -71,17 +64,6 @@ type LoopDeps = {
    * başına render tetiklenmez ve hareket akıcı kalır.
    */
   remotePos: React.RefObject<Map<string, { x: number; y: number; at: number }>>
-  /**
-   * Arena X ekseninde aynalanıyor mu? Yerel oyuncu sunucuda `p2` ise `true`.
-   *
-   * KÖK SORUN ("joystick ters çalışıyor"): Girdi (klavye/joystick) EKRAN
-   * uzayındadır; hareket ise GERÇEK (aynalanmamış) koordinatlara uygulanır.
-   * Aynalama açıkken ekranda SAĞA gitmek, gerçek `x`'i ARTIRMAK demektir; ancak
-   * render `x' = 100 - x` uyguladığı için gerçek `x` artışı ekranda SOLA
-   * gidiş olarak görünür. Bu yüzden aynalama açıkken yatay girdiyi (`dx`) NEGATIF
-   * leriz; böylece joystick/klavye ekrandaki yönle birebir uyumlu olur.
-   */
-  mirrored: boolean
 }
 
 const keys = { up: false, down: false, left: false, right: false }
@@ -212,7 +194,6 @@ export const useGameLoop = (deps: LoopDeps) => {
       syncChaos,
       advancePhase,
       remotePos,
-      mirrored,
     } = depsRef.current
 
     // Faz geçişleri.
@@ -265,13 +246,9 @@ export const useGameLoop = (deps: LoopDeps) => {
     dx += joystick.current.x
     dy += joystick.current.y
 
-    // AYNALAMA: Girdi EKRAN uzayındadır, hareket ise GERÇEK koordinatlara
-    // uygulanır. Aynalama açıkken ekranda sağa gitmek gerçek `x`'i artırmak
-    // demektir; ancak render `x' = 100 - x` uyguladığı için bu ekranda SOLA
-    // gidiş olarak görünür. Yatay girdiyi negatifleyerek joystick/klavye
-    // ekrandaki yönle birebir uyumlu hale gelir ("joystick ters çalışıyor"
-    // hatasının çözümü). Dikey eksen aynalanmaz.
-    if (mirrored) dx = -dx
+    // AYNALAMA YOK: Girdi ve hareket aynı (ekran = dünya) koordinat
+    // uzayındadır. Ekranda sağa gitmek gerçek `x`'i artırır; render da
+    // doğrudan `x`'i kullanır. Böylece joystick/klavye yönü her zaman doğal.
 
     // --- Hareket (yerel, iyimser). ---
     //
@@ -405,8 +382,9 @@ export const useGameLoop = (deps: LoopDeps) => {
     }
 
     // --- Toplama (zaman kapılı). ---
+    // Puan hesabı YOK: yalnızca hangi coinlerin toplandığını belirler ve
+    // sunucuya bildiririz. Değer/çeşitlilik sunucuda (`duo_collect`) işlenir.
     let collectedIds: number[] = []
-    let gained = 0
     if (now - lastAction.current >= ACTION_MS) {
       lastAction.current = now
       const nearby = state.coins.filter(
@@ -414,10 +392,6 @@ export const useGameLoop = (deps: LoopDeps) => {
       )
       if (nearby.length > 0) {
         collectedIds = nearby.map((coin) => coin.id)
-        gained = nearby.reduce(
-          (sum, coin) => sum + getCoinValue(coin.type, state.chaosEvent?.id, me.objective),
-          0,
-        )
         playSound('collect')
       }
     }
@@ -440,12 +414,12 @@ export const useGameLoop = (deps: LoopDeps) => {
     //
     // ÖNEMLİ (SAFLIK): `setState` güncelleyicisi SAF olmalıdır. React onu
     // StrictMode'da (geliştirme) veya eşzamanlı render'da BİRDEN FAZLA kez
-    // çağırabilir. Önceden `scoreDelta` bu güncelleyicinin İÇİNDE biriktiriliyor
-    // ve `objectiveHold`/`celebrateRef`/`playSound('win')` gibi YAN ETKİLER de
+    // çağırabilir. Önceden skor bu güncelleyicinin İÇİNDE biriktiriliyor ve
+    // `objectiveHold`/`celebrateRef`/`playSound('win')` gibi YAN ETKİLER de
     // burada tetikleniyordu. Sonuç: skor yayını iki katına çıkıyor, kutlama ve
     // "win" sesi mükerrer çalıyordu. Artık tüm kararları ve yan etkileri
     // güncelleyicinin DIŞINDA, mevcut `state` üzerinden hesaplıyoruz; güncelleyici
-    // yalnızca saf bir dönüşüm yapar.
+    // yalnızca saf bir dönüşüm yapar. SKOR ise tamamen sunucuya aittir.
     const collectedTypes = state.coins
       .filter((coin) => collectedSet.has(coin.id))
       .reduce<Partial<Record<Coin['type'], number>>>(
@@ -465,10 +439,10 @@ export const useGameLoop = (deps: LoopDeps) => {
     }
     const objectiveDone = !me.missionDone && objectiveSatisfied(projected)
 
-    let scoreDelta = 0
-    if (collectedIds.length > 0) scoreDelta += gained
-    if (stealing) scoreDelta += 10
-    if (objectiveDone) scoreDelta += OBJECTIVE_BONUS
+    // SKOR ARTIK SUNUCUDA HESAPLANIR. İstemci yalnızca toplama/çalma olayını
+    // sunucuya bildirir (`duo_collect` / `duo_steal`); puanı `duo_tick` +
+    // `duo_public_state` yoklaması belirler. Burada yerel skor ÜRETMEYİZ ve
+    // rakibe skor YAYINLAMAYIZ — aksi halde sunucu ile istemci çift sayar.
 
     // Yan etkiler (ses/kutlama) güncelleyicinin DIŞINDA, tam olarak bir kez.
     if (objectiveDone) {
@@ -503,13 +477,13 @@ export const useGameLoop = (deps: LoopDeps) => {
           // karede `livePos` ref'i üzerinden doğrudan DOM'a uygulanır; state'e
           // yazmak 60Hz render tetikler ve hareketi bozar. State'teki x/y
           // yalnızca tur başında (spawn) doğru olması yeterlidir.
+          // Yerel görsel geri bildirim: toplanan coin sayısı ve görev ilerlemesi
+          // anında güncellenir. SKOR'a DOKUNMAYIZ — skor sunucudan gelir.
           if (collectedIds.length > 0) {
             changed = true
             next = {
               ...next,
               coins: next.coins + collectedIds.length,
-              score: next.score + gained,
-              roundScore: (next.roundScore ?? 0) + gained,
               collectedTypes,
             }
           }
@@ -518,8 +492,6 @@ export const useGameLoop = (deps: LoopDeps) => {
             next = {
               ...next,
               stolen: next.stolen + 1,
-              score: next.score + 10,
-              roundScore: (next.roundScore ?? 0) + 10,
             }
           }
           // Görev tamamlandıysa: tamamlanma sayacını artır ve YENİ GÖREVİ ANINDA
@@ -536,11 +508,9 @@ export const useGameLoop = (deps: LoopDeps) => {
             next = {
               ...next,
               objectivesDone: (next.objectivesDone ?? 0) + 1,
-              // Görev başına bonus puan (kümülatif skora eklenir).
-              score: next.score + OBJECTIVE_BONUS,
-              roundScore: (next.roundScore ?? 0) + OBJECTIVE_BONUS,
               // YENİ GÖREV ANINDA: bekleme yok. Sayaçlar sıfırlanır ve
-              // rastgele yeni bir görev atanır.
+              // rastgele yeni bir görev atanır. Görev bonusu SKORU sunucu
+              // ekler; burada yalnızca görev durumunu ilerletiriz.
               objective: randomObjective(next.objective?.id),
               coins: 0,
               stolen: 0,
@@ -591,27 +561,10 @@ export const useGameLoop = (deps: LoopDeps) => {
       broadcast('steal', { by: playerId })
       void call('duo_steal', { p_token: token }).catch(() => undefined)
     }
-    // SKOR SENKRONU: `duo_tick` çağrılmadığı için sunucu skoru güncellemez.
-    // Bu yüzden skoru rakibe doğrudan yayınlarız.
-    //
-    // ÖNEMLİ: DELTA değil, MUTLAK skoru yayınlarız. Delta tabanlı senkron
-    // kayıpsızdır: tek bir broadcast kaçarsa (paket kaybı, sekme arka plana
-    // düşmesi) rakip sonsuza dek yanlış puan görür ve düzeltilemez. Mutlak
-    // değer gönderdiğimizde her yayın kendi kendini düzeltir; ayrıca snapshot
-    // yoklaması da aynı mutlak değeri periyodik olarak teyit eder.
-    //
-    // DİKKAT: `depsRef.current.state` bu karede HENÜZ commit edilmemiş olabilir
-    // (setState asenkron). Bu yüzden `score`'u `me.score + scoreDelta` ile
-    // hesaplarız; `roundScore`'u da aynı şekilde ilerletip MUTLAK olarak
-    // yayınlarız. Böylece rakip hem toplam hem tur skorunu doğru görür.
-    if (scoreDelta !== 0) {
-      const myScore = me.score + scoreDelta
-      const myRoundScore = (me.roundScore ?? 0) + scoreDelta
-      // `by` alanı YEREL oyuncunun sunucu slotu olmalı. Sabit `'p1'` yazarsak
-      // misafir (`p2`) kendi skor yayınını "rakipten geldi" sanıp kendi
-      // skorunu rakip slotuna yazar (skorların karşılıklı yanlış görünmesi).
-      broadcast('score', { by: playerId, score: myScore, roundScore: myRoundScore })
-    }
+    // SKOR YAYINI YOK: puan artık sunucunun tekelindedir. İstemci skoru ne
+    // üretir ne de rakibe yayınlar; her iki taraf da `duo_public_state`
+    // yoklamasından aynı mutlak skoru okur. Böylece çift sayma ve "bende
+    // farklı, onda farklı" uyumsuzluğu tamamen ortadan kalkar.
   }, [])
 
   // Ana döngü yalnızca aktif fazlarda (countdown/battle) çalışır.
