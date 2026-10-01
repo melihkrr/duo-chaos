@@ -517,7 +517,7 @@ export function Battle({
         ))}
 
         {state.coins
-          .filter((coin) => !coin.collectedBy)
+          .filter((coin) => !coin.collectedBy && !coin.pendingCollect)
           .map((coin) => (
             <span
               key={coin.id}

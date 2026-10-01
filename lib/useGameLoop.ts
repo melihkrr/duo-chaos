@@ -21,6 +21,7 @@ import {
 } from './config'
 import { objectiveSatisfied } from './display'
 import { resolveMove } from './movement'
+import { markPendingCollect, settlePendingCollect } from './coinCollectionState'
 import { applyAuthoritativeActionState, isRpcSuccess } from './objectiveSync'
 import { playSound } from './sound'
 import type { Coin, Player, State } from './types'
@@ -653,8 +654,8 @@ export const useGameLoop = (deps: LoopDeps) => {
     setState((prev) => {
       let changed = false
 
-      // Only server-confirmed pickups change local coin state. Respawns keep
-      // the original position and type.
+      // Pending pickups are hidden locally, but never alter progress/counters;
+      // only the RPC response can confirm a collection or update objective state.
       //
       // ÖNEMLİ (ELMAS / JACKPOT): Elmas TEK SEFERLİK bir ödüldür. Sunucu
       // (`duo_respawn_coins`) elmasları ASLA canlandırmaz (`type <> 'diamond'`).
@@ -662,7 +663,13 @@ export const useGameLoop = (deps: LoopDeps) => {
       // canlandırıyordu; bu yüzden elmas toplandıktan 3 sn sonra YENİDEN
       // beliriyordu ("elması alsam bile hemen tekrar çıkıyor" hatası). Elması
       // bu mantığın DIŞINDA tutarız: toplandıysa kalıcı olarak toplanmış kalır.
-      const nextCoins = prev.coins.map((coin) => {
+      const pendingState = markPendingCollect(prev, collectedIds, state.round)
+      if (pendingState !== prev) changed = true
+      const nextCoins = pendingState.coins.map((coin) => {
+        if (collectedSet.has(coin.id) && !coin.collectedBy && !coin.pendingCollect) {
+          changed = true
+          return { ...coin, pendingCollect: true }
+        }
         if (
           coin.type !== 'diamond' &&
           coin.collectedBy &&
@@ -797,17 +804,13 @@ export const useGameLoop = (deps: LoopDeps) => {
             const acceptedAt = Date.now()
             const respawnAt = acceptedAt + COIN_RESPAWN_MS
             depsRef.current.setState((prev) => {
-              if (prev.round !== state.round) return prev
-              const accepted = new Set(acceptedIds)
-              return {
-                ...prev,
-                coins: prev.coins.map((coin) => {
-                  if (!accepted.has(coin.id)) return coin
-                  return coin.type === 'diamond'
-                    ? { ...coin, collectedBy: 'p1' as const, respawnAt: undefined }
-                    : { ...coin, collectedBy: 'p1' as const, respawnAt }
-                }),
-              }
+              return settlePendingCollect(
+                prev,
+                collectedIds,
+                acceptedIds,
+                respawnAt,
+                state.round,
+              )
             })
 
             const diamondCoins = acceptedCoins.filter((coin) => coin.type === 'diamond')
@@ -848,6 +851,9 @@ export const useGameLoop = (deps: LoopDeps) => {
           }
         } finally {
           for (const coinId of collectedIds) pendingCollectedCoinIds.current.delete(coinId)
+          depsRef.current.setState((prev) => {
+            return settlePendingCollect(prev, collectedIds, [], 0, state.round)
+          })
         }
       })
     }

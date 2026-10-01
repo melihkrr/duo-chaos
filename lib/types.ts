@@ -146,6 +146,8 @@ export type Coin = {
   y: number
   type: CoinType
   collectedBy?: string
+  /** Hidden on the collecting client while server confirmation is in flight. */
+  pendingCollect?: boolean
   /**
    * Toplandıktan sonra yeniden doğacağı zaman (epoch ms). 0/undefined ise
    * yeniden doğma beklenmiyor. Süre dolunca coin yeni konum + yeni renkle
