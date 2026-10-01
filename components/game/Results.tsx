@@ -67,12 +67,19 @@ export function Results({
           // Yalnızca PUAN gösterilir. Görev/round/match/XP kaldırıldı: puan
           // zaten oyunun tek ölçüsü, XP ise kişisel bir ilerleme verisi.
           //
-          // ÖNEMLİ (MAÇ SONU): Maç bittiğinde (`matchover`) TUR puanı değil,
-          // MAÇ TOPLAMI gösterilir. Aksi halde kazananın puanı yalnızca son
-          // turun puanı gibi görünür ve "puanlar tutmuyor" izlenimi doğar.
-          // Sunucu `total_score`'u `duo_tick` tur bitişinde hesaplar.
+          // ÖNEMLİ (MAÇ SONU — ÇELİŞKİLİ SKOR DÜZELTMESİ): Maç bittiğinde
+          // (`matchover`) TUR puanı değil, MAÇ TOPLAMI gösterilir.
+          //
+          // OTORİTE KAYNAĞI `state.matchScores`'tur: sunucu `duo_tick` tur
+          // bitişinde `match_scores = { p1: total_score, p2: total_score }`
+          // üretir ve bu harita İKİ istemcide de AYNIDIR. Buna karşılık
+          // `player.totalScore` istemci tarafında bayat kalabilir (snapshot
+          // birleştirmesi yerel değeri koruyordu) ve iki istemcide FARKLI
+          // değerler gösterip "değerler birbirini tutmuyor" hatasına yol
+          // açıyordu. Bu yüzden ÖNCE `matchScores`'u, sonra `totalScore`'u
+          // deneriz.
           const score = isMatchOver
-            ? player.totalScore ?? state.matchScores?.[player.id] ?? player.score ?? 0
+            ? state.matchScores?.[player.id] ?? player.totalScore ?? player.score ?? 0
             : player.score ?? 0
           const isWinner = winner === player.id
           return (

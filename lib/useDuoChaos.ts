@@ -1310,6 +1310,28 @@ export const useDuoChaos = () => {
           serverMatchScores ??
           (leavingBattle ? accumulateMatchScores(prev.matchScores, prev.players) : prev.matchScores)
         const roundScores = serverRoundScores ?? prev.roundScores
+        // OYUNCU SKORLARI (ÇELİŞKİLİ MAÇ SONU SKORU DÜZELTMESİ): Sunucu
+        // `duo_tick` tur bitişinde her oyuncunun `score`/`round_score`/
+        // `total_score` alanlarını hesaplar. Bu effect `results`/`matchover`
+        // fazlarında çalıştığı için burada oyuncu satırlarına da sunucu
+        // değerlerini uygularız. Böylece `player.totalScore` istemcide BAYAT
+        // kalmaz ve iki istemci maç sonunda AYNI toplamı gösterir. Yalnızca
+        // sunucu sayısal bir değer döndürdüğünde uygularız (aksi halde mevcut
+        // değeri koruruz).
+        const players =
+          data.players && data.players.length > 0
+            ? prev.players.map((player) => {
+                const server = data.players?.find(
+                  (item) => mapPlayerId(String(item.id), myId) === player.id,
+                )
+                if (!server) return player
+                const next = { ...player }
+                if (typeof server.score === 'number') next.score = server.score
+                if (typeof server.roundScore === 'number') next.roundScore = server.roundScore
+                if (typeof server.totalScore === 'number') next.totalScore = server.totalScore
+                return next
+              })
+            : prev.players
         // ÖNEMLİ (SLOT EŞLEME): Sunucu `winner`'ı SUNUCU slotuyla döndürür;
         // yerel state YEREL slot bekler. `mapPlayerId` ile çeviririz.
         const winner =
@@ -1317,11 +1339,14 @@ export const useDuoChaos = () => {
           (nextPhase === 'matchover' ? winnerFromScores(matchScores) : prev.winner)
         // Skor/kazanan değişimi de "değişiklik" sayılır; aksi halde faz ve coin
         // sabitken sunucunun hesapladığı kazanan/skor uygulanmaz ve istemci
-        // bayat sonuç ekranında takılı kalırdı.
+        // bayat sonuç ekranında takılı kalırdı. Oyuncu satırlarındaki skor
+        // değişimi de (maç sonu toplamı) buraya dahildir.
+        const playersChanged = players !== prev.players
         const scoresChanged =
           matchScores !== prev.matchScores ||
           roundScores !== prev.roundScores ||
-          winner !== prev.winner
+          winner !== prev.winner ||
+          playersChanged
         if (!phaseChanged && !coinsChanged && !scoresChanged) return prev
         // GERİ SAYIM GÜVENCESİ: Faz `countdown`'a geçtiği halde sunucu
         // deadline'ı yoksa/geçmişse yerel bir 3 sn'lik pencere kurarız. Aksi
@@ -1346,6 +1371,7 @@ export const useDuoChaos = () => {
           endsAt: localEndsAt > 0 ? localEndsAt : prev.endsAt,
           countdownEndsAt: effectiveCountdown,
           coins,
+          players,
         }
       })
     }
@@ -1481,6 +1507,10 @@ export const useDuoChaos = () => {
         remotePos.current.clear()
       }
       setState((prev) => {
+        // Sunucu fazı lobiden çıktıysa (host başlattı) yerel fazı da ilerlet.
+        // ÖNEMLİ: `nextPhase` skor otoritesi kararında (`scoresAreAuthoritative`)
+        // kullanıldığı için oyuncu birleştirmesinden ÖNCE tanımlanmalıdır.
+        const nextPhase = data.phase && data.phase !== 'lobby' ? data.phase : prev.phase
         const players =
           data.players && data.players.length > 0
             ? prev.players.map((player) => {
@@ -1491,15 +1521,35 @@ export const useDuoChaos = () => {
                 const serverName =
                   typeof server.name === 'string' && server.name.trim() ? server.name : player.name
                 const merged = { ...player, ...server, id: player.id, name: serverName } as Player
-                // Sunucu `duo_tick` çağrılmadığı için skoru/kozmetikleri VE oyun
-                // ilerlemesini güncellemez (hep 0/boş döner). Lobide de bu
-                // alanları client'tan koruruz; aksi halde geri yüklenen skor,
-                // seçilen iz ve (host oyunu başlatmadan önce) yerel görev her
-                // yoklamada sıfırlanır. `{ ...player, ...server }` yayılımı bu
-                // alanları sunucudan (0/boş) aldığı için açıkça geri yazarız.
-                merged.score = player.score
-                merged.roundScore = player.roundScore
-                merged.totalScore = player.totalScore
+                // SKOR OTORİTESİ (ÇELİŞKİLİ MAÇ SONU SKORU DÜZELTMESİ):
+                // Sunucu `duo_tick` tur bitişinde `score`/`round_score`/
+                // `total_score` alanlarını GERÇEKTEN hesaplar ve `duo_public_state`
+                // bunları döndürür. Önceden bu alanları koşulsuz olarak yerel
+                // değerle EZİYORDUK; bu yüzden `player.totalScore` istemcide
+                // bayat kalıyor ve iki istemci maç sonunda FARKLI toplam
+                // gösteriyordu ("değerler birbirini tutmuyor"). Artık sunucu
+                // anlamlı bir değer döndürdüğünde (sayı ve > 0 ya da tur
+                // ilerlemişse) sunucu değerini UYGULARIZ; yalnızca lobide/geri
+                // yüklemede (sunucu henüz 0 dönerken) yerel değeri koruruz.
+                const serverScore = typeof server.score === 'number' ? server.score : undefined
+                const serverRoundScore =
+                  typeof server.roundScore === 'number' ? server.roundScore : undefined
+                const serverTotalScore =
+                  typeof server.totalScore === 'number' ? server.totalScore : undefined
+                // Lobide (`lobby`) sunucu skoru henüz 0'dır; geri yüklenen skoru
+                // korumak için yerel değeri tutarız. Maç başladıktan sonra
+                // (countdown/battle/results/matchover) sunucu değeri otoritedir.
+                const scoresAreAuthoritative = nextPhase !== 'lobby'
+                merged.score =
+                  scoresAreAuthoritative && serverScore !== undefined ? serverScore : player.score
+                merged.roundScore =
+                  scoresAreAuthoritative && serverRoundScore !== undefined
+                    ? serverRoundScore
+                    : player.roundScore
+                merged.totalScore =
+                  scoresAreAuthoritative && serverTotalScore !== undefined
+                    ? serverTotalScore
+                    : player.totalScore
                 merged.trail = player.trail
                 merged.emote = player.emote
                 merged.coins = player.coins
@@ -1517,8 +1567,6 @@ export const useDuoChaos = () => {
                 return merged
               })
             : prev.players
-        // Sunucu fazı lobiden çıktıysa (host başlattı) yerel fazı da ilerlet.
-        const nextPhase = data.phase && data.phase !== 'lobby' ? data.phase : prev.phase
         // ÖNEMLİ: Misafir lobiden ÇIKARKEN turu yeniden tohumlamalı. Aksi halde
         // misafir ilk turda `initialState`'in varsayılan coin/görev düzenini
         // korur; host ise `duo_start_round` seed'iyle (`CODE:1`) farklı bir düzen
