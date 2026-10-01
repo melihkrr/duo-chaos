@@ -127,7 +127,9 @@ h3 {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  flex-wrap: wrap;
+  /* Sarma YALNIZCA `topbar-wrapped` sınıfıyla (JS ölçümü) etkinleşir; aksi
+     halde tarayıcı taşan öğeyi (bazen butonları) rastgele alta alırdı. */
+  flex-wrap: nowrap;
   width: 100%;
   max-width: 1080px;
   margin: 0 auto 26px;
@@ -137,6 +139,13 @@ h3 {
   background: rgba(255, 255, 255, 0.78);
   backdrop-filter: blur(12px);
   box-shadow: var(--shadow-sm);
+}
+
+/* SIĞMADIĞINDA: oda kodu ALT satıra iner ve ortalanır; marka (solda) ile
+   butonlar (sağda) üst satırda kalır. `flex-wrap: wrap` + oda kodunun
+   `flex-basis: 100%` alması bunu deterministik biçimde sağlar. */
+.topbar-wrapped {
+  flex-wrap: wrap;
 }
 
 /* Oda varken üst çubuk ekranın tepesine SABİTLENİR. `top` güvenli alanı
@@ -158,10 +167,11 @@ h3 {
   letter-spacing: -0.02em;
   font-size: 17px;
   color: var(--ink);
-  /* Marka ile aksiyonlar EŞİT genişlikte esner; böylece ortadaki oda kodu
-     üst satırda GERÇEKTEN ortalanır (space-between ile sadece "arada" kalırdı). */
-  flex: 1 1 0;
-  min-width: 0;
+  /* Marka ile aksiyonlar EŞİT oranda esner; böylece ortadaki oda kodu üst
+     satırda GERÇEKTEN ortalanır. `min-width: max-content` sayesinde içerik
+     asla kırpılmaz; sığmadığında JS ölçümü `topbar-wrapped` sınıfını ekler. */
+  flex: 1 1 auto;
+  min-width: max-content;
 }
 
 .brand-mark {
@@ -192,6 +202,15 @@ h3 {
   min-width: 0;
 }
 
+/* SIĞMADIĞINDA: oda kodu tam genişlik alıp ALT satıra iner ve ortalanır.
+   `order: 3` ile marka (order varsayılan 0) ve aksiyonların ALTINDA kalır;
+   böylece üst satırda marka solda, butonlar sağda kalır. */
+.topbar-wrapped .topbar-meta {
+  flex-basis: 100%;
+  order: 3;
+  justify-content: center;
+}
+
 .room-code {
   font-size: 11px;
   font-weight: 900;
@@ -207,10 +226,11 @@ h3 {
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  /* Marka ile EŞİT genişlikte esner (bkz. `.brand`); böylece ortadaki oda
-     kodu üst satırda gerçekten ortalanır. */
-  flex: 1 1 0;
-  min-width: 0;
+  /* Marka ile EŞİT oranda esner (bkz. `.brand`); böylece ortadaki oda kodu
+     üst satırda GERÇEKTEN ortalanır. `min-width: max-content` içeriğin
+     kırpılmasını önler; sığmadığında JS ölçümü `topbar-wrapped` ekler. */
+  flex: 1 1 auto;
+  min-width: max-content;
 }
 
 .icon-btn {
@@ -1778,13 +1798,11 @@ h3 {
     padding: 10px 12px;
     gap: 8px;
   }
+/* NOT: Oda kodunun alt satıra inmesi artık YALNIZCA JS ölçümüyle eklenen
+   `topbar-wrapped` sınıfına bağlıdır (bkz. `.topbar-wrapped .topbar-meta`).
+   Burada koşulsuz `flex-basis: 100%` vermek, öğeler sığdığında bile oda
+   kodunu alta atıp istenmeyen bir kırılma yaratıyordu. */
 
-  /* Dar ekranda oda kodu sığmazsa alt satıra iner ve ortalanır; marka ile
-     aksiyonlar üst satırda (solda/sağda) durmaya devam eder. */
-  .topbar-meta {
-    flex-basis: 100%;
-    justify-content: center;
-  }
 
   .steps {
     grid-template-columns: repeat(2, 1fr);
