@@ -204,23 +204,32 @@ const toLocalCoins = (
 }
 
 /**
- * İYİMSER İLERLEME BİRLEŞTİRME (MONOTONİK).
+ * SUNUCU OTORİTELİ İLERLEME BİRLEŞTİRME.
  *
- * KÖK SORUN ("collect → ilerleme görünür → hemen kaybolur"):
- *   `duo_collect` ASENKRON bir RPC'dir; sunucu toplamayı işleyene kadar
- *   `duo_public_state` snapshot'ı BAYAT `collected_types`/`coins` döndürür.
- *   Savaş yoklaması (~1 sn) tam bu arada çalışırsa, `{ ...player, ...server }`
- *   birleştirmesi yerel İYİMSER ilerlemeyi sunucunun ESKİ değeriyle EZİYORDU.
- *   İki toplama çok yakın zamanda yapıldığında ikinci toplamanın ilerlemesi
- *   bir sonraki yoklamada siliniyordu ("sanki collect etmemişim gibi").
+ * KÖK SORUN (İKİ İSTEMCİ FARKLI SONUÇ GÖRÜYOR — "desync"):
+ *   Eski sürüm bu alanları MONOTONİK (`Math.max`) birleştiriyordu. Bu, yerel
+ *   İYİMSER artışları (collect/steal broadcast'i + oyun döngüsü) KALICI hale
+ *   getiriyordu: sunucu otoritesi (gerçek değer) yerelden KÜÇÜKSE yok sayılıyordu.
+ *   İki istemci farklı sayıda iyimser artış yaptığında (paket kaybı, yarış
+ *   durumu, farklı zamanlama) her istemci KENDİ değerini kilitliyordu →
+ *   Melih 🪙50 görürken PLAYER 2 Melih'i 🪙42 görüyordu. Skorlar (sunucu
+ *   tarafından hesaplandığı için) tutarlıydı ama TUR İSTATİSTİKLERİ
+ *   (`roundCoins`/`roundStolen`) ve `coins`/`stolen` ıraksıyordu.
  *
- * ÇÖZÜM: Yerel oyuncu için ilerleme alanlarını MONOTONİK birleştiririz —
- *   sunucu değeri yerel değerden KÜÇÜKSE yerel değeri koruruz. Sunucu yalnızca
- *   ARTIRABİLİR (otorite artış yönünde). Görev değişiminde sunucu bu sayaçları
- *   sıfırlar; bu durumda `objectiveChanged` ile tabanı sıfırlarız (aşağıda).
+ * ÇÖZÜM: Bu alanlar için SUNUCU TEK OTORİTEDİR. Sunucu değeri geldiğinde
+ *   AYNEN uygularız (monotonik max YOK). İstemci yalnızca sunucu yoklaması
+ *   gelene kadar iyimser gösterir; yoklama gelince sunucu değeri kazanır ve
+ *   iki istemci AYNI değere yakınsar.
  *
- * `collectedTypes` için TÜR BAZINDA `max` alırız: bir türün sayısı düşemez.
- * `coins`/`roundCoins`/`stolen`/`roundStolen` için de `max` uygularız.
+ * Neden "collect → ilerleme kaybolur" hatası geri gelmez?
+ *   Sunucu artık `duo_collect`/`duo_steal` içinde `round_coins`/`round_stolen`
+ *   sayaçlarını GERÇEKTEN artırır (bkz. 0027_round_stats_authority.sql) ve
+ *   `duo_public_state` bunları döndürür. Yani sunucu değeri, iyimser değerin
+ *   EN AZ onun kadar güncel halidir; uygulamak ilerlemeyi SİLMEZ. Eski kodda
+ *   sunucu bu sayaçları tutmadığı için `max` şarttı; artık gereksiz ve zararlı.
+ *
+ * `collectedTypes` için de sunucu otoritedir; sunucu görev değişiminde
+ *   sayaçları sıfırlar ve bu sıfırlama iki istemcide de aynı anda görünür.
  */
 const mergeProgress = (
   local: Player,
@@ -237,18 +246,14 @@ const mergeProgress = (
       collectedTypes: server.collectedTypes ?? {},
     }
   }
-  const localTypes = local.collectedTypes ?? {}
-  const serverTypes = server.collectedTypes ?? {}
-  const types: Partial<Record<CoinType, number>> = { ...localTypes }
-  for (const key of Object.keys(serverTypes) as CoinType[]) {
-    types[key] = Math.max(localTypes[key] ?? 0, serverTypes[key] ?? 0)
-  }
+  // SUNUCU OTORİTESİ: sunucu bir değer döndürdüyse AYNEN uygula (max YOK).
+  // Sunucu alanı yoksa (eski oda / geçiş anı) yerel değeri koru.
   return {
-    coins: Math.max(local.coins, server.coins ?? 0),
-    stolen: Math.max(local.stolen, server.stolen ?? 0),
-    roundCoins: Math.max(local.roundCoins ?? 0, server.roundCoins ?? 0),
-    roundStolen: Math.max(local.roundStolen ?? 0, server.roundStolen ?? 0),
-    collectedTypes: types,
+    coins: server.coins ?? local.coins,
+    stolen: server.stolen ?? local.stolen,
+    roundCoins: server.roundCoins ?? local.roundCoins,
+    roundStolen: server.roundStolen ?? local.roundStolen,
+    collectedTypes: server.collectedTypes ?? local.collectedTypes ?? {},
   }
 }
 
@@ -1436,13 +1441,27 @@ export const useDuoChaos = () => {
           serverMatchScores ??
           (leavingBattle ? accumulateMatchScores(prev.matchScores, prev.players) : prev.matchScores)
         const roundScores = serverRoundScores ?? prev.roundScores
-        // OYUNCU SKORLARI (ÇELİŞKİLİ MAÇ SONU SKORU DÜZELTMESİ): Sunucu
-        // `duo_tick` tur bitişinde her oyuncunun `score`/`round_score`/
-        // `total_score` alanlarını hesaplar. Bu effect `results`/`matchover`
-        // fazlarında çalıştığı için burada oyuncu satırlarına da sunucu
-        // değerlerini uygularız. Böylece `player.totalScore` istemcide BAYAT
-        // kalmaz ve iki istemci maç sonunda AYNI toplamı gösterir. Yalnızca
-        // sunucu sayısal bir değer döndürdüğünde uygularız (aksi halde mevcut
+        // OYUNCU SKORLARI + TUR İSTATİSTİKLERİ (ÇELİŞKİLİ SONUÇ EKRANI
+        // DÜZELTMESİ): Sunucu `duo_tick` tur bitişinde her oyuncunun
+        // `score`/`round_score`/`total_score` alanlarını hesaplar; ayrıca
+        // `duo_collect`/`duo_steal` tur boyunca `round_coins`/`round_stolen`
+        // sayaçlarını GERÇEKTEN artırır (bkz. 0027_round_stats_authority.sql).
+        //
+        // KÖK SORUN (İKİ İSTEMCİ FARKLI SONUÇ GÖRÜYOR): Bu effect
+        // `results`/`matchover` fazlarında çalışır — yani SONUÇ EKRANI
+        // görünürken. Eski kod YALNIZCA `score`/`roundScore`/`totalScore`
+        // uyguluyordu; `roundCoins`/`roundStolen`/`coins`/`stolen`/
+        // `collectedTypes` UYGULAMIYORDU. Savaş yoklaması (bunları uygulayan
+        // tek yer) faz `battle`'dan çıkınca DURUR. Sonuç: sonuç ekranı, her
+        // istemcinin savaş sırasında biriktirdiği İYİMSER (ıraksayan) tur
+        // istatistiklerini gösteriyordu → Melih 🪙50 görürken PLAYER 2 Melih'i
+        // 🪙42 görüyordu. Skorlar sunucudan geldiği için tutarlıydı ama tur
+        // istatistikleri desenkrondu.
+        //
+        // ÇÖZÜM: Burada da `roundCoins`/`roundStolen`/`coins`/`stolen`/
+        // `collectedTypes` alanlarını SUNUCUDAN uygularız. Sunucu tek
+        // otoritedir; iki istemci de AYNI değerleri görür. Yalnızca sunucu
+        // sayısal/nesne bir değer döndürdüğünde uygularız (aksi halde mevcut
         // değeri koruruz).
         const players =
           data.players && data.players.length > 0
@@ -1455,6 +1474,16 @@ export const useDuoChaos = () => {
                 if (typeof server.score === 'number') next.score = server.score
                 if (typeof server.roundScore === 'number') next.roundScore = server.roundScore
                 if (typeof server.totalScore === 'number') next.totalScore = server.totalScore
+                // TUR İSTATİSTİKLERİ (SUNUCU OTORİTESİ): sonuç ekranı bunları
+                // okur; sunucu değeri geldiğinde AYNEN uygula (max YOK).
+                if (typeof server.roundCoins === 'number') next.roundCoins = server.roundCoins
+                if (typeof server.roundStolen === 'number') next.roundStolen = server.roundStolen
+                if (typeof server.coins === 'number') next.coins = server.coins
+                if (typeof server.stolen === 'number') next.stolen = server.stolen
+                if (server.collectedTypes) next.collectedTypes = server.collectedTypes
+                if (typeof server.objectivesDone === 'number') {
+                  next.objectivesDone = server.objectivesDone
+                }
                 return next
               })
             : prev.players
