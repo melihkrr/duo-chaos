@@ -1859,11 +1859,6 @@ h3 {
   .avatar-trigger-glyph {
     font-size: 26px;
   }
-
-  .avatar-grid {
-    grid-template-columns: repeat(auto-fill, minmax(60px, 1fr));
-    gap: 8px;
-  }
 }
 
 /* Çok küçük ekranlarda avatar ızgarası 3 sütuna sabitlenir; hücreler
@@ -2480,10 +2475,10 @@ h3 {
 
 /* AÇIK ARKA PLAN VARYANTI (ana sayfa).
    Ana sayfada koyu + blur'lu arka plan "ekran karardı/siyah oldu" hissi
-   veriyordu. Bu varyantta arka plan neredeyse şeffaftır; yalnızca hafif bir
-   karartma bırakır, blur YOKTUR. Böylece popup açılınca sayfa kararmaz. */
+   veriyordu. Bu varyantta arka plan TAMAMEN ŞEFFAFTIR: ne karartma ne blur
+   vardır. Böylece popup açılınca ana sayfa hiç kararmaz. */
 .modal-backdrop-light {
-  background: rgba(38, 24, 54, 0.12);
+  background: transparent;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
@@ -2710,10 +2705,12 @@ h3 {
 
 @media (max-width: 560px) {
   /* RESPONSIVE MODAL (oda/lobi sayfası): küçük ekranlarda popup kenarlara
-     yapışmasın, dikeyde taşmasın ve içerik kaydırılabilir olsun. */
+     yapışmasın, dikeyde taşmasın ve içerik kaydırılabilir olsun.
+     Modal DİKEYDE ORTALANIR (flex-end değil) — böylece başlık ve kapatma
+     tuşu sayfanın tepesinde "asılı" kalmaz. */
   .modal-backdrop {
     padding: 12px;
-    align-items: flex-end;
+    align-items: center;
   }
 
   .modal {
@@ -2721,6 +2718,16 @@ h3 {
     max-height: calc(100dvh - 24px);
     padding: 18px;
     border-radius: var(--r-lg);
+  }
+
+  /* Başlık + kapatma tuşu modal içinde sabit kalır; yalnızca gövde kayar.
+     Böylece uzun içerikte bile ✕ her zaman görünür ve erişilebilir olur. */
+  .modal-head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding-bottom: 10px;
+    background: var(--card);
   }
 
   .modal-head h2 {
@@ -2733,6 +2740,19 @@ h3 {
 
   .modal-foot .btn {
     width: 100%;
+  }
+
+  /* Avatar ızgarası: dar modalda 2 sütuna düşmesin; 4 sütun sabitlenir. */
+  .avatar-grid {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+  }
+}
+
+@media (max-width: 420px) {
+  /* Çok dar ekranda 3 sütun daha rahat okunur. */
+  .avatar-grid {
+    grid-template-columns: repeat(3, 1fr);
   }
 }
 
