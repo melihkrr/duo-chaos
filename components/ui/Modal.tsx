@@ -1,6 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useRef, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useSyncExternalStore, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 
 type Props = {
   open: boolean
@@ -13,7 +14,7 @@ type Props = {
   /**
    * Arka plan (backdrop) görünümü:
    *   - `dim` (varsayılan): koyu + blur'lu arka plan (oyun içi/lobi).
-   *   - `light`: neredeyse şeffaf arka plan (ana sayfa). Koyu arka plan
+   *   - `light`: tamamen şeffaf arka plan (ana sayfa). Koyu arka plan
    *     ana sayfada "ekran karardı/siyah oldu" hissi veriyordu.
    */
   backdrop?: 'dim' | 'light'
@@ -29,10 +30,26 @@ type Props = {
  *   - focus trap + initial focus
  *   - body scroll lock
  *   - `role="dialog"` + `aria-modal`
+ *
+ * ÖNEMLİ (portal): Modal, `createPortal` ile doğrudan `document.body`'ye
+ * render edilir. Aksi halde `transform`, `filter` veya `backdrop-filter`
+ * taşıyan bir ata öğe (ör. lobi `.panel`'i ya da `.seat.filled`), `position:
+ * fixed` için "containing block" oluşturur ve modal o kapsayıcının içine
+ * hapsolur: ekranın ortasında durmaz, z-index'i diğer öğelerin altında kalır
+ * ve ekran boyutuna göre ölçeklenmez. Portal bu tuzağı tamamen ortadan
+ * kaldırır.
  */
 export function Modal({ open, title, subtitle, onClose, children, footer, backdrop = 'dim' }: Props) {
   const panelRef = useRef<HTMLDivElement>(null)
   const previouslyFocused = useRef<HTMLElement | null>(null)
+  // Portal yalnızca istemcide çalışır. `useSyncExternalStore` ile sunucuda
+  // `false`, istemcide `true` döner; böylece SSR/hydration uyumsuzluğu olmaz
+  // ve effect içinde setState çağırmaya gerek kalmaz.
+  const mounted = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false,
+  )
 
   const focusFirst = useCallback(() => {
     const panel = panelRef.current
@@ -97,9 +114,9 @@ export function Modal({ open, title, subtitle, onClose, children, footer, backdr
     }
   }, [open])
 
-  if (!open) return null
+  if (!open || !mounted) return null
 
-  return (
+  return createPortal(
     <div
       className={['modal-backdrop', backdrop === 'light' ? 'modal-backdrop-light' : '']
         .filter(Boolean)
@@ -126,6 +143,7 @@ export function Modal({ open, title, subtitle, onClose, children, footer, backdr
         <div className="modal-body">{children}</div>
         {footer && <footer className="modal-foot">{footer}</footer>}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
