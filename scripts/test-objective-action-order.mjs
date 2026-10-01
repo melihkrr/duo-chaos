@@ -3,6 +3,7 @@ import {
   createPositionActionQueue,
   isRpcSuccess,
   runAfterPositionSync,
+  shouldRetryRematch,
 } from '../lib/objectiveSync.ts'
 
 let passed = 0
@@ -166,6 +167,16 @@ console.log('\nAn action response from a completed round is ignored')
   const previousRoundResponse = responseState({ objectiveProgress: 4, objectivesDone: 3 })
   const result = applyAuthoritativeActionState(current, previousRoundResponse, undefined, 1)
   check('previous-round progress and objective state are not applied', result === current)
+}
+
+console.log('\nRematch RPC retries until server phase changes, regardless of rival broadcast')
+{
+  check('local ready + rival broadcast ready still requires server sync',
+    shouldRetryRematch('matchover', true))
+  check('heartbeat stops after authoritative transition out of matchover',
+    !shouldRetryRematch('lobby', true))
+  check('not-ready player does not submit rematch heartbeat',
+    !shouldRetryRematch('matchover', false))
 }
 
 console.log('\nPosition updates and authoritative actions share one ordered queue')

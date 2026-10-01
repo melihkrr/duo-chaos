@@ -17,6 +17,7 @@ import {
   createPositionActionQueue,
   isRpcSuccess,
   runAfterPositionSync,
+  shouldRetryRematch,
 } from './objectiveSync'
 import { playSound, unlockAudio } from './sound'
 import { useChaos } from './useChaos'
@@ -2413,30 +2414,30 @@ export const useDuoChaos = () => {
     }
   }, [room])
 
-  // RÖVANŞ ONAY HEARTBEAT: Yerel onay verildiyse ama rakip hâlâ onaylamadıysa
-  // onayımızı periyodik olarak yeniden yayınlarız (tek paket kaybolursa
-  // el sıkışma yakınsasın diye).
+  // RÖVANŞ ONAY HEARTBEAT: Yerel onay verildiyse sunucuya idempotent onayı,
+  // matchover fazı sunucudan değişene kadar yeniden göndeririz.
   //
   // NOT: `next-ready` heartbeat'iyle AYNI düzeltme — `room` bağımlılığı her
   // render'da interval'i sıfırlayıp heartbeat'i ölü bırakıyordu. `broadcastRef`
   // kullanırız ve `room`'u bağımlılıktan çıkarırız.
   //
-  // EK GÜVENCE: Yalnızca broadcast'i tekrarlamak YETMEZ. İlk `duo_rematch`
-  // çağrısı ağ hatası nedeniyle başarısız olduysa sunucu bu oyuncunun hazır
-  // olduğunu HİÇ kaydetmez; rakip de hazır olsa bile oda `lobby`'ye çekilmez ve
-  // iki oyuncu "waiting for rival" ekranında takılı kalır. Bu yüzden heartbeat
-  // `duo_rematch`'i de (idempotent) yeniden çağırır. `callRef` kullanırız ki
-  // effect bağımlılığına `room` eklemeyelim.
+  // Broadcast yalnızca UI göstergesidir; sunucuya hazır olunduğunu kanıtlamaz.
+  // Rakibin broadcast'i gelse bile onun RPC çağrısı başarısız olmuş olabilir.
+  // Bu nedenle `rivalRematchReady` heartbeat'i durdurmamalı; her istemci kendi
+  // idempotent duo_rematch RPC'sini faz sunucuda lobby olana kadar yineler.
+  // Böylece kayıp/başarısız bir ilk RPC, iki tarafın "Both ready" durumunda
+  // sonsuza dek kalmasına neden olmaz.
   useEffect(() => {
-    if (!rematchReady || rivalRematchReady) return
-    if (state.phase !== 'matchover') return
+    if (!shouldRetryRematch(state.phase, rematchReady)) return
     const id = window.setInterval(() => {
       if (typeof document !== 'undefined' && document.hidden) return
       broadcastRef.current('rematch-ready', { by: room.playerId })
-      void callRef.current('duo_rematch', { p_token: room.token ?? room.playerId })
+      void callRef.current('duo_rematch', { p_token: room.token ?? room.playerId }).catch((error: unknown) => {
+        console.warn('Failed to sync rematch readiness', error)
+      })
     }, 1_500)
     return () => window.clearInterval(id)
-  }, [rematchReady, rivalRematchReady, room.playerId, room.token, state.phase])
+  }, [rematchReady, room.playerId, room.token, state.phase])
 
   // RÖVANŞ BAYRAKLARINI SIFIRLA: Sonuç ekranı her yeni maç için göründüğünde
   // onay bayraklarını temizle. (Aynı desen `readyRoundRef` için de kullanılır.)

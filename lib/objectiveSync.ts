@@ -1,4 +1,7 @@
-import type { Player, State } from './types'
+import type { Phase, Player, State } from './types'
+
+export const shouldRetryRematch = (phase: Phase, locallyReady: boolean): boolean =>
+  phase === 'matchover' && locallyReady
 
 export type ObjectiveProgressFields = Pick<
   Player,
