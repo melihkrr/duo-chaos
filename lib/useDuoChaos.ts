@@ -1355,6 +1355,12 @@ export const useDuoChaos = () => {
           const roundSeed = roundSeedFor(room.code, round)
           const [first, second] = generateObjectivePair(roundSeed)
           const { countdownEndsAt, endsAt } = serverDeadlineRef.current
+          // SPAWN SLOTU: Gerçek spawn konumu SUNUCU slotuna (`room.playerId`)
+          // göre belirlenir. Yerel slot 0 = "ben" → benim sunucu slotum; yerel
+          // slot 1 = "rakip" → karşı slot. `blankPlayer(player.id)` kullanırsak
+          // misafir (sunucu slotu p2) yanlışlıkla SOLDA (p1) başlar; bu da
+          // "biri sağda biri solda başlamalı" kuralını bozar.
+          const mySlot = room.playerId
           return {
             ...prev,
             phase: nextPhase,
@@ -1364,6 +1370,9 @@ export const useDuoChaos = () => {
             chaosEvent: undefined,
             chaosEventEndsAt: undefined,
             winner: undefined,
+            // TUR SKORU: Yeni maçta `roundScores` sıfırlanır (bkz. `resetRound`).
+            // `matchScores` kümülatif olduğu için burada sıfırlanmaz.
+            roundScores: { p1: 0, p2: 0 },
             endsAt: localEndsAt > 0 ? localEndsAt : endsAt > 0 ? endsAt : prev.endsAt,
             countdownEndsAt:
               localCountdownEndsAt > 0
@@ -1371,15 +1380,18 @@ export const useDuoChaos = () => {
                 : countdownEndsAt > 0
                   ? countdownEndsAt
                   : prev.countdownEndsAt,
-            players: prev.players.map((player, index) => ({
-              ...blankPlayer(player.id as 'p1' | 'p2'),
-              name: player.name,
-              xp: player.xp,
-              level: player.level,
-              title: player.title,
-              trail: player.trail,
-              objective: index === 0 ? first : second,
-            })),
+            players: prev.players.map((player, index) => {
+              const spawnId = index === 0 ? mySlot : mySlot === 'p1' ? 'p2' : 'p1'
+              return {
+                ...blankPlayer(player.id as 'p1' | 'p2', spawnId),
+                name: player.name,
+                xp: player.xp,
+                level: player.level,
+                title: player.title,
+                trail: player.trail,
+                objective: index === 0 ? first : second,
+              }
+            }),
           }
         }
         return {
