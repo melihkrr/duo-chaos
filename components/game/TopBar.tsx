@@ -19,32 +19,12 @@ export function TopBar({ code, onLeave }: Props) {
 
   return (
     <header className={['topbar', code ? 'topbar-sticky' : ''].filter(Boolean).join(' ')}>
-      {/* Birinci satır: marka solda, ses/leave aksiyonları sağda. Oda kodu
-          sığmadığında ikinci satıra iner; marka ve aksiyonlar üstte kalır. */}
-      <div className="topbar-row">
-        <div className="brand">
-          <span className="brand-mark">DC</span>
-          <strong>DUO CHAOS</strong>
-        </div>
-
-        <div className="topbar-actions">
-          <Button
-            variant="ghost"
-            className="icon-btn"
-            onClick={() => {
-              unlockAudio()
-              setMuted(toggleMuted())
-            }}
-            aria-label={muted ? 'Unmute' : 'Mute'}
-          >
-            {muted ? '🔇' : '🔊'}
-          </Button>
-          {code && (
-            <Button variant="ghost" onClick={onLeave}>
-              Leave
-            </Button>
-          )}
-        </div>
+      {/* Marka solda, aksiyonlar (ses/leave) sağda; oda kodu ortada. Üçü aynı
+          satıra sığdığında tek satırda kalır. Sığmadığında oda kodu alt
+          satıra iner ve ortalanır; marka ile aksiyonlar üstte kalır. */}
+      <div className="brand">
+        <span className="brand-mark">DC</span>
+        <strong>DUO CHAOS</strong>
       </div>
 
       {code && (
@@ -52,6 +32,25 @@ export function TopBar({ code, onLeave }: Props) {
           <span className="room-code">Room {code}</span>
         </div>
       )}
+
+      <div className="topbar-actions">
+        <Button
+          variant="ghost"
+          className="icon-btn"
+          onClick={() => {
+            unlockAudio()
+            setMuted(toggleMuted())
+          }}
+          aria-label={muted ? 'Unmute' : 'Mute'}
+        >
+          {muted ? '🔇' : '🔊'}
+        </Button>
+        {code && (
+          <Button variant="ghost" onClick={onLeave}>
+            Leave
+          </Button>
+        )}
+      </div>
     </header>
   )
 }
