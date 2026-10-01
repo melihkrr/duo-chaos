@@ -322,6 +322,79 @@ const mergeProgress = (
 }
 
 /**
+ * RAKİBİN görev ilerlemesini birleştirir — SUNUCU OTORİTESİ (monotonik DEĞİL).
+ *
+ * KÖK SORUN ("görev sahibi 2/3, rakip 3/3 görüyor"):
+ *   Görevin SAHİBİ, ilerlemesinin TEK otoritesidir. Rakip istemci sahibin
+ *   ilerlemesini KENDİ yerel olaylarından (collect/steal yayınları) türetirse,
+ *   bu yerel değer sunucunun otoriter değerinin ÜSTÜNE çıkabilir (yayın
+ *   kaybolması/gecikmesi, sahibin sunucudaki sayacından farklı olması vb.).
+ *   `mergeProgress` monotonik (`Math.max`) olduğu için bu yanlış değer BİR DAHA
+ *   DÜŞMEZ → rakip kalıcı olarak "3/3" gösterirken sahip "2/3" görür.
+ *
+ * ÇÖZÜM: Rakip için ilerlemeyi SUNUCUDAN AYNEN alırız (monotonik kilitleme YOK).
+ *   Tek istisna BAYAT snapshot: sunucunun `objectivesDone`'ı yerelden GERİDE
+ *   ise snapshot önceki göreve aittir; o zaman yerel değeri koruruz (eski
+ *   görevin ilerlemesi yeni görevin üzerine yazılmasın). Görev kimliği
+ *   değiştiyse sunucu sayaçları sıfırlamıştır; sunucu değerini AYNEN alırız.
+ */
+const mergeRivalProgress = (
+  local: Player,
+  server: Partial<Player>,
+  objectiveChanged: boolean,
+): Pick<
+  Player,
+  'coins' | 'stolen' | 'roundCoins' | 'roundStolen' | 'collectedTypes' | 'objectiveProgress'
+> => {
+  const serverDone =
+    typeof server.objectivesDone === 'number' && Number.isFinite(server.objectivesDone)
+      ? server.objectivesDone
+      : undefined
+  const localDone =
+    typeof local.objectivesDone === 'number' && Number.isFinite(local.objectivesDone)
+      ? local.objectivesDone
+      : 0
+  const staleSnapshot = serverDone !== undefined && serverDone < localDone
+  // BAYAT SNAPSHOT: hiçbir alanı uygulamayız (önceki göreve ait).
+  if (staleSnapshot) {
+    return {
+      coins: local.coins,
+      stolen: local.stolen,
+      roundCoins: local.roundCoins,
+      roundStolen: local.roundStolen,
+      collectedTypes: local.collectedTypes ?? {},
+      objectiveProgress: local.objectiveProgress ?? 0,
+    }
+  }
+  // Görev GERÇEKTEN değiştiyse sunucu sayaçları sıfırlamıştır; AYNEN al.
+  if (objectiveChanged) {
+    return {
+      coins: server.coins ?? local.coins,
+      stolen: server.stolen ?? local.stolen,
+      roundCoins: server.roundCoins ?? local.roundCoins,
+      roundStolen: server.roundStolen ?? local.roundStolen,
+      collectedTypes: server.collectedTypes ?? {},
+      objectiveProgress: server.objectiveProgress ?? 0,
+    }
+  }
+  // SUNUCU OTORİTESİ (monotonik DEĞİL): rakip için ilerleme sunucudan AYNEN
+  // alınır. Böylece sahibin otoriter değeri (ör. 2/3) rakibe de BİREBİR yansır
+  // ve yerel türetim onu asla yukarı kilitli tutamaz.
+  const serverProgress =
+    typeof server.objectiveProgress === 'number' && Number.isFinite(server.objectiveProgress)
+      ? server.objectiveProgress
+      : undefined
+  return {
+    coins: server.coins ?? local.coins,
+    stolen: server.stolen ?? local.stolen,
+    roundCoins: server.roundCoins ?? local.roundCoins,
+    roundStolen: server.roundStolen ?? local.roundStolen,
+    collectedTypes: server.collectedTypes ?? local.collectedTypes ?? {},
+    objectiveProgress: serverProgress ?? local.objectiveProgress ?? 0,
+  }
+}
+
+/**
  * Sunucu coin listesini yerel listeyle birleştirir (sunucu OTORİTEDİR).
  *
  * Neden birleştirme? Sunucu snapshot'ı ~1 sn gecikmeli gelir. Yerel oyuncu bir
@@ -910,41 +983,23 @@ export const useDuoChaos = () => {
               collectedTypes[type as Coin['type']] =
                 (collectedTypes[type as Coin['type']] ?? 0) + (count ?? 0)
             }
-            // İYİMSER İLERLEME: rakip HUD'undaki görev ilerlemesi sunucu
-            // yoklaması gelene kadar anında artsın. İlerlemeyi, birikmiş
-            // `collectedTypes`'tan DOĞRUDAN türetiriz (sunucu
-            // `duo_mission_progress` ile AYNI mantık). Böylece hem çift sayma
-            // olmaz hem de "artıp geri düşme" yaşanmaz; sunucu değeri geldiğinde
-            // monotonik birleştirme (`mergeProgress`) otorite olur.
-            const objective = player.objective
-            // HEDEF SINIRI (0037): türetilen ilerleme hedefi ASLA aşamaz.
-            // Sunucu `duo_mission_progress` ile BİREBİR aynı: her dal
-            // `least(progress, target)` uygular. Böylece "5/3" gibi aşırı
-            // değerler istemcide de üretilemez.
-            const target = objective?.target ?? 0
-            const cap = (value: number) => (target > 0 ? Math.min(value, target) : value)
-            let derivedProgress = player.objectiveProgress ?? 0
-            if (objective?.requirements) {
-              // KAYNAK BİLEŞENİ + ÇALMA BİLEŞENİ (0038): sunucu
-              // `duo_mission_progress` ile BİREBİR aynı. "Steal 2 and secure 1
-              // Gold" gibi HEM kaynak HEM çalma gerektiren görevlerde çalma da
-              // ilerlemeye eklenir. Bu bileşen eksikse iyimser türetim sunucudan
-              // DÜŞÜK kalır ve iki istemci farklı ilerleme gösterir.
-              const resources = Object.entries(objective.requirements).reduce(
-                (sum, [type, required]) =>
-                  sum + Math.min(collectedTypes[type as Coin['type']] ?? 0, required || 0),
-                0,
-              )
-              const stealTarget = objective.stealTarget || 0
-              const steals = stealTarget > 0 ? Math.min(player.stolen ?? 0, stealTarget) : 0
-              derivedProgress = cap(resources + steals)
-            } else if (objective?.coinType && objective.coinType !== 'mixed') {
-              derivedProgress = cap(collectedTypes[objective.coinType] ?? 0)
-            } else if (objective?.kind === 'steal') {
-              derivedProgress = cap(player.stolen ?? 0)
-            } else {
-              derivedProgress = cap(player.coins + newlyCollected)
-            }
+            // KÖK SORUN DÜZELTMESİ ("görev sahibi 2/3, rakip 3/3 görüyor"):
+            // RAKİBİN GÖREV İLERLEMESİNİ YEREL OLARAK TÜRETMEYİZ/ARTIRMAYIZ.
+            //
+            // Görev ilerlemesinin TEK OTORİTESİ görev SAHİBİNİN sunucu
+            // durumudur (`duo_mission_progress`). Rakip istemci, kendi yerel
+            // `collect` yayınından sahibin ilerlemesini hesaplarsa, sahip henüz
+            // sunucuya yazmamışken (veya yoklama gecikmişken) ilerlemeyi
+            // yanlışlıkla İLERİ taşır. Eski kod burada `derivedProgress`
+            // türetip `Math.max` ile monotonik birleştiriyordu; bu değer bir kez
+            // 3'e ulaşınca `mergeProgress`'in `Math.max`'i onu SONSUZA DEK 3'te
+            // kilitliyordu — sahip 2/3 gösterirken rakip 3/3 gösteriyordu.
+            //
+            // Çözüm: yalnızca iyimser `coins`/`roundCoins`/`collectedTypes`
+            // sayaçlarını güncelleriz (bunlar skor/HUD için gereklidir ve
+            // sunucu değeri geldiğinde otorite olur). `objectiveProgress`'i
+            // BURADA HİÇ yazmayız; rakip satırının ilerlemesi yalnızca sunucu
+            // yoklamasından (`mergeRivalProgress`, monotonik DEĞİL) gelir.
             return {
               ...player,
               coins: player.coins + newlyCollected,
@@ -953,8 +1008,6 @@ export const useDuoChaos = () => {
               // sonucu görsün diye sunucu değeri yine otoritedir).
               roundCoins: (player.roundCoins ?? 0) + newlyCollected,
               collectedTypes,
-              // Monotonik: asla geri düşmez.
-              objectiveProgress: Math.max(player.objectiveProgress ?? 0, derivedProgress),
             }
           }),
         }
@@ -980,41 +1033,28 @@ export const useDuoChaos = () => {
         ...prev,
         players: prev.players.map((player, index) => {
           if (index === 0) return player
-          // İYİMSER İLERLEME: çalma, ilerlemeyi şu durumlarda artırır:
-          //   - `kind === 'steal'` (ör. "Steal 3 from your rival")
-          //   - `requirements` + `stealTarget` (ör. "Steal 2 and secure 1 Gold")
-          // Sunucu `duo_mission_progress` (0038) ile BİREBİR aynı mantık.
+          // KÖK SORUN DÜZELTMESİ ("görev sahibi 2/3, rakip 3/3 görüyor"):
           //
-          // KÖK SORUN DÜZELTMESİ: Eskiden `objectiveProgress + 1` şeklinde
-          // EKLENİYORDU. Aynı `steal` yayını iki kez gelirse (veya sunucu
-          // snapshot'ı çalmayı zaten saymışsa) ilerleme ÇİFT artıyordu. Artık
-          // ilerlemeyi otoriter `stolen` sayacından TÜRETİRİZ (monotonik) —
-          // `offCollect`'in `collectedTypes`'tan türetmesiyle aynı mantık.
+          // RAKİBİN GÖREV İLERLEMESİNİ YEREL OLARAK TÜRETMEYİZ/ARTIRMAYIZ.
+          // Görevin SAHİBİ, ilerlemesinin TEK otoritesidir; sunucu
+          // (`duo_mission_progress`) sahibin `stolen` sayacından ilerlemeyi
+          // hesaplar. Rakip istemci ise yalnızca `steal` YAYININI görür — bu
+          // yayın kaybolabilir, gecikebilir veya sahibin sunucudaki `stolen`
+          // değerinden FARKLI olabilir. Rakip buradan ilerleme türetirse yerel
+          // değeri sunucunun otoriter değerinin ÜSTÜNE çıkar; `mergeProgress`
+          // monotonik (`Math.max`) olduğu için bu yanlış değer BİR DAHA
+          // DÜŞMEZ → rakip kalıcı olarak "3/3" gösterirken sahip "2/3" görür.
+          //
+          // ÇÖZÜM: Rakibin `objectiveProgress`'ine DOKUNMAYIZ. Yalnızca çalma
+          // GÖRSELİ ve tur istatistiği için `stolen`/`roundStolen` iyimser
+          // sayaçlarını artırırız; görev ilerlemesi bir sonraki
+          // `duo_public_state` yoklamasında sunucudan (otoriter) gelir.
           const stolen = player.stolen + 1
-          const objective = player.objective
-          const target = objective?.target ?? 0
-          const cap = (value: number) => (target > 0 ? Math.min(value, target) : value)
-          let derivedProgress = player.objectiveProgress ?? 0
-          if (objective?.requirements) {
-            // Kaynak bileşeni + çalma bileşeni (varsa).
-            const resources = Object.entries(objective.requirements).reduce(
-              (sum, [type, required]) =>
-                sum + Math.min(player.collectedTypes?.[type as Coin['type']] ?? 0, required || 0),
-              0,
-            )
-            const stealTarget = objective.stealTarget || 0
-            const steals = stealTarget > 0 ? Math.min(stolen, stealTarget) : 0
-            derivedProgress = cap(resources + steals)
-          } else if (objective?.kind === 'steal') {
-            derivedProgress = cap(stolen)
-          }
-          const objectiveProgress = Math.max(player.objectiveProgress ?? 0, derivedProgress)
           return {
             ...player,
             stolen,
             // TUR TOPLAMI: sonuç ekranı `roundStolen` okur; iyimser artır.
             roundStolen: (player.roundStolen ?? 0) + 1,
-            objectiveProgress,
           }
         }),
       }))
@@ -1372,15 +1412,23 @@ export const useDuoChaos = () => {
             merged.trail = player.trail
             merged.emote = player.emote
             merged.avatar = player.avatar
-            // İYİMSER İLERLEME (MONOTONİK) — RAKİP: `offCollect` broadcast'i
-            // rakibin `collectedTypes`/`coins`/`roundCoins` değerlerini iyimser
-            // artırır. Sunucu snapshot'ı gecikmeli geldiğinde bu ilerlemeyi
-            // EZERSE rakip HUD'unda "collect → ilerleme kaybolur" görülür.
-            // Yerel oyuncuyla aynı monotonik birleştirmeyi uygularız.
+            // RAKİBİN GÖREV İLERLEMESİ — SUNUCU OTORİTESİ (KÖK SORUN DÜZELTMESİ).
+            //
+            // KÖK SORUN ("görev sahibi 2/3, rakip 3/3 görüyor"): Rakip istemci,
+            // sahibin ilerlemesini KENDİ yerel collect/steal yayınlarından
+            // türetiyordu ve `mergeProgress` monotonik (`Math.max`) olduğu için
+            // yerel değer sunucunun otoriter değerinin ÜSTÜNE çıktığında BİR DAHA
+            // düşmüyordu. Örnek: sahip sunucuda 2 çalma yapmışken rakip istemci
+            // 3 çalma yayını görmüşse rakip kalıcı olarak "3/3" gösteriyordu.
+            //
+            // ÇÖZÜM: Rakip için `mergeRivalProgress` kullanırız — ilerlemeyi
+            // SUNUCUDAN AYNEN alır (monotonik kilitleme YOK). Böylece sahibin
+            // otoriter değeri (ör. 2/3) rakibe de BİREBİR yansır. Yerel
+            // `collectedTypes`/`coins`/`roundCoins`/`stolen` iyimser sayaçları
+            // (HUD görseli için) korunur; yalnızca GÖREV İLERLEMESİ sunucudan
+            // gelir. Bayat snapshot koruması `mergeRivalProgress` içindedir.
             const rivalLocalObjectiveId = player.objective?.id ?? null
             const rivalServerObjectiveId = server.objective?.id ?? null
-            // BAYAT SNAPSHOT KORUMASI (rakip): yerel `objectivesDone` sunucudan
-            // İLERİDE ise snapshot bayattır; görev kimliğini de uygulamayız.
             const rivalServerDone =
               typeof server.objectivesDone === 'number' ? server.objectivesDone : undefined
             const rivalLocalDone =
@@ -1391,7 +1439,7 @@ export const useDuoChaos = () => {
               !rivalStaleSnapshot &&
               rivalServerObjectiveId !== null &&
               rivalServerObjectiveId !== rivalLocalObjectiveId
-            const rivalProgress = mergeProgress(player, server, rivalObjectiveChanged)
+            const rivalProgress = mergeRivalProgress(player, server, rivalObjectiveChanged)
             merged.coins = rivalProgress.coins
             merged.stolen = rivalProgress.stolen
             merged.roundCoins = rivalProgress.roundCoins
