@@ -19,35 +19,14 @@ export function TopBar({ code, onLeave }: Props) {
 
   return (
     <header className={['topbar', code ? 'topbar-sticky' : ''].filter(Boolean).join(' ')}>
-      {/* ÜST SATIR: marka solda, aksiyonlar (ses/leave) sağda. Bu ikisi HER
-          ZAMAN aynı satırda kalır (`.topbar-row` içinde `flex-wrap: nowrap`).
-          Oda kodu ise ayrı bir kardeş öğedir: üçü birlikte sığıyorsa üst
-          satırda ortada durur; sığmıyorsa `flex-basis: 100%` ile ALT satıra
-          iner ve ortalanır. Böylece marka ile aksiyonlar asla ayrılmaz. */}
-      <div className="topbar-row">
-        <div className="brand">
-          <span className="brand-mark">DC</span>
-          <strong>DUO CHAOS</strong>
-        </div>
-
-        <div className="topbar-actions">
-          <Button
-            variant="ghost"
-            className="icon-btn"
-            onClick={() => {
-              unlockAudio()
-              setMuted(toggleMuted())
-            }}
-            aria-label={muted ? 'Unmute' : 'Mute'}
-          >
-            {muted ? '🔇' : '🔊'}
-          </Button>
-          {code && (
-            <Button variant="ghost" onClick={onLeave}>
-              Leave
-            </Button>
-          )}
-        </div>
+      {/* ÜÇ ÖĞE: marka (sol), oda kodu (TAM ORTA), aksiyonlar (sağ).
+          Marka ile aksiyonlar EŞİT genişlikte esner (`flex: 1 1 0`), böylece
+          oda kodu üst satırda GERÇEKTEN ortalanır. Üçü sığmazsa oda kodu
+          `flex-basis: 100%` ile ALT satıra iner ve ortalanır; marka ile
+          aksiyonlar üst satırda (solda/sağda) kalır. */}
+      <div className="brand">
+        <span className="brand-mark">DC</span>
+        <strong>DUO CHAOS</strong>
       </div>
 
       {code && (
@@ -55,6 +34,25 @@ export function TopBar({ code, onLeave }: Props) {
           <span className="room-code">Room {code}</span>
         </div>
       )}
+
+      <div className="topbar-actions">
+        <Button
+          variant="ghost"
+          className="icon-btn"
+          onClick={() => {
+            unlockAudio()
+            setMuted(toggleMuted())
+          }}
+          aria-label={muted ? 'Unmute' : 'Mute'}
+        >
+          {muted ? '🔇' : '🔊'}
+        </Button>
+        {code && (
+          <Button variant="ghost" onClick={onLeave}>
+            Leave
+          </Button>
+        )}
+      </div>
     </header>
   )
 }

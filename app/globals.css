@@ -139,19 +139,6 @@ h3 {
   box-shadow: var(--shadow-sm);
 }
 
-/* ÜST SATIR: marka + aksiyonlar. Bu satır ASLA kendi içinde sarmaz; böylece
-   "DUO CHAOS" yazısı ile ses/leave butonları her zaman aynı satırda kalır.
-   Oda kodu bu satırın DIŞINDA bir kardeş öğedir ve gerekirse alt satıra iner. */
-.topbar-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex: 1 1 auto;
-  min-width: 0;
-  flex-wrap: nowrap;
-}
-
 /* Oda varken üst çubuk ekranın tepesine SABİTLENİR. `top` güvenli alanı
    (çentik) hesaba katar; z-index HUD/overlay'lerin altında ama içeriğin
    üstünde kalacak şekilde ayarlanır. */
@@ -171,6 +158,10 @@ h3 {
   letter-spacing: -0.02em;
   font-size: 17px;
   color: var(--ink);
+  /* Marka ile aksiyonlar EŞİT genişlikte esner; böylece ortadaki oda kodu
+     üst satırda GERÇEKTEN ortalanır (space-between ile sadece "arada" kalırdı). */
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .brand-mark {
@@ -187,16 +178,17 @@ h3 {
   box-shadow: 0 4px 0 rgba(43, 36, 64, 0.16);
 }
 
-/* Oda kodu: üst satırdaki marka+aksiyonların YANINDA sığıyorsa aynı satırda
-   ortada durur. Sığmadığında `flex-basis: 100%` ile ALT satıra iner ve tam
-   genişlikte ORTALANIR; marka ile aksiyonlar üst satırda birlikte kalır. */
+/* Oda kodu: marka ile aksiyonların ARASINDA, üst satırın TAM ORTASINDA durur
+   (marka ve aksiyonlar eşit genişlikte esnediği için gerçekten ortalanır).
+   Üçü sığmadığında `flex-basis: 100%` ile ALT satıra iner ve tam genişlikte
+   ORTALANIR; marka ile aksiyonlar üst satırda (solda/sağda) kalır. */
 .topbar-meta {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
   justify-content: center;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
 }
 
@@ -213,8 +205,12 @@ h3 {
 .topbar-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
-  margin-left: auto;
+  /* Marka ile EŞİT genişlikte esner (bkz. `.brand`); böylece ortadaki oda
+     kodu üst satırda gerçekten ortalanır. */
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .icon-btn {
