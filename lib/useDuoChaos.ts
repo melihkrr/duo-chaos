@@ -20,7 +20,7 @@ import { blankPlayer, useGameState } from './useGameState'
 import { useProgress } from './useProgress'
 import { useRoom, readToken, saveToken } from './useRoom'
 import { useToast } from './useToast'
-import type { AvatarId, Coin, EmoteId, Phase, Player, State, TrailId } from './types'
+import type { AvatarId, Coin, CoinType, EmoteId, Phase, Player, State, TrailId } from './types'
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 
@@ -201,6 +201,55 @@ const toLocalCoins = (
       respawnAt: localRespawn > 0 ? localRespawn : undefined,
     }
   })
+}
+
+/**
+ * İYİMSER İLERLEME BİRLEŞTİRME (MONOTONİK).
+ *
+ * KÖK SORUN ("collect → ilerleme görünür → hemen kaybolur"):
+ *   `duo_collect` ASENKRON bir RPC'dir; sunucu toplamayı işleyene kadar
+ *   `duo_public_state` snapshot'ı BAYAT `collected_types`/`coins` döndürür.
+ *   Savaş yoklaması (~1 sn) tam bu arada çalışırsa, `{ ...player, ...server }`
+ *   birleştirmesi yerel İYİMSER ilerlemeyi sunucunun ESKİ değeriyle EZİYORDU.
+ *   İki toplama çok yakın zamanda yapıldığında ikinci toplamanın ilerlemesi
+ *   bir sonraki yoklamada siliniyordu ("sanki collect etmemişim gibi").
+ *
+ * ÇÖZÜM: Yerel oyuncu için ilerleme alanlarını MONOTONİK birleştiririz —
+ *   sunucu değeri yerel değerden KÜÇÜKSE yerel değeri koruruz. Sunucu yalnızca
+ *   ARTIRABİLİR (otorite artış yönünde). Görev değişiminde sunucu bu sayaçları
+ *   sıfırlar; bu durumda `objectiveChanged` ile tabanı sıfırlarız (aşağıda).
+ *
+ * `collectedTypes` için TÜR BAZINDA `max` alırız: bir türün sayısı düşemez.
+ * `coins`/`roundCoins`/`stolen`/`roundStolen` için de `max` uygularız.
+ */
+const mergeProgress = (
+  local: Player,
+  server: Partial<Player>,
+  objectiveChanged: boolean,
+): Pick<Player, 'coins' | 'stolen' | 'roundCoins' | 'roundStolen' | 'collectedTypes'> => {
+  // Görev değiştiyse sunucu sayaçları sıfırlamıştır; sunucu değerini AYNEN al.
+  if (objectiveChanged) {
+    return {
+      coins: server.coins ?? local.coins,
+      stolen: server.stolen ?? local.stolen,
+      roundCoins: server.roundCoins ?? local.roundCoins,
+      roundStolen: server.roundStolen ?? local.roundStolen,
+      collectedTypes: server.collectedTypes ?? {},
+    }
+  }
+  const localTypes = local.collectedTypes ?? {}
+  const serverTypes = server.collectedTypes ?? {}
+  const types: Partial<Record<CoinType, number>> = { ...localTypes }
+  for (const key of Object.keys(serverTypes) as CoinType[]) {
+    types[key] = Math.max(localTypes[key] ?? 0, serverTypes[key] ?? 0)
+  }
+  return {
+    coins: Math.max(local.coins, server.coins ?? 0),
+    stolen: Math.max(local.stolen, server.stolen ?? 0),
+    roundCoins: Math.max(local.roundCoins ?? 0, server.roundCoins ?? 0),
+    roundStolen: Math.max(local.roundStolen ?? 0, server.roundStolen ?? 0),
+    collectedTypes: types,
+  }
 }
 
 /**
@@ -1065,6 +1114,32 @@ export const useDuoChaos = () => {
           // Sunucudan gelen adı koru; boşsa mevcut adı bırak.
           const serverName = typeof server.name === 'string' && server.name.trim() ? server.name : player.name
           const merged = { ...player, ...server, id: player.id, name: serverName } as Player
+          // İYİMSER İLERLEME (MONOTONİK): Yerel oyuncu (index 0) için
+          // `collectedTypes`/`coins`/`roundCoins`/`stolen`/`roundStolen` alanları
+          // sunucu snapshot'ı ile EZİLMEZ; yalnızca ARTABİLİR. Sunucu `duo_collect`
+          // RPC'sini henüz işlemediyse snapshot BAYATTIR ve doğrudan uygulamak
+          // yerel ilerlemeyi geri alır ("collect → ilerleme kaybolur" hatası).
+          // Görev değiştiyse (sunucu yeni görev atayıp sayaçları sıfırladıysa)
+          // tabanı sıfırlarız; aksi halde eski görevin sayıları taşınırdı.
+          if (player.id === 'p1') {
+            const localObjectiveId = player.objective?.id ?? null
+            const serverObjectiveId = server.objective?.id ?? null
+            const objectiveChanged =
+              serverObjectiveId !== null && serverObjectiveId !== localObjectiveId
+            const progress = mergeProgress(player, server, objectiveChanged)
+            merged.coins = progress.coins
+            merged.stolen = progress.stolen
+            merged.roundCoins = progress.roundCoins
+            merged.roundStolen = progress.roundStolen
+            merged.collectedTypes = progress.collectedTypes
+            // `missionDone` MONOTONİK: görev değişmediyse sunucunun bayat
+            // `false` değeri yerel `true`'yu EZEMEZ (kutlama bayrağı geri
+            // alınırsa "Mission complete" tekrar tekrar tetiklenir). Görev
+            // değiştiyse sunucu değeri (yeni görev için `false`) geçerlidir.
+            if (!objectiveChanged) {
+              merged.missionDone = Boolean(player.missionDone || server.missionDone)
+            }
+          }
           // SUNUCU OTORİTESİ (skor + ilerleme): `duo_tick` artık periyodik
           // çağrıldığı için sunucu skoru, coin/görev ilerlemesini ve
           // `missionDone`'ı GERÇEKTEN günceller. Bu yüzden bu alanları
@@ -1123,6 +1198,24 @@ export const useDuoChaos = () => {
             merged.trail = player.trail
             merged.emote = player.emote
             merged.avatar = player.avatar
+            // İYİMSER İLERLEME (MONOTONİK) — RAKİP: `offCollect` broadcast'i
+            // rakibin `collectedTypes`/`coins`/`roundCoins` değerlerini iyimser
+            // artırır. Sunucu snapshot'ı gecikmeli geldiğinde bu ilerlemeyi
+            // EZERSE rakip HUD'unda "collect → ilerleme kaybolur" görülür.
+            // Yerel oyuncuyla aynı monotonik birleştirmeyi uygularız.
+            const rivalLocalObjectiveId = player.objective?.id ?? null
+            const rivalServerObjectiveId = server.objective?.id ?? null
+            const rivalObjectiveChanged =
+              rivalServerObjectiveId !== null && rivalServerObjectiveId !== rivalLocalObjectiveId
+            const rivalProgress = mergeProgress(player, server, rivalObjectiveChanged)
+            merged.coins = rivalProgress.coins
+            merged.stolen = rivalProgress.stolen
+            merged.roundCoins = rivalProgress.roundCoins
+            merged.roundStolen = rivalProgress.roundStolen
+            merged.collectedTypes = rivalProgress.collectedTypes
+            if (!rivalObjectiveChanged) {
+              merged.missionDone = Boolean(player.missionDone || server.missionDone)
+            }
           }
           return merged
         })
