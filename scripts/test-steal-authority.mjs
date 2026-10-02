@@ -57,6 +57,10 @@ const positionedStealMigration = await readFile(
   new URL('../supabase/migrations/0051_positioned_steal.sql', import.meta.url),
   'utf8',
 )
+const selfSufficientStealMigration = await readFile(
+  new URL('../supabase/migrations/0052_self_sufficient_steal_sample.sql', import.meta.url),
+  'utf8',
+)
 
 // --- Mirror of duo_steal_versioned (0042) -----------------------------------
 // Returns { ok, reason?, stealer, victim } where stealer/victim are the
@@ -144,6 +148,117 @@ const duoStealVersioned = (state, stealerSlot, now, expectedRound = null) => {
   victim.previousPositionAt = null
 
   return { ok: true, stealer, victim }
+}
+
+// --- Mirror of duo_steal_versioned (0052) positioned path -------------------
+// When the caller supplies a position, the server synthesizes a directional
+// sample from the STORED position (previous) → the NEW position (current) if
+// the stored sample is missing or stale. This makes a single positioned steal
+// self-sufficient and removes the intermittent `not_chasing` failures.
+//
+// `stored` is the row BEFORE the positioned write; `nextX/nextY` is the
+// caller-supplied destination. Returns { ok, reason?, synthesized? }.
+const duoStealPositioned = (state, stealerSlot, now, nextX, nextY) => {
+  const stealer = state.players[stealerSlot]
+  const victimSlot = stealerSlot === 'p1' ? 'p2' : 'p1'
+  const victim = state.players[victimSlot]
+
+  if (state.phase !== 'battle') return { ok: false, reason: 'not_battle' }
+  if (
+    (victim.lastStolenAt ?? 0) > 0 &&
+    now - (victim.lastStolenAt ?? 0) < STEAL_CONTACT_GUARD_MS
+  ) {
+    return { ok: false, reason: 'victim_guarded' }
+  }
+  if (
+    (stealer.lastStolenAt ?? 0) > 0 &&
+    now - (stealer.lastStolenAt ?? 0) < STEAL_CONTACT_GUARD_MS
+  ) {
+    return { ok: false, reason: 'steal_cooldown' }
+  }
+  if ((victim.coins ?? 0) <= 0) return { ok: false, reason: 'no_coins' }
+
+  // The positioned write advances the stored row to the new position.
+  const moved = nextX !== stealer.x || nextY !== stealer.y
+  const storedX = stealer.x
+  const storedY = stealer.y
+  if (moved) {
+    stealer.x = nextX
+    stealer.y = nextY
+  }
+
+  const dist = Math.hypot(victim.x - stealer.x, victim.y - stealer.y)
+  if (dist > STEAL_RADIUS) return { ok: false, reason: 'too_far' }
+
+  // --- 0052 sample resolution -------------------------------------------------
+  let prevX = stealer.previousX
+  let prevY = stealer.previousY
+  let prevAt = stealer.previousPositionAt
+  let sampleAt = stealer.previousMovedAt
+  let synthesized = false
+
+  const stale =
+    prevX === null ||
+    prevY === null ||
+    prevAt === null ||
+    sampleAt === null ||
+    now - prevAt > STEAL_MOVEMENT_FRESH_MS ||
+    now - sampleAt > STEAL_MOVEMENT_FRESH_MS ||
+    prevAt > now ||
+    sampleAt > now ||
+    sampleAt <= prevAt
+
+  if (stale) {
+    // Synthesize from the stored position → the new position.
+    synthesized = true
+    prevX = storedX
+    prevY = storedY
+    prevAt = now - 1 // epsilon before now
+    sampleAt = now
+  }
+
+  const playerElapsed = (sampleAt - prevAt) / 1_000
+  if (playerElapsed <= 0) return { ok: false, reason: 'not_chasing' }
+  const approach =
+    (Math.hypot(victim.x - prevX, victim.y - prevY) - dist) / playerElapsed
+  const opponentApproach =
+    victim.previousX !== null &&
+    victim.previousY !== null &&
+    victim.previousMovedAt !== null &&
+    victim.previousPositionAt !== null &&
+    now - victim.previousMovedAt <= STEAL_MOVEMENT_FRESH_MS &&
+    now - victim.previousPositionAt <= STEAL_MOVEMENT_FRESH_MS &&
+    victim.previousMovedAt > victim.previousPositionAt
+      ? (Math.hypot(stealer.x - victim.previousX, stealer.y - victim.previousY) - dist) /
+        ((victim.previousMovedAt - victim.previousPositionAt) / 1_000)
+      : 0
+  if (
+    approach <= STEAL_APPROACH_EPSILON ||
+    approach <= opponentApproach + STEAL_APPROACH_EPSILON
+  ) {
+    return { ok: false, reason: 'not_chasing', synthesized }
+  }
+
+  stealer.stolen = (stealer.stolen ?? 0) + 1
+  stealer.roundStolen = (stealer.roundStolen ?? 0) + 1
+  stealer.score = (stealer.score ?? 0) + STEAL_SCORE
+  stealer.roundScore = (stealer.roundScore ?? 0) + STEAL_SCORE
+  victim.coins = Math.max(0, (victim.coins ?? 0) - 1)
+  victim.roundCoins = Math.max(0, (victim.roundCoins ?? 0) - 1)
+  victim.score = Math.max(0, (victim.score ?? 0) - STEAL_SCORE)
+  victim.roundScore = Math.max(0, (victim.roundScore ?? 0) - STEAL_SCORE)
+  victim.slowedUntil = now + 400
+  victim.lastStolenAt = now
+  stealer.previousX = stealer.x
+  stealer.previousY = stealer.y
+  stealer.previousMovedAt = null
+  stealer.previousPositionAt = null
+  victim.previousX = victim.x
+  victim.previousY = victim.y
+  victim.previousMovedAt = null
+  victim.previousPositionAt = null
+
+  return { ok: true, stealer, victim, synthesized }
 }
 
 const makeState = (overrides = {}) => ({
@@ -370,6 +485,17 @@ console.log('SCENARIO 9 — SQL migrations enforce server-recorded directional c
   check('steal client sends its position with the action', /p_x:\s*nextX,\s*p_y:\s*nextY/.test(gameLoop))
   check('steal action skips the separate position RPC', /collectedIds\.length > 0 \|\| stealing/.test(gameLoop))
   check('only public steal RPC remains executable', positionedStealMigration.includes('grant execute on function public.duo_steal_versioned'))
+  // --- 0052: self-sufficient positioned steal sample -------------------------
+  check('0052 keeps the positioned steal signature', selfSufficientStealMigration.includes('p_x numeric default null') && selfSufficientStealMigration.includes('p_y numeric default null'))
+  check('0052 synthesizes a sample when the stored one is missing or stale', selfSufficientStealMigration.includes('Synthesize: the caller moved from the stored position to the new one.'))
+  check('0052 uses the stored position as the sample origin', selfSufficientStealMigration.includes('v_prev_x := v_pl.x;') && selfSufficientStealMigration.includes('v_prev_y := v_pl.y;'))
+  check('0052 anchors the sample end to the transaction clock', selfSufficientStealMigration.includes('v_sample_at := v_now;'))
+  check('0052 guarantees a positive elapsed time', selfSufficientStealMigration.includes("v_now - interval '1 millisecond'"))
+  check('0052 still rejects a zero/negative elapsed sample', selfSufficientStealMigration.includes('if v_player_elapsed is null or v_player_elapsed <= 0 then'))
+  check('0052 keeps the legacy no-position path strict', selfSufficientStealMigration.includes('Legacy path (no position supplied): require the stored sample as before.'))
+  check('0052 preserves the pursuer comparison epsilon', selfSufficientStealMigration.includes('v_player_approach <= v_opponent_approach + 0.5'))
+  check('0052 preserves the +25/-25 scoring', selfSufficientStealMigration.includes('v_steal_score int := 25'))
+  check('0052 re-grants only the public steal RPC', selfSufficientStealMigration.includes('grant execute on function public.duo_steal_versioned'))
 }
 
 console.log('SCENARIO 10 — A stopped player cannot steal using their stale approach')
@@ -405,6 +531,86 @@ console.log('SCENARIO 11 — A player who has never moved cannot steal from the 
   const approachingPlayerRequest = duoStealVersioned(state, 'p2', 2_000)
   check('moving player can steal from the stationary opponent', approachingPlayerRequest.ok === true)
   check('stationary player loses points, not the pursuer', state.players.p1.score === 75 && state.players.p2.score === 125)
+}
+
+console.log('SCENARIO 12 — Positioned steal is self-sufficient (the intermittent-failure fix)')
+{
+  // Reproduces the reported bug: the client sends a positioned steal, but the
+  // stored directional sample is missing/stale because the queued `duo_move`
+  // was dropped (positionIncludedInAction) or the player is standing on the
+  // rival. Before 0052 this returned `not_chasing`; after 0052 the sample is
+  // synthesized from the stored position → the new position.
+  const state = makeState()
+  state.players.p1.x = 50
+  state.players.p1.y = 50
+  state.players.p2.x = 52
+  state.players.p2.y = 50
+  // No stored sample at all (the exact post-steal / dropped-move state).
+  state.players.p1.previousX = null
+  state.players.p1.previousY = null
+  state.players.p1.previousMovedAt = null
+  state.players.p1.previousPositionAt = null
+  state.players.p2.previousX = null
+  state.players.p2.previousY = null
+  state.players.p2.previousMovedAt = null
+  state.players.p2.previousPositionAt = null
+
+  // The caller moves from x=50 toward the rival at x=52.
+  const res = duoStealPositioned(state, 'p1', 1_000, 51, 50)
+  check('positioned steal succeeds without a prior stored sample', res.ok === true, res.reason)
+  check('the sample was synthesized', res.synthesized === true)
+  check('stealer gains exactly +25', state.players.p1.score === 125, `score=${state.players.p1.score}`)
+  check('victim loses exactly -25', state.players.p2.score === 75, `score=${state.players.p2.score}`)
+  check('victim loses exactly 1 coin', state.players.p2.coins === 2, `coins=${state.players.p2.coins}`)
+
+  // A stale stored sample is also replaced by a synthesized one.
+  const stale = makeState()
+  stale.players.p1.x = 50
+  stale.players.p1.y = 50
+  stale.players.p2.x = 52
+  stale.players.p2.y = 50
+  stale.players.p1.previousX = 40
+  stale.players.p1.previousY = 50
+  stale.players.p1.previousMovedAt = 100 // far in the past
+  stale.players.p1.previousPositionAt = 50
+  const staleRes = duoStealPositioned(stale, 'p1', 5_000, 51, 50)
+  check('stale stored sample is replaced by a synthesized one', staleRes.ok === true && staleRes.synthesized === true, staleRes.reason)
+
+  // A genuine, fresh stored sample still takes precedence (no synthesis).
+  const fresh = makeState()
+  fresh.players.p1.x = 50
+  fresh.players.p1.y = 50
+  fresh.players.p2.x = 52
+  fresh.players.p2.y = 50
+  fresh.players.p1.previousX = 45
+  fresh.players.p1.previousY = 50
+  fresh.players.p1.previousMovedAt = 1_000
+  fresh.players.p1.previousPositionAt = 900
+  const freshRes = duoStealPositioned(fresh, 'p1', 1_000, 51, 50)
+  check('a fresh stored sample is preferred over synthesis', freshRes.ok === true && freshRes.synthesized === false, freshRes.reason)
+
+  // A stationary positioned steal (no net movement) must NOT synthesize a
+  // zero-length approach into a free steal.
+  const stationary = makeState()
+  stationary.players.p1.x = 50
+  stationary.players.p1.y = 50
+  stationary.players.p2.x = 52
+  stationary.players.p2.y = 50
+  stationary.players.p1.previousX = null
+  stationary.players.p1.previousY = null
+  stationary.players.p1.previousMovedAt = null
+  stationary.players.p1.previousPositionAt = null
+  const stationaryRes = duoStealPositioned(stationary, 'p1', 1_000, 50, 50)
+  check('a stationary positioned steal is rejected', stationaryRes.ok === false && stationaryRes.reason === 'not_chasing', stationaryRes.reason)
+
+  // The legacy (no position) path still requires a stored sample.
+  const legacy = makeState()
+  legacy.players.p1.previousX = null
+  legacy.players.p1.previousY = null
+  legacy.players.p1.previousMovedAt = null
+  legacy.players.p1.previousPositionAt = null
+  const legacyRes = duoStealVersioned(legacy, 'p1', 1_000)
+  check('legacy no-position path still rejects a missing sample', legacyRes.ok === false && legacyRes.reason === 'not_chasing', legacyRes.reason)
 }
 
 console.log(`\n${failed === 0 ? '\u2714 ALL CHECKS PASSED' : '\u2718 SOME CHECKS FAILED'} \u2014 ${passed} passed, ${failed} failed`)
