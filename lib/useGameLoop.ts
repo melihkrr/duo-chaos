@@ -21,12 +21,6 @@ import {
   getCoinValue,
 } from './config'
 import { objectiveSatisfied } from './display'
-import {
-  installInputResetListeners,
-  neutralKeys,
-  resetAllInput,
-  type KeyState,
-} from './inputReset'
 import { resolveMove } from './movement'
 import { markPendingCollect, settlePendingCollect } from './coinCollectionState'
 import { applyAuthoritativeActionState, isRpcSuccess } from './objectiveSync'
@@ -36,22 +30,6 @@ import type { Coin, Player, State } from './types'
 
 /** Rakip interpolasyonunun "oturduğu" eşik (arena %). Altındaysa yazmayız. */
 const REMOTE_SETTLE = 0.25
-
-/**
- * ÇALMA TEMAS PAYI (arena %).
- *
- * `STEAL_RADIUS` (= PLAYER_HIT_R * 2 = 5.2) tam olarak çarpışma temas
- * mesafesidir. Ağ jitter'ı ve tek karelik konum ıskalamaları yüzünden istemci
- * rakibe FİİLEN değdiği hâlde ölçülen mesafe bir tık büyük çıkabilir ve çalma
- * denemesi HİÇ başlamaz. Bu pay, denemenin BAŞLATILMASINI sağlar; sunucu yine
- * KENDİ depoladığı konumlarla `too_far` doğrulaması yaptığı için otorite
- * gevşemez — yalnızca gereksiz ıskalamalar önlenir.
- *
- * Değer, bir karede kat edilen mesafeden (MOVE_SPEED * 16ms ≈ 0.6) biraz
- * büyüktür; böylece tek karelik gecikme tolere edilir ama uzaktan çalma
- * tetiklenmez.
- */
-const STEAL_CONTACT_SLACK = 1.2
 
 /**
  * Görev tamamlandığında gösterilen kutlama penceresinin süresi (ms).
@@ -115,6 +93,8 @@ type LoopDeps = {
   remotePos: React.RefObject<Map<string, { x: number; y: number; at: number }>>
 }
 
+const keys = { up: false, down: false, left: false, right: false }
+
 /**
  * Sanal joystick vektörü (-1..1). Klavye ile aynı anda kullanılabilir;
  * ikisi toplanır ve normalize edilir. `useGameLoop` bu nesneyi dışarı verir,
@@ -151,34 +131,6 @@ export const useGameLoop = (deps: LoopDeps) => {
   // ("donma + birden ilerleme" sorununun kökü buydu: döngü, commit edilmemiş
   // eski `state.players[0]`'dan hesapladığı için ilerleme kaybediyordu).
   const localPos = useRef<{ x: number; y: number } | null>(null)
-  // YEREL KONUM GEÇMİŞİ (yaklaşma geri-bakışı).
-  //
-  // KÖK SORUN ("temas var ama çalma olmuyor — özellikle rakibin üstünde
-  // DURURKEN"): Sunucunun yönlü anti-cheat'i, çalma ANINDA oyuncunun rakibe
-  // YAKLAŞIYOR olmasını şart koşar (`v_player_approach > 0.5`). Gerçek oyunda
-  // doğal akış şudur: oyuncu rakibi kovalar → yetişir → temas eder → DURUR.
-  // Durduğu anda yaklaşma hızı ~0 olur ve sunucu HER denemeyi `not_chasing` ile
-  // reddeder; oyuncu "üstüne geldim ama hiçbir şey olmuyor" der.
-  //
-  // ÇÖZÜM: İstemci, çalma isteğiyle birlikte ~350 ms ÖNCEKİ konumunu da
-  // gönderir (`p_lookback_x/y`). Sunucu, oyuncu ŞU AN yaklaşmıyorsa bile kısa
-  // bir geri-bakış penceresinde yaklaşmışsa ve şu an TEMAS varsa çalmayı kabul
-  // eder. Anti-cheat korunur: hareketsiz bir kurban, üstüne gelen kovalayandan
-  // çalamaz (rakip yaklaşma hızı daha yüksek olduğu için reddedilir).
-  //
-  // Halka tampon (ring buffer) küçüktür ve yalnızca son ~2000 ms'i tutar.
-  const posHistory = useRef<Array<{ x: number; y: number; at: number }>>([])
-  // KOVALAMA ÇAPASI (0057): oyuncunun rakibe YAKLAŞIRKEN bulunduğu, rakibe en
-  // UZAK olduğu konum. `posHistory` yalnızca son ~2000 ms'i tuttuğu için, oyuncu
-  // rakibin üstünde saniyelerce durduğunda kovalamanın başlangıcı tampondan
-  // DÜŞER ve geri-bakış sıfıra yakın kalır → sunucu `not_chasing` ile reddeder.
-  //
-  // Bu ref, kovalama boyunca rakibe olan mesafenin MAKSİMUM olduğu noktayı
-  // kalıcı olarak saklar. Sunucu (0057) geri-bakışı bir HIZ değil, YER
-  // DEĞİŞTİRME (displacement) olarak yorumlar: `dist(rakip, çapa) - dist(rakip,
-  // şimdi)`. Çapa kovalamanın başında olduğu için bu fark büyüktür ve temas
-  // varsa çalma kabul edilir. Rakip uzaklaşınca (temas kaybolunca) sıfırlanır.
-  const chaseAnchor = useRef<{ x: number; y: number; at: number; dist: number } | null>(null)
   // Yerel oyuncunun EKRANA basılan konumu. `Battle` bu ref'i doğrudan DOM
   // transform'una yazar; böylece 60Hz hareket React render'ı TETİKLEMEZ.
   // Bu, "hareket donuyor / birden ilerliyor" sorununun asıl çözümüdür:
@@ -213,11 +165,6 @@ export const useGameLoop = (deps: LoopDeps) => {
   // Sanal joystick vektörü. `VirtualJoystick` `setJoystick` ile buraya yazar;
   // böylece her pointer hareketinde React render tetiklenmez (yalnızca RAF okur).
   const joystick = useRef<JoystickVector>({ x: 0, y: 0 })
-  // KLAVYE GİRDİSİ (hook'a özel). ÖNCEDEN modül seviyesinde TEK bir nesneydi;
-  // bu yüzden bir hook örneğinde basılı kalan tuş DİĞER örneklere ve yeni
-  // round'lara sızıyordu. Artık her `useGameLoop` kendi ref'ini tutar ve round
-  // geçişinde sıfırlanır.
-  const keys = useRef<KeyState>(neutralKeys())
   const pendingCollectedCoinIds = useRef(new Set<number>())
   // GÖREV KİMLİĞİ: sunucu bir görev tamamlanınca yeni bir görev atar ve
   // `collected_types`'ı SIFIRLAR. İstemci iyimser ilerlemeyi `me.objectiveProgress`
@@ -321,33 +268,31 @@ export const useGameLoop = (deps: LoopDeps) => {
     const down = (event: KeyboardEvent) => {
       if (isTypingTarget(event.target)) return
       const key = event.key.toLowerCase()
-      if (key === 'w' || key === 'arrowup') keys.current.up = true
-      else if (key === 's' || key === 'arrowdown') keys.current.down = true
-      else if (key === 'a' || key === 'arrowleft') keys.current.left = true
-      else if (key === 'd' || key === 'arrowright') keys.current.right = true
+      if (key === 'w' || key === 'arrowup') keys.up = true
+      else if (key === 's' || key === 'arrowdown') keys.down = true
+      else if (key === 'a' || key === 'arrowleft') keys.left = true
+      else if (key === 'd' || key === 'arrowright') keys.right = true
       else return
       event.preventDefault()
     }
     const up = (event: KeyboardEvent) => {
       if (isTypingTarget(event.target)) return
       const key = event.key.toLowerCase()
-      if (key === 'w' || key === 'arrowup') keys.current.up = false
-      else if (key === 's' || key === 'arrowdown') keys.current.down = false
-      else if (key === 'a' || key === 'arrowleft') keys.current.left = false
-      else if (key === 'd' || key === 'arrowright') keys.current.right = false
+      if (key === 'w' || key === 'arrowup') keys.up = false
+      else if (key === 's' || key === 'arrowdown') keys.down = false
+      else if (key === 'a' || key === 'arrowleft') keys.left = false
+      else if (key === 'd' || key === 'arrowright') keys.right = false
+    }
+    const blur = () => {
+      keys.up = keys.down = keys.left = keys.right = false
     }
     window.addEventListener('keydown', down)
     window.addEventListener('keyup', up)
-    // Sekme odağı/görünürlüğü değişince TÜM girdiyi sıfırla: arka plana
-    // düşerken tarayıcı `keyup` göndermez, bu yüzden basılı tuş "takılı"
-    // kalır ve geri dönüldüğünde karakter kendi kendine hareket eder.
-    const removeResetListeners = installInputResetListeners(() => {
-      resetAllInput({ keys: keys.current, joystick: joystick.current })
-    })
+    window.addEventListener('blur', blur)
     return () => {
       window.removeEventListener('keydown', down)
       window.removeEventListener('keyup', up)
-      removeResetListeners()
+      window.removeEventListener('blur', blur)
     }
   }, [])
 
@@ -385,9 +330,6 @@ export const useGameLoop = (deps: LoopDeps) => {
       // Savaş dışındayken yerel konum ref'ini bırak; yeni turda `state`'ten
       // yeniden tohumlanır (oyuncu doğru başlangıç noktasına döner).
       localPos.current = null
-      // SAVAŞ DIŞI FAZDA GİRDİYİ SIFIRLA (countdown/results/matchover/home).
-      // Round bittiğinde tuş/joystick basılı kalmışsa yeni round'a taşınmasın.
-      resetAllInput({ keys: keys.current, joystick: joystick.current })
       return
     }
 
@@ -420,10 +362,6 @@ export const useGameLoop = (deps: LoopDeps) => {
       const roundAdvanced = state.round > lastRound.current
       lastRound.current = state.round
       if (roundAdvanced) {
-        // YENİ ROUND: hareket girdisini KESİNLİKLE nötrle. Aksi halde round
-        // tam tuş/joystick basılıyken biterse yeni round'da karakter kendi
-        // kendine hareket etmeye devam eder (kullanıcı raporu).
-        resetAllInput({ keys: keys.current, joystick: joystick.current })
         localPos.current = { x: me.x, y: me.y }
         // Ekrana basılacak konumu da spawn'dan tohumla (ilk karede (0,0)
         // görünmesini engeller).
@@ -434,16 +372,6 @@ export const useGameLoop = (deps: LoopDeps) => {
         remoteTarget.current = null
         remoteSample.current = null
         remoteVel.current = { x: 0, y: 0 }
-        // Rakibin EKRANA basılan konumunu da sıfırla. Aksi halde yeni turun
-        // ilk karelerinde (taze broadcast gelmeden) eski turun son konumu
-        // kullanılır ve çalma menzili yanlış hesaplanabilir.
-        liveRivalPos.current = null
-        // Konum geçmişini de sıfırla: yeni turda eski turun konumlarından
-        // türetilen bir "yaklaşma" örneklemesi kullanılmasın.
-        posHistory.current = []
-        // Kalıcı kovalama çapasını da sıfırla (0057): yeni turda eski turun
-        // yaklaşma vektörü kullanılmasın.
-        chaseAnchor.current = null
         // Yeni turda combo serisini ve uçan puan rozetlerini sıfırla.
         comboRef.current = { count: 0, at: 0 }
         scorePopRef.current = []
@@ -454,10 +382,10 @@ export const useGameLoop = (deps: LoopDeps) => {
     // --- Girdi: klavye + sanal joystick birleşir. ---
     let dx = 0
     let dy = 0
-    if (keys.current.up) dy -= 1
-    if (keys.current.down) dy += 1
-    if (keys.current.left) dx -= 1
-    if (keys.current.right) dx += 1
+    if (keys.up) dy -= 1
+    if (keys.down) dy += 1
+    if (keys.left) dx -= 1
+    if (keys.right) dx += 1
     dx += joystick.current.x
     dy += joystick.current.y
 
@@ -489,17 +417,6 @@ export const useGameLoop = (deps: LoopDeps) => {
     }
     // Ref'i hemen güncelle — bir sonraki kare bu değerden devam eder.
     localPos.current = { x: nextX, y: nextY }
-    // Konum geçmişine bu kareyi ekle (yaklaşma geri-bakışı için). 0056: pencere
-    // 500 ms'den 2000 ms'ye çıkarıldı. Neden: oyuncu rakibi kovalayıp TEMAS
-    // NOKTASINDA durduğunda, "son hareketli konum" güncel konumla AYNI olur
-    // (sıfır uzunluk). Gerçek yaklaşma vektörünü elde etmek için kovalamanın
-    // DAHA ERKENİNDEN (oyuncu hâlâ uzaktayken) bir örneğe ihtiyacımız var.
-    // 2000 ms, 60Hz'de ~120 örnek tutar; dizi küçük kalır.
-    {
-      const history = posHistory.current
-      history.push({ x: nextX, y: nextY, at: now })
-      while (history.length > 0 && now - history[0].at > 2000) history.shift()
-    }
     // Ekrana basılacak konumu da her karede güncelle. `Battle` bunu doğrudan
     // DOM'a yazar; React render'ı beklemez → akıcı hareket.
     livePos.current = { x: nextX, y: nextY }
@@ -678,104 +595,15 @@ export const useGameLoop = (deps: LoopDeps) => {
     // dursa bile `STEAL_RADIUS` içinde görünmüyordu → çalma neredeyse hiç
     // tetiklenmiyordu. Artık CANLI konumu (`liveRivalPos`) esas alırız; ref
     // henüz tohumlanmadıysa (ilk kare) state konumuna düşeriz.
-    //
-    // KÖK SORUN 2 ("temas var ama çalma olmuyor"): `lastSteal.current = now`
-    // BURADA, yani istek gönderilmeden ÖNCE yazılıyordu. Sunucu isteği
-    // reddettiğinde (ör. `not_chasing`) 700 ms'lik bekleme yine de yanmış
-    // oluyordu; oyuncu rakibin üstünde dururken saniyede ~1 deneme yapabiliyor
-    // ve çoğu reddediliyordu → "çok nadir tetikleniyor". Artık bekleme YALNIZCA
-    // sunucu çalmayı ONAYLADIĞINDA tüketilir (aşağıdaki `steal` eyleminde).
-    //
-    // KÖK SORUN 3 ("temas var ama çalma HİÇ tetiklenmiyor" — ASIL NEDEN):
-    // Menzil, `liveRivalPos.current` (RENDER için yumuşatılmış/interpolasyonlu
-    // rakip konumu) üzerinden ölçülüyordu. Bu değer rakibin GERÇEK konumunun
-    // ~83 ms (yumuşatma zaman sabiti) + broadcast gecikmesi kadar GERİSİNDE
-    // kalır. `STEAL_RADIUS = PLAYER_HIT_R * 2 = 5.2` ise tam olarak ÇARPIŞMA
-    // temas mesafesidir. MOVE_SPEED = 38 birim/s olduğundan, yumuşatma
-    // gecikmesi tek başına birkaç birimlik bir fark yaratır; oyuncu rakibe
-    // FİİLEN değdiğinde bile yumuşatılmış konum sık sık 5.2'nin DIŞINDA kalır
-    // → `stealing` hiç true olmaz → çalma RPC'si HİÇ çağrılmaz. Bot oyunu
-    // çalışır çünkü orada GERÇEK konum (`botNextX/botNextY`) kullanılır.
-    //
-    // ÇÖZÜM: Menzil kontrolünü EN TAZE HAM rakip konumuyla yap. Öncelik:
-    //   1. `remotePos` (ham broadcast; en az gecikmeli, gerçek konuma en yakın),
-    //   2. `liveRivalPos` (yumuşatılmış render konumu; broadcast yoksa),
-    //   3. `rivalTarget` (state; ilk kare / hiç broadcast gelmediyse).
-    // Ayrıca ağ jitter'ı ve tek karelik ıskalamayı tolere etmek için küçük bir
-    // `STEAL_CONTACT_SLACK` payı ekleriz. Sunucu yine de KENDİ depoladığı
-    // konumlarla `too_far` doğrulaması yapar; bu pay yalnızca istemcinin
-    // denemeyi BAŞLATMASINI sağlar, otoriteyi gevşetmez.
     let stealing = false
-    const rivalSlotForSteal = rivalTarget?.id
-    const rawRival =
-      (rivalSlotForSteal
-        ? remotePos.current?.get(rivalSlotForSteal) ??
-          remotePos.current?.get('rival') ??
-          remotePos.current?.get(rivalSlotForSteal === 'p1' ? 'p2' : 'p1')
-        : undefined) ?? null
-    const rivalPos = rawRival ?? liveRivalPos.current ?? rivalTarget
+    const rivalPos = liveRivalPos.current ?? rivalTarget
     if (
       rivalPos &&
       now - lastSteal.current >= STEAL_COOLDOWN_MS &&
-      Math.hypot(rivalPos.x - nextX, rivalPos.y - nextY) <= STEAL_RADIUS + STEAL_CONTACT_SLACK
+      Math.hypot(rivalPos.x - nextX, rivalPos.y - nextY) <= STEAL_RADIUS
     ) {
+      lastSteal.current = now
       stealing = true
-    }
-
-    // YAKLAŞMA GERİ-BAKIŞI (0055/0056/0057): oyuncunun rakibe YAKLAŞIRKEN
-    // bulunduğu, rakibe EN UZAK olduğu konumu (kovalama çapası) gönder. Oyuncu
-    // rakibin üstünde DURURKEN yaklaşma hızı ~0'dır; sunucu bu çapayı kullanarak
-    // "gerçekten yaklaştı" diyebilir ve temas varsa çalmayı kabul eder.
-    //
-    // KÖK SORUN ("temas var ama çalma olmuyor — rakibin üstünde DURURKEN"):
-    // Önceki sürümler (a) "en az 350 ms önceki en YAKIN örneği" ya da (b) "son
-    // HAREKETLİ örneği" seçiyordu. Her ikisi de başarısız oldu:
-    //   (a) `posHistory` HER karede (dururken de) doldurulduğu için, oyuncu
-    //       350 ms'den uzun süre durduğunda o örnek de HAREKETSİZ oluyordu →
-    //       sıfır uzunluk → `v_has_lookback = false` → `not_chasing`.
-    //   (b) Oyuncu rakibi kovalayıp TAM TEMAS NOKTASINDA durduğunda "son
-    //       hareketli konum" güncel konumla AYNI oluyordu → yine sıfır uzunluk.
-    //   Ayrıca 2000 ms'lik tampon bile uzun kovalamalarda kovalamanın BAŞINI
-    //   kaybediyordu (özellikle ağ gecikmesiyle kare aralığı büyüyünce).
-    //
-    // ÇÖZÜM (0057): KOVALAMA ÇAPASI. Kovalama boyunca rakibe olan mesafenin
-    // MAKSİMUM olduğu konumu kalıcı olarak sakla. Sunucu (0057) geri-bakışı bir
-    // HIZ değil, YER DEĞİŞTİRME olarak yorumlar:
-    //     kazanç = dist(rakip, çapa) - dist(rakip, şimdi)
-    // Çapa kovalamanın başında olduğu için bu fark büyüktür (ör. 10 birim) ve
-    // temas varsa çalma kabul edilir. Tampon taşmasından ETKİLENMEZ. Rakip
-    // uzaklaşınca (temas kaybolunca) çapa sıfırlanır; böylece eski bir kovalama
-    // yeni bir temasa taşınmaz.
-    const STEAL_CONTACT_DIST = STEAL_RADIUS + STEAL_CONTACT_SLACK
-    if (rivalPos) {
-      const rivalDist = Math.hypot(rivalPos.x - nextX, rivalPos.y - nextY)
-      if (rivalDist <= STEAL_CONTACT_DIST) {
-        // Temas var: çapa yoksa (yeni temas) ya da oyuncu şu an rakibe daha
-        // uzaksa (yani kovalama başlangıcı) çapayı güncelle. Böylece çapa
-        // kovalama boyunca rakibe EN UZAK noktada kalır.
-        const anchor = chaseAnchor.current
-        if (!anchor || rivalDist > anchor.dist) {
-          chaseAnchor.current = { x: nextX, y: nextY, at: now, dist: rivalDist }
-        }
-      } else if (rivalDist > STEAL_CONTACT_DIST * 2) {
-        // Temas tamamen kayboldu (rakibin epey uzağındayız): çapayı sıfırla ki
-        // eski bir kovalama yeni bir temasa taşınmasın.
-        chaseAnchor.current = null
-      }
-    }
-    let lookbackX: number | null = null
-    let lookbackY: number | null = null
-    // Geri-bakış örneğinin ZAMANI (epoch ms). Sunucu bunu yalnızca teşhis için
-    // kullanır (0057'de yaklaşma artık yer değiştirme olduğu için pencere
-    // önemsizdir). Örnek yoksa null.
-    let lookbackAt: number | null = null
-    if (stealing) {
-      const anchor = chaseAnchor.current
-      if (anchor) {
-        lookbackX = anchor.x
-        lookbackY = anchor.y
-        lookbackAt = anchor.at
-      }
     }
 
     // --- Tek `setState`: hareket + rakip + toplama + çalma + yeniden doğma. ---
@@ -1077,25 +905,6 @@ export const useGameLoop = (deps: LoopDeps) => {
             p_token: token,
             p_expected_objectives_done: me.objectivesDone ?? 0,
             p_expected_round: state.round,
-            p_x: nextX,
-            p_y: nextY,
-            // HAREKET SEGMENTİ (0053): sunucunun yön örneklemesini KESİN ve
-            // sıfırdan farklı yapabilmesi için bu karenin BAŞLANGIÇ konumunu da
-            // göndeririz. Aksi halde sunucu, önceki çalma sonrası NULL'lanan
-            // `previous_*` kolonları yüzünden sıfır uzunlukta bir örnek üretip
-            // `not_chasing` ile reddediyordu ("temas var ama çalma olmuyor").
-            p_from_x: fromX,
-            p_from_y: fromY,
-            // YAKLAŞMA GERİ-BAKIŞI (0055/0056): oyuncunun GERÇEKTEN HAREKET
-            // ETTİĞİ en son konumu da göndeririz. Oyuncu rakibin üstünde
-            // DURURKEN (yaklaşma hızı ~0) sunucu bu pencereye bakarak "az önce
-            // yaklaşıyordu" diyebilir ve temas varsa çalmayı kabul eder. Örnek
-            // yoksa (ilk kare / hiç hareket etmedi) null göndeririz; sunucu eski
-            // davranışa düşer. `p_lookback_at`, sunucunun yaklaşma hızını GERÇEK
-            // zaman penceresiyle hesaplamasını sağlar (0056).
-            p_lookback_x: lookbackX,
-            p_lookback_y: lookbackY,
-            p_lookback_at: lookbackAt,
           })
           if (!isRpcSuccess(result) && isTransientRpcFailure(result)) {
             throw new Error(`duo_steal_versioned transient rejection: ${JSON.stringify(result)}`)
@@ -1106,10 +915,6 @@ export const useGameLoop = (deps: LoopDeps) => {
           console.warn('duo_steal rejected', response)
           return
         }
-        // Beklemeyi YALNIZCA başarılı çalmada tüket. Reddedilen bir istek
-        // 700 ms'lik pencereyi yakmaz; oyuncu temas halindeyken bir sonraki
-        // karede yeniden deneyebilir.
-        lastSteal.current = performance.now()
         applyServerState(response, state.round)
         playSound('steal')
         shakeRef.current = { at: performance.now(), kind: 'steal' }
@@ -1122,7 +927,7 @@ export const useGameLoop = (deps: LoopDeps) => {
       })
     }
     if (actions.length > 0) {
-      const positionIncludedInCollection = collectedIds.length > 0 || stealing
+      const positionIncludedInCollection = collectedIds.length > 0 && !stealing
       void runPositionedActions(
         nextX,
         nextY,

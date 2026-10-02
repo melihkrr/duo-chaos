@@ -24,8 +24,6 @@ $tests = @(
   'test-chaos-events',
   'test-retry-recovery',
   'test-dynamic-joystick',
-  'test-input-reset',
-  'test-steal-authority',
   'test-collect-loss',
   'test-collect-concurrency'
 )

@@ -55,7 +55,7 @@ supabase db push
 ### Option C — SQL editor
 
 Paste each file into the Supabase SQL editor in filename order, through the
-latest migration (`0051`).
+latest migration (`0050`).
 
 > **Important:** the migrations must actually be applied to the project the
 > client points at. If they are not, every RPC call fails with

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useRef } from 'react'
 
 type Props = {
   onChange: (dx: number, dy: number) => void
@@ -80,38 +80,6 @@ export function VirtualJoystick({ onChange, size = 132 }: Props) {
     hideBase()
     onChange(0, 0)
   }
-
-  // Sekme arka plana atıldığında / pencere odağı kaybolduğunda pointer `up`
-  // olayı gelmez → joystick "basılı" kalır ve oyuncu otomatik hareket eder.
-  // Görünürlük/odak değişiminde joystick'i zorla bırak ve girdiyi nötrle.
-  useEffect(() => {
-    const release = () => {
-      const layer = layerRef.current
-      const id = pointerId.current
-      if (layer && id !== null) {
-        try {
-          layer.releasePointerCapture(id)
-        } catch {
-          /* pointer zaten serbest bırakılmış olabilir */
-        }
-      }
-      end()
-    }
-    const onVisibility = () => release()
-    const onBlur = () => release()
-    const onPageHide = () => release()
-    window.addEventListener('blur', onBlur)
-    window.addEventListener('pagehide', onPageHide)
-    document.addEventListener('visibilitychange', onVisibility)
-    return () => {
-      window.removeEventListener('blur', onBlur)
-      window.removeEventListener('pagehide', onPageHide)
-      document.removeEventListener('visibilitychange', onVisibility)
-    }
-    // `end` her render'da yeniden oluşur ama yalnızca ref'lere/DOM'a dokunur;
-    // bağımlılık listesini boş tutmak dinleyicilerin bir kez kurulmasını sağlar.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   return (
     <div
