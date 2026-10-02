@@ -3,8 +3,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import {
   BATTLE_MS,
-  BUMP_COOLDOWN_MS,
-  BUMP_SPEED_MULTIPLIER,
+  SLOWED_SPEED_MULTIPLIER,
   COIN_RESPAWN_MS,
   COLLECT_RADIUS,
   COUNTDOWN_MS,
@@ -27,7 +26,7 @@ import {
   resetAllInput,
   type KeyState,
 } from './inputReset'
-import { computeBump, resolveMove } from './movement'
+import { resolveMove, resolvePlayerCollision } from './movement'
 import { markPendingCollect, settlePendingCollect } from './coinCollectionState'
 import { applyAuthoritativeActionState, isRpcSuccess } from './objectiveSync'
 import { isTransientRpcFailure, withVersionGuardedRetry } from './retry'
@@ -83,13 +82,6 @@ type LoopDeps = {
     actions: Array<() => Promise<void>>,
     positionIncludedInAction?: boolean,
   ) => Promise<void>
-  /**
-   * PLAYER BUMP — `duo_bump`'ı konum kuyruğuna SIRALI yazar (öncesinde ayrı
-   * bir `duo_move` ÇALIŞTIRMAZ). `duo_bump` çağıranın konumunu sunucuda
-   * doğrulayıp kendisi yazdığı için bu güvenlidir ve "ilk çarpışma konumuna
-   * geri ışınlanma" hatasını önler. `onResolved` sunucu yanıtıyla çağrılır.
-   */
-  runBump: (x: number, y: number, onResolved: (result: unknown) => void) => void
   /** Toplama/çalma olayını yayınlar. */
   broadcast: (event: string, payload: unknown) => void
   /** Sunucu RPC'si. */
@@ -172,14 +164,6 @@ export const useGameLoop = (deps: LoopDeps) => {
   // EKRAN SARSINTISI (juice): çalma/çarpışma anında artan bir zaman damgası.
   // `Battle` değer değiştiğinde arena'ya kısa bir shake animasyonu uygular.
   const shakeRef = useRef<{ at: number; kind: 'bump' } | null>(null)
-  // PLAYER BUMP / KNOCKBACK — yerel bekleme (cooldown) ve uçuştaki istek kilidi.
-  //
-  // `bumpCooldownRef`: aynı çift için son itme zamanı. Sürekli temasın HER
-  // karede yeni bir `duo_bump` isteği üretmesini engeller (sunucu da ayrıca
-  // `last_bump_at` ile korur; bu istemci tarafı gereksiz ağ trafiğini keser).
-  // `bumpPendingRef`: uçuştaki bir `duo_bump` isteği varken yenisini başlatmaz.
-  const bumpCooldownRef = useRef(0)
-  const bumpPendingRef = useRef(false)
   // Sanal joystick vektörü. `VirtualJoystick` `setJoystick` ile buraya yazar;
   // böylece her pointer hareketinde React render tetiklenmez (yalnızca RAF okur).
   const joystick = useRef<JoystickVector>({ x: 0, y: 0 })
@@ -329,7 +313,6 @@ export const useGameLoop = (deps: LoopDeps) => {
       playerId,
       publishMove,
       runPositionedActions,
-      runBump,
       broadcast,
       call,
       syncChaos,
@@ -441,7 +424,7 @@ export const useGameLoop = (deps: LoopDeps) => {
     if (moving) {
       const length = Math.hypot(dx, dy) || 1
       const slowed = (me.slowedUntil ?? 0) > now
-      const speed = MOVE_SPEED * (slowed ? BUMP_SPEED_MULTIPLIER : 1)
+      const speed = MOVE_SPEED * (slowed ? SLOWED_SPEED_MULTIPLIER : 1)
       const targetX = fromX + (dx / length) * speed * dt
       const targetY = fromY + (dy / length) * speed * dt
       const resolved = resolveMove(fromX, fromY, targetX, targetY)
@@ -588,80 +571,24 @@ export const useGameLoop = (deps: LoopDeps) => {
       }
     }
 
-    // --- PLAYER BUMP / KNOCKBACK (sunucu-otoriteli temas çözümü). ---
+    // --- İKİ OYUNCU ARASI "SOLID" ÇARPIŞMA (itme YOK). ---
     //
-    // İki oyuncu temas menziline girdiğinde İKİSİ de birbirinden kısa bir
-    // mesafe itilir. Bu tamamen KONUMSALDIR: skor/coin/görev/tur DEĞİŞMEZ.
+    // Oyuncular birbirlerinin İÇİNDEN GEÇEMEZ. Rakip temas menziline giriyorsa
+    // hareket, rakibin dışında kalacak şekilde KISITLANIR. İTME/KNOCKBACK
+    // YOKTUR: rakip asla hareket ettirilmez; yalnızca yerel oyuncunun hedefi
+    // kırpılır. Skor/coin/görev/tur DEĞİŞMEZ.
     //
-    // TASARIM:
-    //   * Yön/karar tamamen SUNUCUYA aittir (`duo_bump`); istemci yalnızca
-    //     teması tespit edip isteği tetikler. İstemci kendi knockback konumunu
-    //     UYDURMAZ — sunucunun döndürdüğü yetkili konumlara uzlaşır.
-    //   * İstemci tarafı cooldown (`BUMP_COOLDOWN_MS`) + uçuştaki istek kilidi,
-    //     sürekli temasın her karede istek üretmesini engeller. Sunucu da
-    //     `last_bump_at` ile ayrıca korur (çift güvence).
-    //   * Yeni bir hareket sistemi YOK; mevcut konum kuyruğu (`runPositionedActions`)
-    //     ve `duo_move` ile aynı `x`/`y` sütunları kullanılır.
-    //   * `setTimeout`/yoklama YOK; yanıt geldiğinde ANINDA uzlaşılır.
+    // Sunucu otoritesi korunur: kısıtlanan konum normal `duo_move` akışıyla
+    // gönderilir; ek bir RPC yoktur. `setTimeout`/yoklama YOK.
     {
-      const rival = state.players[1]
       const rivalLive = liveRivalPos.current
-      if (
-        rival &&
-        rivalLive &&
-        !bumpPendingRef.current &&
-        now - bumpCooldownRef.current >= BUMP_COOLDOWN_MS
-      ) {
-        const contact = computeBump(nextX, nextY, rivalLive.x, rivalLive.y)
-        if (contact.bumped) {
-          // İyimser görsel: hemen cooldown'ı başlat ve isteği kilitle ki aynı
-          // temas penceresinde tekrar tekrar istek gitmesin.
-          bumpCooldownRef.current = now
-          bumpPendingRef.current = true
-          // Anlık görsel geri bildirim (juice). Konum uzlaşması sunucudan gelir.
-          shakeRef.current = { at: now, kind: 'bump' }
-          playSound('bump')
-          const bumpX = nextX
-          const bumpY = nextY
-          // ÖNEMLİ: Burada `runPositionedActions` KULLANILMAZ. O yol önce
-          // `duo_move(bumpX, bumpY)` (knockback ÖNCESİ konum) çalıştırırdı;
-          // sunucu bu eski konumu depolardı ve oyuncu ilerlemeye devam edince
-          // bir sonraki `duo_move` "too_fast" ile reddedilip istemci İLK
-          // ÇARPIŞMA konumuna geri ışınlanırdı. `duo_bump` çağıranın konumunu
-          // zaten `duo_step_ok` ile doğrulayıp kendisi yazdığı için öncesinde
-          // ayrı bir `duo_move` GEREKSİZDİR.
-          runBump(bumpX, bumpY, (response) => {
-            try {
-              const res = response as
-                | {
-                    ok?: boolean
-                    bumped?: boolean
-                    x?: number
-                    y?: number
-                    rivalX?: number
-                    rivalY?: number
-                  }
-                | null
-              if (!res || res.ok !== true) return
-              // Yerel oyuncuyu sunucunun yetkili konumuna oturt (kalıcı
-              // desenkron oluşmasın). `localPos`/`livePos` birlikte güncellenir.
-              if (typeof res.x === 'number' && typeof res.y === 'number') {
-                localPos.current = { x: res.x, y: res.y }
-                livePos.current = { x: res.x, y: res.y }
-              }
-              // Rakibi de yetkili konumuna oturt: interpolasyon hedefini ve
-              // ekrana basılan konumu güncelle. Böylece iki istemci bump
-              // sonrası AYNI konumlarda kalır.
-              if (typeof res.rivalX === 'number' && typeof res.rivalY === 'number') {
-                remoteTarget.current = { x: res.rivalX, y: res.rivalY }
-                remoteSample.current = null
-                remoteVel.current = { x: 0, y: 0 }
-                liveRivalPos.current = { x: res.rivalX, y: res.rivalY }
-              }
-            } finally {
-              bumpPendingRef.current = false
-            }
-          })
+      if (rivalLive) {
+        const blocked = resolvePlayerCollision(nextX, nextY, nextX, nextY, rivalLive.x, rivalLive.y)
+        if (blocked.x !== nextX || blocked.y !== nextY) {
+          nextX = blocked.x
+          nextY = blocked.y
+          localPos.current = { x: nextX, y: nextY }
+          livePos.current = { x: nextX, y: nextY }
         }
       }
     }

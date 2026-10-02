@@ -1,8 +1,7 @@
 import {
   ARENA,
-  BUMP_CONTACT_R,
-  BUMP_KNOCKBACK,
   OBSTACLES,
+  PLAYER_COLLIDE_R,
   PLAYER_HIT_R,
 } from './config'
 
@@ -222,62 +221,101 @@ export function resolveMove(fromX: number, fromY: number, toX: number, toY: numb
 }
 
 /**
- * PLAYER BUMP / KNOCKBACK — saf (pure) çözümleyici.
+ * İKİ OYUNCU ARASI "SOLID" ÇARPIŞMA — saf (pure) çözümleyici.
  *
- * İki oyuncu temas menzilindeyse İKİSİNİ de birbirinden uzaklaştıracak yeni
- * konumları döndürür. Sunucudaki `duo_bump` ile AYNI matematiği kullanır:
- *   * yön = rakibinden bana doğru normalize vektör,
- *   * merkezler çakışıksa (belirsiz) deterministik +x yedeği,
- *   * her oyuncu `BUMP_KNOCKBACK` kadar itilir,
- *   * sonuç arena sınırlarına kırpılır ve engel dışına itilir.
+ * Oyuncular birbirlerinin İÇİNDEN GEÇEMEZ. Hedef konum rakibin temas
+ * menziline giriyorsa, hareket rakibin dışında kalacak şekilde KISITLANIR.
+ * İTME / KNOCKBACK YOKTUR: rakip asla hareket ettirilmez; yalnızca hareket
+ * eden oyuncunun hedefi kırpılır.
  *
- * Skor/coin/görev/tur DEĞİŞTİRMEZ; yalnızca konum döndürür. NaN/Infinity asla
- * üretilmez (mesafe 0 iken yedek yön kullanılır).
+ * Davranış:
+ *   * Temas yoksa hedef AYNEN döner (normal hareket bozulmaz).
+ *   * Temas varsa hedef, rakibin merkezinden `collideR` uzaklıkta kalacak
+ *     şekilde rakibe doğru olan eksende geri çekilir (kayma/slide korunur:
+ *     teğet bileşen serbest kalır).
+ *   * Merkezler tam çakışıksa (belirsiz) deterministik +x yedeği kullanılır.
+ *   * Sonuç arena sınırlarına kırpılır ve engel dışına itilir.
  *
- * @returns `bumped: false` ve mevcut konumlar (temas yoksa); aksi halde yeni
- *          konumlar.
+ * Skor/coin/görev/tur DEĞİŞTİRMEZ; NaN/Infinity asla üretilmez.
+ *
+ * @returns Kısıtlanmış hedef konum.
  */
-export function computeBump(
-  meX: number,
-  meY: number,
+export function resolvePlayerCollision(
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number,
   rivalX: number,
   rivalY: number,
-  contactR = BUMP_CONTACT_R,
-  knockback = BUMP_KNOCKBACK,
-): {
-  bumped: boolean
-  me: { x: number; y: number }
-  rival: { x: number; y: number }
-} {
-  const dx = meX - rivalX
-  const dy = meY - rivalY
+  collideR = PLAYER_COLLIDE_R,
+): { x: number; y: number } {
+  const dx = toX - rivalX
+  const dy = toY - rivalY
   const dist = Math.hypot(dx, dy)
 
-  if (dist > contactR) {
-    return { bumped: false, me: { x: meX, y: meY }, rival: { x: rivalX, y: rivalY } }
+  // Temas yok VE hareket doğrusu rakibin çemberini kesmiyorsa: hedef aynen geçer.
+  const mx = toX - fromX
+  const my = toY - fromY
+  const mdist = Math.hypot(mx, my)
+
+  // Hareket doğrusu rakibin collide çemberini kesiyor mu? (swept test)
+  // Bu, hem normal teması hem de hızlı bir adımın rakibin "üzerinden
+  // atlamasını" (tünelleme) aynı mantıkla yakalar.
+  let sweepHit = false
+  let stopX = toX
+  let stopY = toY
+  if (mdist > 1e-6) {
+    const ux = mx / mdist
+    const uy = my / mdist
+    // Rakip merkezinin hareket doğrusuna izdüşümü (segment üzerinde).
+    const t = ((rivalX - fromX) * ux + (rivalY - fromY) * uy) / mdist
+    if (t > 0 && t < 1) {
+      const projX = fromX + ux * (t * mdist)
+      const projY = fromY + uy * (t * mdist)
+      const perp = Math.hypot(rivalX - projX, rivalY - projY)
+      if (perp < collideR) {
+        // Çemberi kesiyoruz: hareket yönünde çemberin YAKIN yüzeyinde dur.
+        const back = Math.sqrt(Math.max(0, collideR * collideR - perp * perp))
+        stopX = projX - ux * back
+        stopY = projY - uy * back
+        sweepHit = true
+      }
+    }
   }
 
-  // Yön: rakibinden bana doğru. Merkezler çakışıksa deterministik +x yedeği.
+  // Temas yok ve süpürme de çarpmıyorsa hedef aynen geçer.
+  if (dist >= collideR && !sweepHit) return clampPos(toX, toY)
+
+  // Süpürme çarptıysa yakın yüzeyde dur (geldiğimiz taraf korunur).
+  if (sweepHit) {
+    const safe = pushOut(stopX, stopY, PLAYER_HIT_R)
+    return clampPos(safe.x, safe.y)
+  }
+
+  // Buradan sonrası: hedef zaten rakibin çemberi İÇİNDE (dist < collideR).
+  // Rakibin merkezinden hedefe doğru birim vektör. Merkezler tam çakışıksa
+  // (belirsiz durum) hareket yönünün TERSİNİ kullan: böylece oyuncu geldiği
+  // tarafa geri itilir ve rakibin İÇİNDEN GEÇEMEZ.
   let nx: number
   let ny: number
   if (dist < 1e-6) {
-    nx = 1
-    ny = 0
+    if (mdist < 1e-6) {
+      nx = 1
+      ny = 0
+    } else {
+      nx = -mx / mdist
+      ny = -my / mdist
+    }
   } else {
     nx = dx / dist
     ny = dy / dist
   }
 
-  const meTarget = clampPos(meX + nx * knockback, meY + ny * knockback)
-  const rivalTarget = clampPos(rivalX - nx * knockback, rivalY - ny * knockback)
+  // Hedefi rakibin dışında tut: merkezden `collideR` uzaklıkta bir nokta.
+  const targetX = rivalX + nx * collideR
+  const targetY = rivalY + ny * collideR
 
-  // Engel içinde kalmasın: `resolveMove` ile aynı push-out güvencesi.
-  const meSafe = pushOut(meTarget.x, meTarget.y, PLAYER_HIT_R)
-  const rivalSafe = pushOut(rivalTarget.x, rivalTarget.y, PLAYER_HIT_R)
-
-  return {
-    bumped: true,
-    me: clampPos(meSafe.x, meSafe.y),
-    rival: clampPos(rivalSafe.x, rivalSafe.y),
-  }
+  // Engelin içinde kalmasın: `resolveMove` ile aynı push-out güvencesi.
+  const safe = pushOut(targetX, targetY, PLAYER_HIT_R)
+  return clampPos(safe.x, safe.y)
 }

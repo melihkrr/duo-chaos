@@ -14,8 +14,11 @@ export const MOVE_SEND_MS = 16
 // çok daha kısa olduğundan tek bir paket kaybı bile sorun yaratmaz.
 export const MOVE_HEARTBEAT_MS = 1_000
 export const ACTION_MS = 90
-export const BUMP_SLOW_MS = 400
-export const BUMP_SPEED_MULTIPLIER = 0.55
+/**
+ * Yavaşlatılmış (slowed) oyuncunun hız çarpanı. Eski "bump" mekaniğinden
+ * bağımsızdır; yalnızca `slowedUntil` aktifken uygulanır.
+ */
+export const SLOWED_SPEED_MULTIPLIER = 0.55
 export const RECONCILE_MS = 1000
 export const HEARTBEAT_MS = 400
 export const PHASE_TICK_MS = 80
@@ -83,23 +86,14 @@ export const COLLECT_RADIUS = 9
  */
 export const PLAYER_HIT_R = 2.6
 /**
- * PLAYER BUMP / KNOCKBACK (sunucu-otoriteli temas çözümü).
+ * İKİ OYUNCU ARASI "SOLID" ÇARPIŞMA yarıçapı (arena %).
  *
- * İki oyuncu birbirinin temas menziline girdiğinde İKİSİ de birbirinden
- * uzaklaşacak şekilde kısa bir mesafe itilir. Bu tamamen KONUMSALDIR:
- * skoru, coinleri, görevleri veya turu DEĞİŞTİRMEZ.
- *
- * - `BUMP_CONTACT_R`: temas yarıçapı (arena %). İki oyuncu yarıçapı
- *   (`PLAYER_HIT_R` = 2.6) toplamı + küçük tolerans.
- * - `BUMP_KNOCKBACK`: her oyuncunun itildiği mesafe (arena %), ~2.5 "metre".
- * - `BUMP_COOLDOWN_MS`: aynı çift için itme bekleme süresi. Sürekli temas
- *   her karede itmez; süre dolunca YENİ bir gerçek temas tekrar itebilir.
- *
- * Bu değerler sunucudaki `duo_bump` ile BİREBİR aynı olmalıdır.
+ * Oyuncular birbirlerinin İÇİNDEN GEÇEMEZ; temas menziline girince hareket
+ * engellenir (itme/knockback YOKTUR). Değer, iki oyuncu yarıçapının
+ * (`PLAYER_HIT_R` = 2.6) toplamına yakın seçilir ki görsel temas ile
+ * fiziksel blok hizalı olsun.
  */
-export const BUMP_CONTACT_R = 5.6
-export const BUMP_KNOCKBACK = 2.5
-export const BUMP_COOLDOWN_MS = 600
+export const PLAYER_COLLIDE_R = 5.2
 /**
  * Rakip pozisyonu için ÜSTEL yumuşatma oranı (1/saniye). Kare hızından
  * bağımsız çalışır: her karede `alpha = 1 - exp(-k * dt)` kadar hedefe
