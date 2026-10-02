@@ -14,7 +14,6 @@ import {
 import { friendlyError } from './errors'
 import {
   applyAuthoritativeRivalState,
-  applyAuthoritativeVictimState,
   createPositionActionQueue,
   isRpcSuccess,
   runAfterPositionSync,
@@ -477,20 +476,6 @@ export const useDuoChaos = () => {
   const remotePos = useRef<Map<string, { x: number; y: number; at: number }>>(new Map())
   // Rakibin emote etiketini süresi dolunca temizlemek için zamanlayıcı.
   const remoteEmoteTimer = useRef<number>(0)
-  // ÇALINMA TABANI (KÖK SORUN DÜZELTMESİ): Biz çalındığımızda sunucu
-  // `victimState` ile OTORİTER düşük skorumuzu döner ve `offSteal` bunu ANINDA
-  // uygular. Ancak `duo_public_state` yoklaması ~1 sn gecikmeli olduğundan,
-  // çalınmadan ÖNCEki yüksek skoru taşıyan BAYAT bir snapshot gelebilir ve ham
-  // yayılım (`{ ...player, ...server }`) bu düşüşü GERİ ALIR → "puan bir düşüyor
-  // bir geri geliyor". Bu ref, çalınma sonrası OTORİTER tabanı (tur + skor)
-  // saklar; yoklama birleştirmesi yerel skoru bu tabanın ALTINA çekemez.
-  const victimFloorRef = useRef<{
-    round: number
-    score: number
-    roundScore: number
-    coins: number
-    roundCoins: number
-  } | null>(null)
   // NOT: Eskiden burada `rivalBroadcastSeenRef` adlı KALICI bir mandal vardı:
   // tur içinde bir kez `move` broadcast'i görüldüyse sunucu snapshot'ı rakip
   // konumu için sonsuza dek devre dışı kalıyordu. Bu, "bir süre sonra rakip
@@ -1084,35 +1069,15 @@ export const useDuoChaos = () => {
       const data = payload as {
         by?: string
         objectiveState?: import('./objectiveSync').AuthoritativeActionState
-        victimState?: import('./objectiveSync').AuthoritativeVictimState
         round?: number
       }
       if (!data || data.by === room.playerId) return
       noteRivalAlive()
       playSound('bump')
       const authoritativeState = data.objectiveState
-      const victimState = data.victimState
       const actionRound = data.round
-      // RAKİP ÇALDI: rakibin (index 1) görev/skor durumunu uygularız.
       if (authoritativeState && typeof actionRound === 'number') {
         setState((prev) => applyAuthoritativeRivalState(prev, authoritativeState, actionRound))
-      }
-      // BİZ ÇALINDIK: sunucunun döndürdüğü OTORİTER kurban durumunu (index 0)
-      // ANINDA uygularız. Böylece -25 puanımız bayat `duo_public_state`
-      // yoklamasını BEKLEMEDEN düşer; "puan bende geç düştü / hiç düşmedi"
-      // hissi ortadan kalkar. `applyAuthoritativeVictimState` yalnızca AYNI
-      // turda ve yalnızca DÜŞÜŞ yönünde uygular (bayat yayın skoru geri çekemez).
-      if (victimState && typeof actionRound === 'number') {
-        // OTORİTER TABANI kaydet: yoklama birleştirmesi (aşağıda) yerel skoru
-        // bu değerin ALTINA çekemez; böylece bayat snapshot düşüşü geri alamaz.
-        victimFloorRef.current = {
-          round: actionRound,
-          score: typeof victimState.score === 'number' ? victimState.score : 0,
-          roundScore: typeof victimState.roundScore === 'number' ? victimState.roundScore : 0,
-          coins: typeof victimState.coins === 'number' ? victimState.coins : 0,
-          roundCoins: typeof victimState.roundCoins === 'number' ? victimState.roundCoins : 0,
-        }
-        setState((prev) => applyAuthoritativeVictimState(prev, victimState, actionRound))
       }
     })
 
@@ -1409,29 +1374,6 @@ export const useDuoChaos = () => {
             // değiştiyse sunucu değeri (yeni görev için `false`) geçerlidir.
             if (!objectiveChanged) {
               merged.missionDone = Boolean(player.missionDone || server.missionDone)
-            }
-            // ÇALINMA TABANI (KÖK SORUN DÜZELTMESİ): Biz çalındıysak sunucu
-            // `victimState` ile OTORİTER düşük skorumuzu döndürdü ve `offSteal`
-            // bunu ANINDA uyguladı. Ancak bu yoklama ~1 sn gecikmeli olabilir ve
-            // çalınmadan ÖNCEki yüksek skoru taşıyan BAYAT bir snapshot, yukarıdaki
-            // ham yayılımla düşüşü GERİ ALABİLİR ("puan bir düşüyor bir geri
-            // geliyor").
-            //
-            // DOĞRU SEMANTİK: taban, sunucu değerinin ÜST SINIRIDIR. Bayat
-            // snapshot tabanın ÜSTÜNDEyse onu tabana İNDİRİRİZ (düşüşü geri
-            // alamaz); tabanın ALTINDAysa (sunucu gerçekten daha da düşükse)
-            // aynen uygularız. Sonra yerel değerle `Math.max` alırız çünkü yerel
-            // oyuncu çalınmadan SONRA toplayarak skorunu ARTIRMIŞ olabilir.
-            const floor = victimFloorRef.current
-            if (floor && floor.round === prev.round) {
-              const capScore = Math.min(merged.score ?? 0, floor.score)
-              const capRoundScore = Math.min(merged.roundScore ?? 0, floor.roundScore)
-              const capCoins = Math.min(merged.coins ?? 0, floor.coins)
-              const capRoundCoins = Math.min(merged.roundCoins ?? 0, floor.roundCoins)
-              merged.score = Math.max(player.score ?? 0, capScore)
-              merged.roundScore = Math.max(player.roundScore ?? 0, capRoundScore)
-              merged.coins = Math.max(player.coins ?? 0, capCoins)
-              merged.roundCoins = Math.max(player.roundCoins ?? 0, capRoundCoins)
             }
           }
           // SUNUCU OTORİTESİ (skor + ilerleme): `duo_tick` artık periyodik
@@ -1940,9 +1882,6 @@ export const useDuoChaos = () => {
     // Sunucu turu ilerletti → misafir de aynı seed'den yeniden tohumla.
     if (state.round > syncedRoundRef.current) {
       syncedRoundRef.current = state.round
-      // Yeni tur: çalınma tabanı GEÇERSİZ (skorlar sıfırlanır). Temizlemezsek
-      // önceki turun tabanı yeni turun skorunu yanlışlıkla yukarı çekerdi.
-      victimFloorRef.current = null
       resetRound(state.round, roundSeedFor(room.code, state.round))
       setNextReady(false)
       setRivalNextReady(false)

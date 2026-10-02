@@ -33,15 +33,6 @@ export type AuthoritativeActionState = Partial<Pick<
   | 'roundScore'
 >>
 
-// ÇALINANIN OTORİTER DURUMU: sunucu `duo_steal_versioned` yanıtında döner.
-// Yalnızca puan/coin alanlarını taşır (çalınanın GÖREVİ çalmadan etkilenmez).
-// Çalan istemci bunu `steal` yayınıyla rakibe iletir; çalınan istemci kendi
-// -25'ini ANINDA ve OTORİTER uygular (bayat yoklamaya bağımlı kalmaz).
-export type AuthoritativeVictimState = Partial<Pick<
-  Player,
-  'coins' | 'roundCoins' | 'score' | 'roundScore'
->>
-
 export const isRpcSuccess = (response: unknown): response is { ok: true } =>
   typeof response === 'object' && response !== null && 'ok' in response && response.ok === true
 
@@ -324,42 +315,6 @@ export const applyAuthoritativeRivalState = (
           ? player.roundScore
           : Math.max(player.roundScore ?? 0, server.roundScore),
     }
-  })
-
-  return { ...previous, players }
-}
-
-// ÇALINAN İSTEMCİ TARAFI: `steal` yayınıyla gelen OTORİTER kurban durumunu
-// yerel oyuncuya (index 0) uygular. Burada `Math.max` KULLANMAYIZ: çalınma
-// puanı DÜŞÜRÜR ve bu düşüş meşrudur. Ancak bayat bir yayın (ör. tur değişimi
-// sonrası gecikmiş paket) yerel skoru geriye çekmemeli; bu yüzden yalnızca
-// AYNI turda ve sunucu değeri yerelden KÜÇÜK/EŞİT olduğunda uygularız.
-export const applyAuthoritativeVictimState = (
-  previous: State,
-  victim: AuthoritativeVictimState,
-  actionRound: number,
-): State => {
-  if (previous.round !== actionRound) return previous
-
-  const local = previous.players[0]
-  if (!local) return previous
-
-  const players = previous.players.map((player, index) => {
-    if (index !== 0) return player
-    const next: Player = { ...player }
-    if (typeof victim.coins === 'number' && Number.isFinite(victim.coins)) {
-      next.coins = Math.min(player.coins ?? 0, victim.coins)
-    }
-    if (typeof victim.roundCoins === 'number' && Number.isFinite(victim.roundCoins)) {
-      next.roundCoins = Math.min(player.roundCoins ?? 0, victim.roundCoins)
-    }
-    if (typeof victim.score === 'number' && Number.isFinite(victim.score)) {
-      next.score = Math.min(player.score ?? 0, victim.score)
-    }
-    if (typeof victim.roundScore === 'number' && Number.isFinite(victim.roundScore)) {
-      next.roundScore = Math.min(player.roundScore ?? 0, victim.roundScore)
-    }
-    return next
   })
 
   return { ...previous, players }

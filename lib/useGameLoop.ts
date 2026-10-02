@@ -923,13 +923,6 @@ export const useGameLoop = (deps: LoopDeps) => {
             p_token: token,
             p_expected_objectives_done: me.objectivesDone ?? 0,
             p_expected_round: state.round,
-            // KENDİ GÜNCEL KONUMUMUZ (duo_collect_batch ile aynı desen): sunucu
-            // bunu `duo_step_ok` ile doğrular ve TEMAS + YAKLAŞMA kuralını bu
-            // TAZE konuma göre uygular. Böylece "istemci temas görüyor ama
-            // sunucu bayat konuma bakıp reddediyor" (too_far/not_chasing)
-            // güvenilmezliği ortadan kalkar.
-            p_x: nextX,
-            p_y: nextY,
           })
           if (!isRpcSuccess(result) && isTransientRpcFailure(result)) {
             throw new Error(`duo_steal_versioned transient rejection: ${JSON.stringify(result)}`)
@@ -943,13 +936,10 @@ export const useGameLoop = (deps: LoopDeps) => {
         applyServerState(response, state.round)
         playSound('steal')
         shakeRef.current = { at: performance.now(), kind: 'steal' }
-        const result = response as { state?: unknown; victimState?: unknown }
+        const result = response as { state?: unknown }
         broadcast('steal', {
           by: playerId,
           objectiveState: result.state,
-          // ÇALINANIN OTORİTER SONUÇ DURUMU: rakibe (çalınan istemciye) iletiriz;
-          // o da kendi -25'ini ANINDA uygular (bayat yoklamaya bağımlı kalmaz).
-          victimState: result.victimState,
           round: state.round,
         })
       })

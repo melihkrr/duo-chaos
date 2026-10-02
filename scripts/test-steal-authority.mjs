@@ -1,31 +1,26 @@
 // ============================================================================
-// DUO CHAOS — deterministic steal authority regression test (0051).
+// DUO CHAOS — steal authority and directional-contact regression test.
 //
 // Reproduces the reported steal problems:
-//   1. UNRELIABLE: "bir çalışıyor bir çalışmıyor" — the client triggered on the
-//      PREDICTED rival position while the server validated against STALE stored
-//      positions → `too_far` / `not_chasing` almost every time.
-//   2. WRONG SIDE: "bir puanı çalana veriyor bir puanı çalınana veriyor" — the
-//      old directional guard guessed the chaser from stale 300ms samples, so
-//      the winner was nearly random and the VICTIM sometimes got +25.
+//   1. WRONG VALUE: a steal awarded +20/-20 instead of +25/-25.
+//   2. MUTUAL STEAL: two players touching caused BOTH to steal from each other
+//      (A +20 & B -20, then B +20 & A -20) → net ~0 and "never both stealers".
+//   3. EMPTY VICTIM: a steal succeeded even when the victim had 0 coins.
+//   4. DOUBLE COUNT: the client optimistically incremented `stolen` every
+//      `stealing` frame, and the monotonic `mergeProgress` locked the
+//      over-count in.
 //
-// FIX (0051_deterministic_steal.sql):
-//   * The caller sends its OWN current position (`p_x`, `p_y`) — the exact same
-//     pattern as `duo_collect_batch`. The server validates it with `duo_step_ok`
-//     (anti-teleport) and falls back to the stored position if invalid.
-//   * CONTACT: distance from the validated caller position to the opponent's
-//     STORED position must be within `STEAL_RADIUS + SLACK` (5.2 + 2.0).
-//   * APPROACH (deterministic attacker rule): the caller's supplied position
-//     must be CLOSER to the opponent than the caller's stored previous position
-//     (`dist_after < dist_before`). Only a player genuinely moving toward the
-//     opponent can steal → the victim can never be awarded the steal.
-//   * SERIALIZATION: both rows are locked `for update ... order by slot`; the
-//     700ms `last_stolen_at` contact guard rejects the second concurrent call.
-//   * The server returns `victimState` so the victim client applies its -25
-//     immediately (no dependence on the ~1s stale `duo_public_state` poll).
+// FIX (0042, 0049 + 0050):
+//   * `v_steal_score := 25` (matches single-player `STEAL_SCORE`).
+//   * Per-contact guard: `duo_players.last_stolen_at` (epoch ms). A steal is
+//     rejected if either participant was stolen from within 700ms.
+//   * A recent server-recorded approach is required, and an ambiguous head-on
+//     contact cannot be won by whichever client's request arrives first.
+//   * Victim must have `coins > 0` (else `no_coins`).
+//   * Client no longer optimistically increments `stolen`/`roundStolen`.
 //
 // This test mirrors the EXACT server guard + score rules and the client merge,
-// then drives the required scenarios. No DB required.
+// then drives the 10 required scenarios. No DB required.
 //
 // Run: node scripts/test-steal-authority.mjs
 // ============================================================================
@@ -44,37 +39,25 @@ const check = (label, ok, detail = '') => {
   }
 }
 
-// --- Constants mirrored from migration 0051 / lib/config.ts -----------------
+// --- Constants mirrored from migration 0042 / lib/config.ts -----------------
 const STEAL_SCORE = 25
 const STEAL_CONTACT_GUARD_MS = 700
 const STEAL_RADIUS = 5.2
-const CONTACT_SLACK = 2.0
-const MOVE_SPEED = 38
-const SLOW_MULT = 0.55
-const STEP_SAFETY = 1.6
-const STEP_FLOOR = 8
-
-const deterministicMigration = await readFile(
-  new URL('../supabase/migrations/0051_deterministic_steal.sql', import.meta.url),
+const STEAL_MOVEMENT_FRESH_MS = 300
+const STEAL_APPROACH_EPSILON = 0.5
+const directionMigration = await readFile(
+  new URL('../supabase/migrations/0049_directional_steal.sql', import.meta.url),
+  'utf8',
+)
+const staleDirectionMigration = await readFile(
+  new URL('../supabase/migrations/0050_expire_stale_steal_direction.sql', import.meta.url),
   'utf8',
 )
 
-// --- Mirror of duo_step_ok (0047) -------------------------------------------
-// Anti-teleport: the caller may not move farther than the max distance allowed
-// by the elapsed time since its last recorded move.
-const duoStepOk = (storedX, storedY, lastMoveAt, newX, newY, slowedUntil, nowMs) => {
-  const elapsed = Math.max(0, nowMs - (lastMoveAt ?? nowMs)) / 1_000
-  const slow = slowedUntil && slowedUntil > nowMs ? SLOW_MULT : 1
-  const maxDist = Math.max(STEP_FLOOR, elapsed * MOVE_SPEED * slow * STEP_SAFETY)
-  return Math.hypot(newX - storedX, newY - storedY) <= maxDist
-}
-
-// --- Mirror of duo_steal_versioned (0051) -----------------------------------
-// Returns { ok, reason?, stealer, victim, victimState } where stealer/victim are
-// the post-action rows. `now` is the server clock (epoch ms). `pX`/`pY` are the
-// caller-supplied position (defaults to the stored position, like the 4-arg
-// backward-compatible wrapper).
-const duoStealVersioned = (state, stealerSlot, now, expectedRound = null, pX = null, pY = null) => {
+// --- Mirror of duo_steal_versioned (0042) -----------------------------------
+// Returns { ok, reason?, stealer, victim } where stealer/victim are the
+// post-action rows. `now` is the server clock (epoch ms).
+const duoStealVersioned = (state, stealerSlot, now, expectedRound = null) => {
   const stealer = state.players[stealerSlot]
   const victimSlot = stealerSlot === 'p1' ? 'p2' : 'p1'
   const victim = state.players[victimSlot]
@@ -84,6 +67,8 @@ const duoStealVersioned = (state, stealerSlot, now, expectedRound = null, pX = n
     return { ok: false, reason: 'stale_round' }
   }
   // CONTACT GUARD (0042): at most ONE steal per contact.
+  //   * victim recently stolen from → reject (no farming).
+  //   * caller recently stolen from → reject (no mutual steal).
   if (
     (victim.lastStolenAt ?? 0) > 0 &&
     now - (victim.lastStolenAt ?? 0) < STEAL_CONTACT_GUARD_MS
@@ -98,33 +83,46 @@ const duoStealVersioned = (state, stealerSlot, now, expectedRound = null, pX = n
   }
   // EMPTY VICTIM (0042): nothing to steal.
   if ((victim.coins ?? 0) <= 0) return { ok: false, reason: 'no_coins' }
-
-  // CALLER POSITION (0051): validate the supplied position; fall back to the
-  // stored position when the step is invalid (anti-teleport).
-  let newX = pX === null ? stealer.x : pX
-  let newY = pY === null ? stealer.y : pY
-  if (!duoStepOk(stealer.x, stealer.y, stealer.lastMoveAt, newX, newY, stealer.slowedUntil, now)) {
-    newX = stealer.x
-    newY = stealer.y
+  const dist = Math.hypot(victim.x - stealer.x, victim.y - stealer.y)
+  if (dist > STEAL_RADIUS) return { ok: false, reason: 'too_far' }
+  if (
+    stealer.previousX === null ||
+    stealer.previousY === null ||
+    stealer.previousMovedAt === null ||
+    stealer.previousPositionAt === null ||
+    now - stealer.previousMovedAt > STEAL_MOVEMENT_FRESH_MS ||
+    now - stealer.previousPositionAt > STEAL_MOVEMENT_FRESH_MS ||
+    stealer.previousMovedAt <= stealer.previousPositionAt
+  ) {
+    return { ok: false, reason: 'not_chasing' }
   }
-
-  // CONTACT: validated caller position vs opponent's STORED position.
-  const distAfter = Math.hypot(victim.x - newX, victim.y - newY)
-  if (distAfter > STEAL_RADIUS + CONTACT_SLACK) return { ok: false, reason: 'too_far' }
-
-  // APPROACH (deterministic attacker rule): the caller must be CLOSER than its
-  // stored previous position. A stationary or retreating caller is rejected.
-  const distBefore = Math.hypot(victim.x - stealer.x, victim.y - stealer.y)
-  if (distAfter >= distBefore) return { ok: false, reason: 'not_approaching' }
+  const playerElapsed = (stealer.previousMovedAt - stealer.previousPositionAt) / 1_000
+  const approach =
+    (Math.hypot(victim.x - stealer.previousX, victim.y - stealer.previousY) - dist) /
+    playerElapsed
+  const opponentApproach =
+    victim.previousX !== null &&
+    victim.previousY !== null &&
+    victim.previousMovedAt !== null &&
+    victim.previousPositionAt !== null &&
+    now - victim.previousMovedAt <= STEAL_MOVEMENT_FRESH_MS &&
+    now - victim.previousPositionAt <= STEAL_MOVEMENT_FRESH_MS &&
+    victim.previousMovedAt > victim.previousPositionAt
+      ? (Math.hypot(stealer.x - victim.previousX, stealer.y - victim.previousY) - dist) /
+        ((victim.previousMovedAt - victim.previousPositionAt) / 1_000)
+      : 0
+  if (
+    approach <= STEAL_APPROACH_EPSILON ||
+    approach <= opponentApproach + STEAL_APPROACH_EPSILON
+  ) {
+    return { ok: false, reason: 'not_chasing' }
+  }
 
   // Apply atomically (mirrors the two UPDATEs).
   stealer.stolen = (stealer.stolen ?? 0) + 1
   stealer.roundStolen = (stealer.roundStolen ?? 0) + 1
   stealer.score = (stealer.score ?? 0) + STEAL_SCORE
   stealer.roundScore = (stealer.roundScore ?? 0) + STEAL_SCORE
-  stealer.x = newX
-  stealer.y = newY
-  stealer.lastMoveAt = now
 
   victim.coins = Math.max(0, (victim.coins ?? 0) - 1)
   victim.roundCoins = Math.max(0, (victim.roundCoins ?? 0) - 1)
@@ -132,18 +130,16 @@ const duoStealVersioned = (state, stealerSlot, now, expectedRound = null, pX = n
   victim.roundScore = Math.max(0, (victim.roundScore ?? 0) - STEAL_SCORE)
   victim.slowedUntil = now + 400
   victim.lastStolenAt = now
+  stealer.previousX = stealer.x
+  stealer.previousY = stealer.y
+  stealer.previousMovedAt = null
+  stealer.previousPositionAt = null
+  victim.previousX = victim.x
+  victim.previousY = victim.y
+  victim.previousMovedAt = null
+  victim.previousPositionAt = null
 
-  return {
-    ok: true,
-    stealer,
-    victim,
-    victimState: {
-      coins: victim.coins,
-      roundCoins: victim.roundCoins,
-      score: victim.score,
-      roundScore: victim.roundScore,
-    },
-  }
+  return { ok: true, stealer, victim }
 }
 
 const makeState = (overrides = {}) => ({
@@ -161,7 +157,10 @@ const makeState = (overrides = {}) => ({
       roundScore: 100,
       lastStolenAt: 0,
       slowedUntil: 0,
-      lastMoveAt: 1_000,
+      previousX: 45,
+      previousY: 50,
+      previousMovedAt: 1_000,
+      previousPositionAt: 850,
     },
     p2: {
       id: 'p2',
@@ -174,107 +173,99 @@ const makeState = (overrides = {}) => ({
       roundScore: 100,
       lastStolenAt: 0,
       slowedUntil: 0,
-      lastMoveAt: 1_000,
+      previousX: 52,
+      previousY: 50,
+      previousMovedAt: null,
+      previousPositionAt: null,
     },
   },
   ...overrides,
 })
 
-// --- Mirror of applyAuthoritativeVictimState (lib/objectiveSync.ts) ---------
-// Applies the authoritative victim state to the local player (index 0). Only
-// DECREASES are applied (Math.min), and only within the same round.
-const applyAuthoritativeVictimState = (local, victim, actionRound, currentRound) => {
-  if (currentRound !== actionRound) return local
-  const next = { ...local }
-  if (typeof victim.coins === 'number') next.coins = Math.min(local.coins ?? 0, victim.coins)
-  if (typeof victim.roundCoins === 'number') {
-    next.roundCoins = Math.min(local.roundCoins ?? 0, victim.roundCoins)
-  }
-  if (typeof victim.score === 'number') next.score = Math.min(local.score ?? 0, victim.score)
-  if (typeof victim.roundScore === 'number') {
-    next.roundScore = Math.min(local.roundScore ?? 0, victim.roundScore)
-  }
-  return next
+const recordApproach = (state, slot, now, previousX, previousAt = now - 100) => {
+  const player = state.players[slot]
+  player.previousX = previousX
+  player.previousY = player.y
+  player.previousMovedAt = now
+  player.previousPositionAt = previousAt
 }
 
-// --- Mirror of the poll merge victim floor (lib/useDuoChaos.ts) -------------
-// A stale `duo_public_state` snapshot must not resurrect the pre-steal score.
-// The floor is an UPPER BOUND on the server value: a stale snapshot above the
-// floor is capped down to it; a genuinely lower server value is applied as-is.
-// Then we take the max with the LOCAL value (the victim may have collected
-// after being stolen, legitimately raising its score again).
-const mergePollWithFloor = (local, server, floor, round) => {
-  const merged = { ...local, ...server }
-  if (floor && floor.round === round) {
-    const capScore = Math.min(merged.score ?? 0, floor.score)
-    const capRoundScore = Math.min(merged.roundScore ?? 0, floor.roundScore)
-    const capCoins = Math.min(merged.coins ?? 0, floor.coins)
-    const capRoundCoins = Math.min(merged.roundCoins ?? 0, floor.roundCoins)
-    merged.score = Math.max(local.score ?? 0, capScore)
-    merged.roundScore = Math.max(local.roundScore ?? 0, capRoundScore)
-    merged.coins = Math.max(local.coins ?? 0, capCoins)
-    merged.roundCoins = Math.max(local.roundCoins ?? 0, capRoundCoins)
+// --- Mirror of lib/useDuoChaos.ts mergeProgress (monotonic) -----------------
+const mergeProgress = (local, server, objectiveChanged) => {
+  if (objectiveChanged) {
+    return {
+      coins: server.coins ?? local.coins,
+      stolen: server.stolen ?? local.stolen,
+      roundCoins: server.roundCoins ?? local.roundCoins,
+      roundStolen: server.roundStolen ?? local.roundStolen,
+    }
   }
-  return merged
+  return {
+    coins: server.coins ?? local.coins,
+    stolen: server.stolen ?? local.stolen,
+    roundCoins: server.roundCoins ?? local.roundCoins,
+    roundStolen: server.roundStolen ?? local.roundStolen,
+  }
 }
 
 console.log('SCENARIO 1 — Player A steals from Player B: A +25, B -25')
 {
   const state = makeState()
   const before = { a: state.players.p1.score, b: state.players.p2.score }
-  // A moves from x=50 toward B at x=52 → supplies x=51.5 (closer).
-  const res = duoStealVersioned(state, 'p1', 1_000, null, 51.5, 50)
+  const res = duoStealVersioned(state, 'p1', 1_000)
   check('steal succeeds', res.ok === true, res.reason)
   check('A gains exactly +25', state.players.p1.score - before.a === 25, `delta=${state.players.p1.score - before.a}`)
   check('B loses exactly -25', before.b - state.players.p2.score === 25, `delta=${before.b - state.players.p2.score}`)
   check('B loses exactly 1 coin', state.players.p2.coins === 2, `coins=${state.players.p2.coins}`)
   check('A stolen counter +1', state.players.p1.stolen === 1)
   check('B is slowed', state.players.p2.slowedUntil === 1_400)
-  check('victimState reports B score 75', res.victimState.score === 75, `score=${res.victimState.score}`)
-  check('victimState reports B coins 2', res.victimState.coins === 2, `coins=${res.victimState.coins}`)
 }
 
 console.log('SCENARIO 2 — Repeat the same contact: no accidental second +25')
 {
   const state = makeState()
-  const first = duoStealVersioned(state, 'p1', 1_000, null, 51.5, 50)
+  const first = duoStealVersioned(state, 'p1', 1_000)
   check('first steal ok', first.ok === true)
   const scoreAfterFirst = state.players.p1.score
   // Same contact, 100ms later (within the 700ms guard). The VICTIM (p2) was
   // just stolen from, so the victim guard rejects the repeat.
-  const second = duoStealVersioned(state, 'p1', 1_100, null, 51.5, 50)
+  const second = duoStealVersioned(state, 'p1', 1_100)
   check('second steal rejected', second.ok === false, second.reason)
   check('rejected with victim_guarded', second.reason === 'victim_guarded', second.reason)
   check('A score unchanged after rejection', state.players.p1.score === scoreAfterFirst)
   check('A stolen counter still 1', state.players.p1.stolen === 1)
-  // After the guard window elapses, a NEW approach may steal again.
-  const third = duoStealVersioned(state, 'p1', 1_800, null, 51.5, 50)
+  // After the guard window elapses, a NEW contact may steal again.
+  const third = duoStealVersioned(state, 'p1', 1_800)
   check('stationary contact cannot be farmed after guard window', third.ok === false, third.reason)
-  check('rejected with not_approaching', third.reason === 'not_approaching', third.reason)
-  // A fresh approach (A moved even closer) allows a new steal.
-  const fourth = duoStealVersioned(state, 'p1', 1_800, null, 51.8, 50)
+  recordApproach(state, 'p1', 1_800, 45)
+  const fourth = duoStealVersioned(state, 'p1', 1_800)
   check('a fresh approach allows a new steal', fourth.ok === true, fourth.reason)
   check('A stolen counter now 2', state.players.p1.stolen === 2)
 }
 
-console.log('SCENARIO 3 — Two clients touch simultaneously: the approaching player wins regardless of request order')
+console.log('SCENARIO 3 — Two clients touch simultaneously: the chaser wins regardless of request order')
 {
   for (const requestOrder of [['p1', 'p2'], ['p2', 'p1']]) {
     const state = makeState()
     state.players.p1.x = 50
     state.players.p2.x = 54.5
-    // p1 approaches from x=50 → supplies x=52.5 (closer to p2 at 54.5).
-    // p2 is stationary → supplies its stored x=54.5 (no approach).
+    recordApproach(state, 'p1', 2_000, 45, 1_900)
+    recordApproach(state, 'p2', 2_000, 54, 1_900)
     const results = {}
-    for (const slot of requestOrder) {
-      results[slot] =
-        slot === 'p1'
-          ? duoStealVersioned(state, 'p1', 2_000, null, 52.5, 50)
-          : duoStealVersioned(state, 'p2', 2_000, null, 54.5, 50)
-    }
-    check(`only the approacher steals (${requestOrder.join(' then ')})`, results.p1.ok === true && results.p2.ok === false)
-    check('approacher gains exactly +25', state.players.p1.score === 125)
-    check('stationary rival loses exactly -25', state.players.p2.score === 75)
+    for (const slot of requestOrder) results[slot] = duoStealVersioned(state, slot, 2_000)
+    check(`only the pursuer steals (${requestOrder.join(' then ')})`, results.p1.ok === true && results.p2.ok === false)
+    check('pursuer gains exactly +25', state.players.p1.score === 125)
+    check('fleeing rival loses exactly -25', state.players.p2.score === 75)
+  }
+
+  for (const requestOrder of [['p1', 'p2'], ['p2', 'p1']]) {
+    const state = makeState()
+    recordApproach(state, 'p1', 2_000, 49, 1_900)
+    recordApproach(state, 'p2', 2_000, 53, 1_900)
+    const results = {}
+    for (const slot of requestOrder) results[slot] = duoStealVersioned(state, slot, 2_000)
+    check(`ambiguous head-on contact has no network-order winner (${requestOrder.join(' then ')})`, results.p1.ok === false && results.p2.ok === false)
+    check('ambiguous contact leaves both scores unchanged', state.players.p1.score === 100 && state.players.p2.score === 100)
   }
 }
 
@@ -285,38 +276,44 @@ console.log('SCENARIO 4 — Repeated collisions: new steals require a fresh appr
   // Simulate 60 frames over 1 second (16ms apart) while in contact.
   for (let frame = 0; frame < 60; frame += 1) {
     const now = 3_000 + frame * 16
-    // A creeps toward B: each frame supplies a slightly closer position.
-    const px = 50 + Math.min(1.9, frame * 0.05)
-    const res = duoStealVersioned(state, 'p1', now, null, px, 50)
+    if (frame === 0) recordApproach(state, 'p1', now, 45, now - 100)
+    if (frame === 44) recordApproach(state, 'p1', now, 49.9, now - 16)
+    const res = duoStealVersioned(state, 'p1', now)
     if (res.ok) successes += 1
   }
-  check('a continuous approach permits at most one steal per guard window', successes >= 1 && successes <= 2, `successes=${successes}`)
+  check('one fresh approach permits at most one additional steal', successes === 2, `successes=${successes}`)
   check('stolen counter matches successes', state.players.p1.stolen === successes)
 }
 
 console.log('SCENARIO 5 — Both clients converge to the same final scores')
 {
   const state = makeState()
-  const res = duoStealVersioned(state, 'p1', 4_000, null, 51.5, 50)
-  check('steal ok', res.ok === true, res.reason)
+  recordApproach(state, 'p1', 4_000, 45)
+  duoStealVersioned(state, 'p1', 4_000)
   // Server authoritative rows.
   const serverP1 = { ...state.players.p1 }
   const serverP2 = { ...state.players.p2 }
+  // Client A (stealer) local view and Client B (victim) local view both merge
+  // the SAME server snapshot. Neither optimistically incremented `stolen`.
+  const clientA = mergeProgress({ coins: 3, stolen: 0, roundCoins: 3, roundStolen: 0 }, serverP1, false)
+  const clientB = mergeProgress({ coins: 3, stolen: 0, roundCoins: 3, roundStolen: 0 }, serverP2, false)
+  check('client A sees stolen=1', clientA.stolen === 1, `stolen=${clientA.stolen}`)
+  check('client B sees coins=2', clientB.coins === 2, `coins=${clientB.coins}`)
   check('both clients agree on A score', serverP1.score === 125, `A=${serverP1.score}`)
   check('both clients agree on B score', serverP2.score === 75, `B=${serverP2.score}`)
-  // Victim client applies the authoritative victimState immediately.
-  const victimLocal = { coins: 3, roundCoins: 3, score: 100, roundScore: 100 }
-  const victimAfter = applyAuthoritativeVictimState(victimLocal, res.victimState, 1, 1)
-  check('victim client drops to 75 immediately', victimAfter.score === 75, `score=${victimAfter.score}`)
-  check('victim client drops to 2 coins immediately', victimAfter.coins === 2, `coins=${victimAfter.coins}`)
 }
 
 console.log('SCENARIO 6 — Steal does not interfere with movement or coin collection')
 {
   const state = makeState()
+  // A steal only touches score/coins/stolen/slowedUntil — never x/y.
+  const ax = state.players.p1.x
+  const ay = state.players.p1.y
   const bx = state.players.p2.x
   const by = state.players.p2.y
-  duoStealVersioned(state, 'p1', 5_000, null, 51.5, 50)
+  recordApproach(state, 'p1', 5_000, 45)
+  duoStealVersioned(state, 'p1', 5_000)
+  check('stealer position unchanged', state.players.p1.x === ax && state.players.p1.y === ay)
   check('victim position unchanged', state.players.p2.x === bx && state.players.p2.y === by)
   // Victim keeps collecting: a coin collection adds score independently.
   const victimScoreBefore = state.players.p2.score
@@ -326,7 +323,8 @@ console.log('SCENARIO 6 — Steal does not interfere with movement or coin colle
   const drained = makeState()
   drained.players.p2.score = 10
   drained.players.p2.coins = 1
-  duoStealVersioned(drained, 'p1', 6_000, null, 51.5, 50)
+  recordApproach(drained, 'p1', 6_000, 45)
+  duoStealVersioned(drained, 'p1', 6_000)
   check('victim score floors at 0 (never negative)', drained.players.p2.score === 0, `score=${drained.players.p2.score}`)
 }
 
@@ -334,7 +332,7 @@ console.log('SCENARIO 7 — Empty victim cannot be stolen from')
 {
   const state = makeState()
   state.players.p2.coins = 0
-  const res = duoStealVersioned(state, 'p1', 7_000, null, 51.5, 50)
+  const res = duoStealVersioned(state, 'p1', 7_000)
   check('steal rejected when victim has no coins', res.ok === false, res.reason)
   check('rejected with no_coins', res.reason === 'no_coins', res.reason)
   check('stealer score unchanged', state.players.p1.score === 100)
@@ -344,37 +342,35 @@ console.log('SCENARIO 7 — Empty victim cannot be stolen from')
 console.log('SCENARIO 8 — Being nearby is not enough: steal requires avatar contact')
 {
   const state = makeState()
-  state.players.p2.x = 60
-  const result = duoStealVersioned(state, 'p1', 8_000, null, 51.5, 50)
-  check('steal rejected outside the contact radius + slack', result.ok === false && result.reason === 'too_far', result.reason)
+  state.players.p2.x = 57
+  recordApproach(state, 'p1', 8_000, 45)
+  const result = duoStealVersioned(state, 'p1', 8_000)
+  check('steal rejected outside the 5.2-unit contact radius', result.ok === false && result.reason === 'too_far', result.reason)
   check('no score is transferred without contact', state.players.p1.score === 100 && state.players.p2.score === 100)
 }
 
-console.log('SCENARIO 9 — SQL migration enforces deterministic, position-supplied contact')
+console.log('SCENARIO 9 — SQL migrations enforce server-recorded directional contact')
 {
   const config = await readFile(new URL('../lib/config.ts', import.meta.url), 'utf8')
   check('client radius tracks both avatar collision radii', config.includes('STEAL_RADIUS = PLAYER_HIT_R * 2'))
-  check('server accepts the caller-supplied position', deterministicMigration.includes('p_x numeric'))
-  check('server validates the position with duo_step_ok', deterministicMigration.includes('duo_step_ok('))
-  check('server applies a contact slack', deterministicMigration.includes('v_contact_slack numeric := 2.0'))
-  check('server enforces the deterministic approach rule', deterministicMigration.includes('if v_dist_after >= v_dist_before then'))
-  check('approach rejection reason is not_approaching', deterministicMigration.includes("'reason', 'not_approaching'"))
-  check('both players are locked before contact validation', /order by slot\s+for update/.test(deterministicMigration))
-  check('server returns the victim authoritative state', deterministicMigration.includes("'victimState'"))
-  check('backward-compatible 4-arg wrapper is preserved', deterministicMigration.includes('duo_steal_versioned(text, text, integer, integer)'))
-  check('only public steal RPC remains executable', deterministicMigration.includes('grant execute on function public.duo_steal_versioned'))
+  check('server radius matches the avatar contact boundary', directionMigration.includes('if v_dist > 5.2 then'))
+  check('previous positions are captured by a database trigger', directionMigration.includes('duo_players_track_previous_position'))
+  check('both players are locked before contact validation', /order by slot\s+for update/.test(staleDirectionMigration))
+  check('stale approach snapshots expire after 300ms', staleDirectionMigration.includes("v_direction_fresh interval := interval '300 milliseconds'"))
+  check('head-on contact cannot be awarded by RPC arrival order', staleDirectionMigration.includes('v_player_approach <= v_opponent_approach + 0.5'))
+  check('only public steal RPC remains executable', staleDirectionMigration.includes('grant execute on function public.duo_steal_versioned'))
 }
 
-console.log('SCENARIO 10 — A stationary player cannot steal (no approach)')
+console.log('SCENARIO 10 — A stopped player cannot steal using their stale approach')
 {
   const state = makeState()
   state.players.p1.x = 50
   state.players.p2.x = 54.5
-  // p1 supplies its stored position → no approach.
-  const p1Steal = duoStealVersioned(state, 'p1', 2_000, null, 50, 50)
-  check('stationary player rejected', p1Steal.ok === false && p1Steal.reason === 'not_approaching', p1Steal.reason)
-  // p2 approaches from x=54.5 → supplies x=52.5 (closer to p1 at 50).
-  const p2Steal = duoStealVersioned(state, 'p2', 2_000, null, 52.5, 50)
+  recordApproach(state, 'p1', 1_600, 49.5, 1_500)
+  recordApproach(state, 'p2', 2_000, 56, 1_900)
+  const p1Steal = duoStealVersioned(state, 'p1', 2_000)
+  check('stationary player rejected after movement sample expires', p1Steal.ok === false && p1Steal.reason === 'not_chasing')
+  const p2Steal = duoStealVersioned(state, 'p2', 2_000)
   check('currently closing player receives the steal', p2Steal.ok === true, p2Steal.reason)
   check('scores follow the actual chase direction', state.players.p1.score === 75 && state.players.p2.score === 125)
 }
@@ -384,51 +380,20 @@ console.log('SCENARIO 11 — A player who has never moved cannot steal from the 
   const state = makeState()
   state.players.p1.x = 50
   state.players.p2.x = 54.5
-  // p1 never moved → supplies its stored position (no approach).
-  const stationaryPlayerRequest = duoStealVersioned(state, 'p1', 2_000, null, 50, 50)
+  state.players.p1.previousX = 50
+  state.players.p1.previousY = 50
+  state.players.p1.previousMovedAt = null
+  state.players.p1.previousPositionAt = null
+  recordApproach(state, 'p2', 2_000, 56, 1_900)
+
+  const stationaryPlayerRequest = duoStealVersioned(state, 'p1', 2_000)
   check(
-    'never-moved player cannot steal',
-    stationaryPlayerRequest.ok === false && stationaryPlayerRequest.reason === 'not_approaching',
-    stationaryPlayerRequest.reason,
+    'never-moved player has no valid direction and cannot steal',
+    stationaryPlayerRequest.ok === false && stationaryPlayerRequest.reason === 'not_chasing',
   )
-  // p2 approaches from x=54.5 → supplies x=52.5 (closer to p1 at 50).
-  const approachingPlayerRequest = duoStealVersioned(state, 'p2', 2_000, null, 52.5, 50)
-  check('moving player can steal from the stationary opponent', approachingPlayerRequest.ok === true, approachingPlayerRequest.reason)
+  const approachingPlayerRequest = duoStealVersioned(state, 'p2', 2_000)
+  check('moving player can steal from the stationary opponent', approachingPlayerRequest.ok === true)
   check('stationary player loses points, not the pursuer', state.players.p1.score === 75 && state.players.p2.score === 125)
-}
-
-console.log('SCENARIO 12 — Anti-teleport: an impossible jump cannot steal')
-{
-  const state = makeState()
-  state.players.p1.x = 50
-  state.players.p1.lastMoveAt = 2_000
-  state.players.p2.x = 52
-  // p1 claims to be at x=70 (a 20-unit jump) with 0ms elapsed since its last
-  // move → the max allowed step is the floor (8), so the step is invalid and
-  // the server falls back to the stored position (50), which is NOT closer to
-  // p2 (52) → not_approaching.
-  const res = duoStealVersioned(state, 'p1', 2_000, null, 70, 50)
-  check('impossible jump is rejected', res.ok === false, res.reason)
-  check('rejected with not_approaching after fallback', res.reason === 'not_approaching', res.reason)
-  check('no score transferred on a rejected teleport', state.players.p1.score === 100 && state.players.p2.score === 100)
-}
-
-console.log('SCENARIO 13 — A stale poll snapshot cannot resurrect the victim score')
-{
-  const state = makeState()
-  const res = duoStealVersioned(state, 'p1', 9_000, null, 51.5, 50)
-  check('steal ok', res.ok === true, res.reason)
-  // Victim client applied the authoritative victimState (score 75).
-  const victimLocal = { coins: 2, roundCoins: 2, score: 75, roundScore: 75 }
-  const floor = { round: 1, score: 75, roundScore: 75, coins: 2, roundCoins: 2 }
-  // A STALE poll snapshot still carries the pre-steal score (100).
-  const staleServer = { coins: 3, roundCoins: 3, score: 100, roundScore: 100 }
-  const merged = mergePollWithFloor(victimLocal, staleServer, floor, 1)
-  check('stale poll cannot raise the victim score back to 100', merged.score === 75, `score=${merged.score}`)
-  check('stale poll cannot raise the victim coins back to 3', merged.coins === 2, `coins=${merged.coins}`)
-  // A NEW round clears the floor → the fresh score is authoritative.
-  const nextRound = mergePollWithFloor({ score: 0, coins: 0 }, { score: 0, coins: 0 }, floor, 2)
-  check('floor is ignored in a new round', nextRound.score === 0 && nextRound.coins === 0)
 }
 
 console.log(`\n${failed === 0 ? '\u2714 ALL CHECKS PASSED' : '\u2718 SOME CHECKS FAILED'} \u2014 ${passed} passed, ${failed} failed`)
