@@ -14,6 +14,7 @@ import {
 import { friendlyError } from './errors'
 import {
   applyAuthoritativeRivalState,
+  applyAuthoritativeVictimState,
   createPositionActionQueue,
   isRpcSuccess,
   runAfterPositionSync,
@@ -113,6 +114,15 @@ const makeToken = () => {
  * etmez ve döngüsel import istemeyiz.
  */
 const EMOTE_MS = 1_600
+
+/**
+ * ÇALINMA TABANI penceresi (0052). ÇALINAN istemci kendi -25'ini `victimState`
+ * ile ANINDA uygular; bu pencere boyunca gelen BAYAT `duo_public_state`
+ * yoklamaları (çalma COMMIT edilmeden önce alınmış, daha YÜKSEK skorlu) kaybı
+ * geri getiremez. Pencere, yoklamanın replica gecikmesini (~1 sn) güvenle
+ * aşacak kadar uzun tutulur; dolduğunda sunucu zaten yakınsamıştır.
+ */
+const VICTIM_SCORE_FLOOR_MS = 2_500
 
 /**
  * Adres çubuğunu yeniden yüklemeden günceller. Oda oluşturma/katılma sonrası
@@ -548,6 +558,19 @@ export const useDuoChaos = () => {
     countdownEndsAt: 0,
     endsAt: 0,
   })
+  // ÇALINMA TABANI (0052): ÇALINAN istemci, `steal` yayınındaki `victimState`
+  // ile kendi -25'ini ANINDA uygular. Ancak hemen ardından gelen BAYAT bir
+  // `duo_public_state` yoklaması (çalma COMMIT edilmeden önce alınmış) daha
+  // YÜKSEK bir skor taşıyabilir ve `Math.max` ile kaybı GERİ getirir. Bu ref,
+  // uygulanan otoriter (düşük) skoru kısa bir pencere boyunca "taban" olarak
+  // tutar; yoklama bu pencerede tabanın ÜSTÜNE çıkamaz. Pencere dolunca sunucu
+  // zaten yakınsamış olur ve ref temizlenir.
+  const victimScoreFloorRef = useRef<{
+    round: number
+    score: number
+    roundScore: number
+    at: number
+  } | null>(null)
   const noteServerNow = useCallback((serverNow?: number) => {
     if (typeof serverNow === 'number' && serverNow > 0) {
       serverOffsetRef.current = serverNow - Date.now()
@@ -1069,15 +1092,36 @@ export const useDuoChaos = () => {
       const data = payload as {
         by?: string
         objectiveState?: import('./objectiveSync').AuthoritativeActionState
+        victimState?: import('./objectiveSync').AuthoritativeActionState
         round?: number
       }
       if (!data || data.by === room.playerId) return
       noteRivalAlive()
       playSound('bump')
       const authoritativeState = data.objectiveState
+      const victimState = data.victimState
       const actionRound = data.round
+      // RAKİP (ÇALAN) durumu → index 1. `Math.max` ile monotonik: çalanın +25'i
+      // asla geri alınmaz.
       if (authoritativeState && typeof actionRound === 'number') {
         setState((prev) => applyAuthoritativeRivalState(prev, authoritativeState, actionRound))
+      }
+      // BİZ (ÇALINAN) durumu → index 0. Sunucunun otoriter -25'i AYNEN uygulanır
+      // (monotonik DEĞİL). Böylece çalınanın kaybı ANINDA görünür; bayat
+      // `duo_public_state` yoklamasına bağımlı kalmaz.
+      if (victimState && typeof actionRound === 'number') {
+        // ÇALINMA TABANI: uygulanan otoriter (düşük) skoru kaydet; yoklama bu
+        // pencerede tabanın üstüne çıkamaz (bayat snapshot kaybı geri getiremez).
+        if (typeof victimState.score === 'number') {
+          victimScoreFloorRef.current = {
+            round: actionRound,
+            score: victimState.score,
+            roundScore:
+              typeof victimState.roundScore === 'number' ? victimState.roundScore : 0,
+            at: Date.now(),
+          }
+        }
+        setState((prev) => applyAuthoritativeVictimState(prev, victimState, actionRound))
       }
     })
 
@@ -1374,6 +1418,36 @@ export const useDuoChaos = () => {
             // değiştiyse sunucu değeri (yeni görev için `false`) geçerlidir.
             if (!objectiveChanged) {
               merged.missionDone = Boolean(player.missionDone || server.missionDone)
+            }
+            // SKOR MONOTONİKLİĞİ (KÖK SORUN DÜZELTMESİ: "çalan benim ama
+            // benden puan gidiyor"). Ham yayılım (`{ ...player, ...server }`)
+            // sunucunun `score`/`roundScore`'unu KOŞULSUZ uygular. Yoklama
+            // snapshot'ı çalma COMMIT edilmeden önce alınmışsa BAYATTIR ve
+            // yerel +25'i EZER → çalanın puanı düşer. Çalınanın -25'i artık
+            // `steal` yayınındaki `victimState` ile ANINDA ve OTORİTER
+            // uygulandığı için (bkz. `applyAuthoritativeVictimState`), burada
+            // yerel skoru MONOTONİK tutmak güvenlidir: bayat snapshot skoru
+            // DÜŞÜREMEZ. Tek meşru düşüş çalınmadır ve o yol yukarıdadır.
+            if (typeof server.score === 'number' && Number.isFinite(server.score)) {
+              merged.score = Math.max(player.score ?? 0, server.score)
+            }
+            if (typeof server.roundScore === 'number' && Number.isFinite(server.roundScore)) {
+              merged.roundScore = Math.max(player.roundScore ?? 0, server.roundScore)
+            }
+            // ÇALINMA TABANI (0052): ÇALINAN istemci kendi -25'ini `victimState`
+            // ile ANINDA uyguladı. Hemen ardından gelen BAYAT bir yoklama daha
+            // YÜKSEK skor taşıyorsa `Math.max` kaybı geri getirirdi. Taban
+            // aktifken (aynı tur + kısa pencere) yerel skoru tabanla SINIRLARIZ:
+            // düşüş korunur, bayat yüksek değer reddedilir. Pencere dolunca
+            // sunucu yakınsamış olur ve taban temizlenir.
+            const floor = victimScoreFloorRef.current
+            if (floor && floor.round === prev.round) {
+              if (Date.now() - floor.at > VICTIM_SCORE_FLOOR_MS) {
+                victimScoreFloorRef.current = null
+              } else {
+                merged.score = Math.min(merged.score ?? 0, floor.score)
+                merged.roundScore = Math.min(merged.roundScore ?? 0, floor.roundScore)
+              }
             }
           }
           // SUNUCU OTORİTESİ (skor + ilerleme): `duo_tick` artık periyodik

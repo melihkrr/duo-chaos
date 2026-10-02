@@ -45,12 +45,30 @@ const check = (label, ok, detail = '') => {
   }
 }
 
-// --- Constants mirrored from migration 0051 / lib/config.ts -----------------
+// --- Constants mirrored from migration 0051/0052 / lib/config.ts ------------
 const STEAL_SCORE = 25
 const STEAL_CONTACT_GUARD_MS = 700
 const STEAL_RADIUS = 5.2
+// ÇALINMA TABANI penceresi (lib/useDuoChaos.ts VICTIM_SCORE_FLOOR_MS).
+const VICTIM_SCORE_FLOOR_MS = 2_500
 const simplifyMigration = await readFile(
   new URL('../supabase/migrations/0051_simplify_steal_contact.sql', import.meta.url),
+  'utf8',
+)
+const victimStateMigration = await readFile(
+  new URL('../supabase/migrations/0052_steal_victim_state.sql', import.meta.url),
+  'utf8',
+)
+const useDuoChaosSource = await readFile(
+  new URL('../lib/useDuoChaos.ts', import.meta.url),
+  'utf8',
+)
+const useGameLoopSource = await readFile(
+  new URL('../lib/useGameLoop.ts', import.meta.url),
+  'utf8',
+)
+const objectiveSyncSource = await readFile(
+  new URL('../lib/objectiveSync.ts', import.meta.url),
   'utf8',
 )
 
@@ -295,6 +313,114 @@ console.log('SCENARIO 10 — SQL migration enforces the simplified contact rules
   check('victim must have coins', simplifyMigration.includes("'reason', 'no_coins'"))
   check('directional guard is removed', !simplifyMigration.includes("'reason', 'not_chasing'"))
   check('only public steal RPC remains executable', simplifyMigration.includes('grant execute on function public.duo_steal_versioned'))
+}
+
+console.log('SCENARIO 11 — Migration 0052 returns the victim state (immediate -25)')
+{
+  check('victimState is returned by duo_steal_versioned', victimStateMigration.includes("'victimState', jsonb_build_object("))
+  check('victimState carries the victim score', victimStateMigration.includes("'score', coalesce(v_victim_after.score, 0)"))
+  check('victimState carries the victim roundScore', victimStateMigration.includes("'roundScore', coalesce(v_victim_after.round_score, 0)"))
+  check('victimState carries the victim coins', victimStateMigration.includes("'coins', v_victim_after.coins"))
+  check('victim row is re-read after the update', victimStateMigration.includes('select * into v_victim_after'))
+  check('steal still awards exactly +25', victimStateMigration.includes('v_steal_score int := 25'))
+  check('contact guard still uses a 700ms window', victimStateMigration.includes('v_contact_guard_ms int := 700'))
+  check('both players are still locked before validation', /order by slot\s+for update/.test(victimStateMigration))
+}
+
+console.log('SCENARIO 12 — Stealer never loses points to a stale poll snapshot')
+{
+  // Mirror of the battle poll local-player score merge (lib/useDuoChaos.ts):
+  //   merged.score = Math.max(player.score ?? 0, server.score)
+  // A stale snapshot (captured BEFORE the steal committed) carries the
+  // pre-steal score. The monotonic merge must NOT revert the stealer's +25.
+  const mergeLocalScore = (localScore, serverScore) =>
+    typeof serverScore === 'number' && Number.isFinite(serverScore)
+      ? Math.max(localScore ?? 0, serverScore)
+      : localScore
+
+  // Stealer locally applied +25 via the authoritative RPC response.
+  const localAfterSteal = 125
+  // Stale poll snapshot from before the commit.
+  const staleServerScore = 100
+  check(
+    'stale snapshot cannot revert the stealer gain',
+    mergeLocalScore(localAfterSteal, staleServerScore) === 125,
+    `merged=${mergeLocalScore(localAfterSteal, staleServerScore)}`,
+  )
+  // Fresh snapshot (post-commit) agrees.
+  check('fresh snapshot keeps the stealer gain', mergeLocalScore(localAfterSteal, 125) === 125)
+  // A later legitimate gain still applies.
+  check('a later gain still applies', mergeLocalScore(125, 150) === 150)
+
+  // The source must actually contain the monotonic guard.
+  check(
+    'battle poll applies Math.max to the local score',
+    useDuoChaosSource.includes('merged.score = Math.max(player.score ?? 0, server.score)'),
+  )
+  check(
+    'battle poll applies Math.max to the local roundScore',
+    useDuoChaosSource.includes('merged.roundScore = Math.max(player.roundScore ?? 0, server.roundScore)'),
+  )
+}
+
+console.log('SCENARIO 13 — Victim loss is applied immediately and survives stale polls')
+{
+  // Mirror of applyAuthoritativeVictimState (lib/objectiveSync.ts): the victim
+  // score is applied AS-IS (NOT monotonic) so the -25 is visible.
+  const applyVictim = (local, server) => ({
+    score: server.score ?? local.score,
+    roundScore: server.roundScore ?? local.roundScore,
+    coins: server.coins ?? local.coins,
+  })
+  const victimLocal = { score: 100, roundScore: 100, coins: 3 }
+  const victimState = { score: 75, roundScore: 75, coins: 2 }
+  const applied = applyVictim(victimLocal, victimState)
+  check('victim score drops to 75 immediately', applied.score === 75, `score=${applied.score}`)
+  check('victim roundScore drops to 75 immediately', applied.roundScore === 75)
+  check('victim coins drop to 2 immediately', applied.coins === 2)
+
+  // Mirror of the victim floor in the battle poll: while the floor is fresh,
+  // a stale higher snapshot is capped to the floor (loss preserved).
+  const applyFloor = (mergedScore, floor, ageMs) => {
+    if (!floor || ageMs > VICTIM_SCORE_FLOOR_MS) return mergedScore
+    return Math.min(mergedScore, floor.score)
+  }
+  const stalePollScore = 100 // pre-steal snapshot
+  check(
+    'stale poll cannot restore the victim loss',
+    applyFloor(stalePollScore, { score: 75 }, 500) === 75,
+    `merged=${applyFloor(stalePollScore, { score: 75 }, 500)}`,
+  )
+  check(
+    'floor expires after the window (server has converged)',
+    applyFloor(stalePollScore, { score: 75 }, VICTIM_SCORE_FLOOR_MS + 1) === 100,
+  )
+
+  // Source guards.
+  check(
+    'offSteal applies the victim state to the local player',
+    useDuoChaosSource.includes('applyAuthoritativeVictimState(prev, victimState, actionRound)'),
+  )
+  check(
+    'offSteal records the victim score floor',
+    useDuoChaosSource.includes('victimScoreFloorRef.current = {'),
+  )
+  check(
+    'victim floor is defined',
+    useDuoChaosSource.includes('const VICTIM_SCORE_FLOOR_MS = 2_500'),
+  )
+  check(
+    'objectiveSync exports applyAuthoritativeVictimState',
+    objectiveSyncSource.includes('export const applyAuthoritativeVictimState = ('),
+  )
+  check(
+    'victim state is NOT monotonic (applies the decrease)',
+    objectiveSyncSource.includes('score: server.score ?? player.score'),
+  )
+  check(
+    'steal broadcast carries victimState',
+    useGameLoopSource.includes('victimState: result.victimState'),
+  )
 }
 
 console.log(`\n${failed === 0 ? '\u2714 ALL CHECKS PASSED' : '\u2718 SOME CHECKS FAILED'} \u2014 ${passed} passed, ${failed} failed`)
