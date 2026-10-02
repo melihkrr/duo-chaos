@@ -9,11 +9,14 @@ import {
   COUNTDOWN_MS,
   MATCH_ROUNDS,
   MOVE_SPEED,
-  STEAL_COOLDOWN_MS,
-  STEAL_RADIUS,
+  RISKY_COIN_ID_BASE,
+  RISKY_COIN_LIFETIME_MS,
+  RISKY_COIN_SPAWN_MS,
   generateObjectivePair,
   getCoinValue,
+  isRiskyCoin,
   randomObjective,
+  riskyCoinValue,
   spawnCoins,
 } from './config'
 import { objectiveSatisfied, progressOf } from './display'
@@ -64,11 +67,16 @@ const COMBO_WINDOW_MS = 2_200
 const COMBO_STREAK_AT = 4
 const OBJECTIVE_CELEBRATE_MS = 1_400
 /**
- * Çalma başına puan. Çok oyunculu `duo_steal_versioned` RPC'sindeki
- * `v_steal_score := 25` (0042) ile BİREBİR aynıdır; tek oyunculu modda da
- * aynı puanı uygularız. (Eski değer 20 idi; kullanıcı beklentisi +25/-25.)
+ * Risky coin doğuş noktaları (arena %). Çok oyunculu `duo_risky_spawn_point`
+ * ile BİREBİR aynıdır: merkez + iki yan hot-spot rotasyonu.
  */
-const STEAL_SCORE = 25
+const RISKY_SPAWN_POINTS = [
+  { x: 50, y: 50 },
+  { x: 50, y: 22 },
+  { x: 50, y: 78 },
+]
+/** Risky coin tipi rotasyonu (çok oyunculu `duo_risky_coin_type` ile aynı). */
+const RISKY_TYPES: CoinType[] = ['gold', 'emerald', 'diamond']
 
 export type BotGameApi = {
   state: State
@@ -89,7 +97,7 @@ export type BotGameApi = {
   diamondPopRef: React.RefObject<{ x: number; y: number; at: number } | null>
   comboRef: React.RefObject<{ count: number; at: number }>
   scorePopRef: React.RefObject<Array<{ id: number; x: number; y: number; value: number; at: number }>>
-  shakeRef: React.RefObject<{ at: number; kind: 'steal' | 'bump' } | null>
+  shakeRef: React.RefObject<{ at: number; kind: 'bump' } | null>
   /** Tek oyunculu maçı başlatır (isim verilir). */
   startBotGame: (name: string) => void
   /** Sonraki tura geç (tek oyuncuda anında). */
@@ -146,13 +154,16 @@ export const useBotGame = (): BotGameApi => {
   const diamondPopRef = useRef<{ x: number; y: number; at: number } | null>(null)
   const comboRef = useRef<{ count: number; at: number }>({ count: 0, at: 0 })
   const scorePopRef = useRef<Array<{ id: number; x: number; y: number; value: number; at: number }>>([])
-  const shakeRef = useRef<{ at: number; kind: 'steal' | 'bump' } | null>(null)
+  const shakeRef = useRef<{ at: number; kind: 'bump' } | null>(null)
 
   const joystick = useRef({ x: 0, y: 0 })
   const keys = useRef({ up: false, down: false, left: false, right: false })
   const localPos = useRef<{ x: number; y: number } | null>(null)
   const botMemory = useRef<BotMemory>(createBotMemory(82, 50))
-  const lastStealAt = useRef(0)
+  /** Bir sonraki risky coin doğuş zamanı (epoch ms). */
+  const nextRiskyAt = useRef(0)
+  /** Risky coin rotasyon sayacı (doğuş noktası + tip seçimi). */
+  const riskyIndex = useRef(0)
   const lastRound = useRef(1)
   const lastChaosSlot = useRef<number | null>(null)
   // stateRef updates after React commits; reserve coin IDs synchronously so
@@ -267,7 +278,8 @@ export const useBotGame = (): BotGameApi => {
       livePos.current = null
       liveRivalPos.current = null
       botMemory.current = createBotMemory(82, 50)
-      lastStealAt.current = 0
+      nextRiskyAt.current = 0
+      riskyIndex.current = 0
       lastRound.current = round
       comboRef.current = { count: 0, at: 0 }
       scorePopRef.current = []
@@ -533,28 +545,24 @@ export const useBotGame = (): BotGameApi => {
       claimedPickupIds.current,
     )
 
-    // --- Çalma: yerel oyuncu rakibi (bot) çalabilir ---
-    let meStealing = false
-    if (
-      now - lastStealAt.current >= STEAL_COOLDOWN_MS &&
-      Math.hypot(botNextX - nextX, botNextY - nextY) <= STEAL_RADIUS
-    ) {
-      lastStealAt.current = now
-      meStealing = true
-      playSound('steal')
-      shakeRef.current = { at: now, kind: 'steal' }
-    }
-    // --- Çalma: bot yerel oyuncuyu çalabilir ---
-    let botStealing = false
-    if (
-      botDecision.steal &&
-      now - botMemory.current.lastStealAt >= STEAL_COOLDOWN_MS &&
-      Math.hypot(botNextX - nextX, botNextY - nextY) <= STEAL_RADIUS
-    ) {
-      botMemory.current.lastStealAt = now
-      botStealing = true
-      playSound('steal')
-      shakeRef.current = { at: now, kind: 'steal' }
+    // --- RISKY COIN: periyodik yüksek puanlı bonus coin doğuşu ---
+    // Çok oyunculu `duo_tick` + `duo_spawn_risky_coin` ile aynı davranış:
+    // her RISKY_COIN_SPAWN_MS'de bir hot-spot'ta doğar; RISKY_COIN_LIFETIME_MS
+    // içinde toplanmazsa kaybolur. Aynı anda tek risky coin olur.
+    if (nextRiskyAt.current === 0) nextRiskyAt.current = now + RISKY_COIN_SPAWN_MS
+    let riskySpawn: Coin | null = null
+    if (now >= nextRiskyAt.current) {
+      nextRiskyAt.current = now + RISKY_COIN_SPAWN_MS
+      const index = riskyIndex.current
+      riskyIndex.current += 1
+      const point = RISKY_SPAWN_POINTS[index % RISKY_SPAWN_POINTS.length]
+      riskySpawn = {
+        id: RISKY_COIN_ID_BASE + (index % 1000),
+        x: point.x,
+        y: point.y,
+        type: RISKY_TYPES[index % RISKY_TYPES.length],
+        respawnAt: now + RISKY_COIN_LIFETIME_MS,
+      }
     }
 
     // --- Görsel geri bildirim (yerel toplama) ---
@@ -583,33 +591,61 @@ export const useBotGame = (): BotGameApi => {
     setState((s) => {
       let changed = false
 
-      // Coinleri işaretle (yerel + bot). Elmas tek seferliktir (respawn yok).
+      // Coinleri işaretle (yerel + bot). Elmas ve risky coin tek seferliktir
+      // (respawn yok). Risky coinler süresi dolunca (toplanmadan) kaybolur.
       const collectedByMe = new Set(meCollectIds)
       const collectedByBot = new Set(botCollectIds)
-      const nextCoins = s.coins.map((coin) => {
-        if (collectedByMe.has(coin.id)) {
-          changed = true
-          if (coin.type === 'diamond') return { ...coin, collectedBy: 'p1', respawnAt: undefined }
-          return { ...coin, collectedBy: 'p1', respawnAt: now + COIN_RESPAWN_MS }
-        }
-        if (collectedByBot.has(coin.id)) {
-          changed = true
-          if (coin.type === 'diamond') return { ...coin, collectedBy: 'p2', respawnAt: undefined }
-          return { ...coin, collectedBy: 'p2', respawnAt: now + COIN_RESPAWN_MS }
-        }
-        if (coin.type !== 'diamond' && coin.collectedBy && coin.respawnAt && now >= coin.respawnAt) {
-          changed = true
-          return { ...coin, collectedBy: undefined, respawnAt: undefined }
-        }
-        return coin
-      })
+      let nextCoins = s.coins
+        .filter((coin) => {
+          // Süresi dolmuş, toplanmamış risky coinleri kaldır (despawn).
+          if (
+            isRiskyCoin(coin.id) &&
+            !coin.collectedBy &&
+            coin.respawnAt &&
+            now >= coin.respawnAt
+          ) {
+            changed = true
+            return false
+          }
+          return true
+        })
+        .map((coin) => {
+          const oneShot = coin.type === 'diamond' || isRiskyCoin(coin.id)
+          if (collectedByMe.has(coin.id)) {
+            changed = true
+            if (oneShot) return { ...coin, collectedBy: 'p1', respawnAt: undefined }
+            return { ...coin, collectedBy: 'p1', respawnAt: now + COIN_RESPAWN_MS }
+          }
+          if (collectedByBot.has(coin.id)) {
+            changed = true
+            if (oneShot) return { ...coin, collectedBy: 'p2', respawnAt: undefined }
+            return { ...coin, collectedBy: 'p2', respawnAt: now + COIN_RESPAWN_MS }
+          }
+          if (
+            coin.type !== 'diamond' &&
+            !isRiskyCoin(coin.id) &&
+            coin.collectedBy &&
+            coin.respawnAt &&
+            now >= coin.respawnAt
+          ) {
+            changed = true
+            return { ...coin, collectedBy: undefined, respawnAt: undefined }
+          }
+          return coin
+        })
+      // Yeni risky coin doğduysa ekle (aynı anda tek risky coin).
+      if (riskySpawn) {
+        changed = true
+        nextCoins = [
+          ...nextCoins.filter((coin) => !isRiskyCoin(coin.id)),
+          riskySpawn,
+        ]
+      }
 
       // Oyuncuları güncelle.
       const nextPlayers = s.players.map((player, index) => {
         const isMe = index === 0
         const collectIds = isMe ? meCollectIds : botCollectIds
-        const stealing = isMe ? meStealing : botStealing
-        const stolenFrom = isMe ? botStealing : meStealing
         let next = player
 
         if (collectIds.length > 0) {
@@ -624,7 +660,11 @@ export const useBotGame = (): BotGameApi => {
           // görev tamamlanınca puan ekleniyordu; bu yüzden tek oyunculu modda
           // "sadece görevlerden puan alabiliyorum" hatası vardı.
           const coinPoints = collectedCoins.reduce(
-            (sum, coin) => sum + getCoinValue(coin.type, s.chaosEvent?.id, next.objective),
+            (sum, coin) =>
+              sum +
+              (isRiskyCoin(coin.id)
+                ? riskyCoinValue(coin.type)
+                : getCoinValue(coin.type, s.chaosEvent?.id, next.objective)),
             0,
           )
           next = {
@@ -645,23 +685,6 @@ export const useBotGame = (): BotGameApi => {
             },
           }
         }
-        if (stealing) {
-          changed = true
-          // ÇALMA PUANI (çok oyunculu `duo_steal` ile aynı): +20 puan.
-          next = {
-            ...next,
-            stolen: next.stolen + 1,
-            roundStolen: (next.roundStolen ?? 0) + 1,
-            score: next.score + STEAL_SCORE,
-            roundScore: (next.roundScore ?? 0) + STEAL_SCORE,
-            totalScore: (next.totalScore ?? 0) + STEAL_SCORE,
-          }
-        }
-        if (stolenFrom) {
-          changed = true
-          next = { ...next, coins: Math.max(0, next.coins - 1), slowedUntil: now + 400 }
-        }
-
         // GÖREV İLERLEMESİ (yerel otorite): `display.ts` ile SAYAÇLARDAN hesapla.
         //
         // ÖNEMLİ: `progressOf`, `objectiveProgress` alanı SAYI ise onu "sunucu

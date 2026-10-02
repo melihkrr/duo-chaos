@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef } from 'react'
 import {
   BATTLE_MS,
-  BUMP_SLOW_MS,
   BUMP_SPEED_MULTIPLIER,
   COIN_RESPAWN_MS,
   COLLECT_RADIUS,
@@ -16,9 +15,9 @@ import {
   REMOTE_POS_TTL,
   REMOTE_SMOOTHING_K,
   REMOTE_VEL_DECAY_K,
-  STEAL_COOLDOWN_MS,
-  STEAL_RADIUS,
   getCoinValue,
+  isRiskyCoin,
+  riskyCoinValue,
 } from './config'
 import { objectiveSatisfied } from './display'
 import {
@@ -120,7 +119,6 @@ export const useGameLoop = (deps: LoopDeps) => {
 
   const lastSend = useRef(0)
   const lastHeartbeat = useRef(0)
-  const lastSteal = useRef(0)
   const lastPhase = useRef<State['phase']>('home')
   const lastRound = useRef<number>(-1)
   // Rakip için yumuşatılmış (interpolasyonlu) konum. Broadcast hedefi ile
@@ -165,7 +163,7 @@ export const useGameLoop = (deps: LoopDeps) => {
   const scorePopRef = useRef<Array<{ id: number; x: number; y: number; value: number; at: number }>>([])
   // EKRAN SARSINTISI (juice): çalma/çarpışma anında artan bir zaman damgası.
   // `Battle` değer değiştiğinde arena'ya kısa bir shake animasyonu uygular.
-  const shakeRef = useRef<{ at: number; kind: 'steal' | 'bump' } | null>(null)
+  const shakeRef = useRef<{ at: number; kind: 'bump' } | null>(null)
   // Sanal joystick vektörü. `VirtualJoystick` `setJoystick` ile buraya yazar;
   // böylece her pointer hareketinde React render tetiklenmez (yalnızca RAF okur).
   const joystick = useRef<JoystickVector>({ x: 0, y: 0 })
@@ -603,28 +601,11 @@ export const useGameLoop = (deps: LoopDeps) => {
     }
     const collectedSet = new Set(collectedIds)
 
-    // --- Çalma (zaman kapılı). ---
-    //
-    // KÖK SORUN ("steal çalışmıyor"): Menzil kontrolü `rivalTarget.x/y` (state)
-    // üzerinden yapılıyordu. Ancak rakibin state konumu döngü boyunca
-    // GÜNCELLENMEZ (yalnızca tur başında spawn'da doğrudur); canlı konum
-    // `liveRivalPos.current` ref'inde tutulur ve doğrudan DOM'a yazılır. Bu
-    // yüzden mesafe BAYAT konuma göre hesaplanıyor ve oyuncu rakibin üstünde
-    // dursa bile `STEAL_RADIUS` içinde görünmüyordu → çalma neredeyse hiç
-    // tetiklenmiyordu. Artık CANLI konumu (`liveRivalPos`) esas alırız; ref
-    // henüz tohumlanmadıysa (ilk kare) state konumuna düşeriz.
-    let stealing = false
-    const rivalPos = liveRivalPos.current ?? rivalTarget
-    if (
-      rivalPos &&
-      now - lastSteal.current >= STEAL_COOLDOWN_MS &&
-      Math.hypot(rivalPos.x - nextX, rivalPos.y - nextY) <= STEAL_RADIUS
-    ) {
-      lastSteal.current = now
-      stealing = true
-    }
+    // NOT: Steal mekaniği oyundan tamamen kaldırıldı (bkz. 0051_risky_coins.sql).
+    // Yerini "Risky Coin" bonus yarışı aldı: yüksek puanlı coinler periyodik
+    // doğar ve ilk toplayan kazanır. Temas/konum kontrolü YOK.
 
-    // --- Tek `setState`: hareket + rakip + toplama + çalma + yeniden doğma. ---
+    // --- Tek `setState`: hareket + rakip + toplama + yeniden doğma. ---
     // Kare başına tek render hedefi; bu, hareketin akıcı kalmasını sağlar.
     //
     // ÖNEMLİ (SAFLIK): `setState` güncelleyicisi SAF olmalıdır. React onu
@@ -728,16 +709,6 @@ export const useGameLoop = (deps: LoopDeps) => {
           // yazmak 60Hz render tetikler ve hareketi bozar. State'teki x/y
           // yalnızca tur başında (spawn) doğru olması yeterlidir.
           //
-          // ÇALMA SAYACI — SUNUCU OTORİTESİ (0042): Burada `stolen`/`roundStolen`
-          // İYİMSER olarak ARTIRILMAZ. Önceden her `stealing` karesinde yerel
-          // artırılıyordu; sunucu da artırdığı için `mergeProgress` monotonik
-          // (`Math.max`) birleştirmesi yerel fazla değeri KALICI kilitliyordu
-          // ("çalma sayısı iki katına çıktı"). Artık çalma sayacı YALNIZCA
-          // sunucudan gelir: `duo_steal_versioned` yanıtındaki `state` ve
-          // `duo_public_state` yoklaması. Böylece çift sayma imkânsızdır.
-          if (stealing) {
-            changed = true
-          }
           // Görev tamamlandıysa: yalnızca YEREL kutlama durumunu işaretle.
           //
           // ÖNEMLİ (SUNUCU OTORİTESİ): Yeni görevi BURADA ATAMAYIZ. Görev
@@ -762,15 +733,10 @@ export const useGameLoop = (deps: LoopDeps) => {
         }
 
         if (index === 1) {
-          let next = player
           // NOT: Rakibin x/y'sini de state'e YAZMAYIZ; konum `liveRivalPos`
           // üzerinden doğrudan DOM'a uygulanır. State'teki x/y yalnızca tur
           // başında (spawn) doğru olması yeterlidir.
-          if (stealing) {
-            changed = true
-            next = { ...next, coins: Math.max(0, next.coins - 1), slowedUntil: now + BUMP_SLOW_MS }
-          }
-          return next
+          return player
         }
         return player
       })
@@ -884,7 +850,9 @@ export const useGameLoop = (deps: LoopDeps) => {
               id: acceptedAt + index,
               x: coin.x,
               y: coin.y,
-              value: getCoinValue(coin.type, state.chaosEvent?.id, me.objective),
+              value: isRiskyCoin(coin.id)
+                ? riskyCoinValue(coin.type)
+                : getCoinValue(coin.type, state.chaosEvent?.id, me.objective),
               at: acceptedAt,
             }))
             scorePopRef.current = [...scorePopRef.current, ...pops].slice(-SCORE_POP_MAX)
@@ -910,42 +878,8 @@ export const useGameLoop = (deps: LoopDeps) => {
         }
       })
     }
-    if (stealing) {
-      actions.push(async () => {
-        // SÜRÜM-KORUMALI YENİDEN DENEME: `duo_steal_versioned` yan etkilidir
-        // (+25/-25). KÖRLEMESİNE tekrar denemek çift çalma riski taşır. Ancak
-        // RPC `p_expected_objectives_done` + `p_expected_round` sürüm koruması
-        // taşır: sunucu çalmayı zaten uyguladıysa AYNI sürümle gelen tekrar
-        // isteği REDDEDER (bayat). Bu yüzden yalnızca GEÇİCİ hatalarda, AYNI
-        // sürümle yeniden deneriz; mantıksal redler denenmez.
-        const response = await withVersionGuardedRetry(async () => {
-          const result = await call('duo_steal_versioned', {
-            p_token: token,
-            p_expected_objectives_done: me.objectivesDone ?? 0,
-            p_expected_round: state.round,
-          })
-          if (!isRpcSuccess(result) && isTransientRpcFailure(result)) {
-            throw new Error(`duo_steal_versioned transient rejection: ${JSON.stringify(result)}`)
-          }
-          return result
-        })
-        if (!isRpcSuccess(response)) {
-          console.warn('duo_steal rejected', response)
-          return
-        }
-        applyServerState(response, state.round)
-        playSound('steal')
-        shakeRef.current = { at: performance.now(), kind: 'steal' }
-        const result = response as { state?: unknown }
-        broadcast('steal', {
-          by: playerId,
-          objectiveState: result.state,
-          round: state.round,
-        })
-      })
-    }
     if (actions.length > 0) {
-      const positionIncludedInCollection = collectedIds.length > 0 && !stealing
+      const positionIncludedInCollection = collectedIds.length > 0
       void runPositionedActions(
         nextX,
         nextY,

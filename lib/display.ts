@@ -19,7 +19,7 @@ export const objectiveOf = (p?: Pick<Player, 'id' | 'objective'>): Objective | n
   const rawLabel = String(objective.label || '').replace(/\*+/g, '').trim()
   const rawShortLabel = String(objective.shortLabel || '').replace(/\*+/g, '').trim()
   const text = [rawLabel, rawShortLabel].filter(Boolean).join(' ').trim()
-  const isGeneric = /^(collect|steal)$/i.test(rawLabel) || /^(collect|steal)$/i.test(rawShortLabel)
+  const isGeneric = /^collect$/i.test(rawLabel) || /^collect$/i.test(rawShortLabel)
   const canonical =
     OBJECTIVE_POOL.find((item) => item.id === objective.id) ||
     OBJECTIVE_POOL.find((item) => item.label.toLowerCase() === text.toLowerCase() || item.shortLabel.toLowerCase() === text.toLowerCase()) ||
@@ -33,7 +33,6 @@ export const objectiveOf = (p?: Pick<Player, 'id' | 'objective'>): Objective | n
     target: objective.target > 0 ? objective.target : canonical?.target || fallback.target,
     coinType: objective.coinType || canonical?.coinType,
     requirements: objective.requirements || canonical?.requirements,
-    stealTarget: objective.stealTarget || canonical?.stealTarget,
   }
 }
 
@@ -74,15 +73,10 @@ export const targetOf = (o?: Objective | null) => {
  * (0002_helpers.sql) ile BİREBİR aynı mantık:
  *   - `requirements` varsa: progress = Σ min(collected[key], required)
  *   - `coinType` (mixed değil) varsa: progress = collected[coinType]
- *   - aksi halde: progress = stolen (steal) veya coins
- *
- * ÖNEMLİ (0038): `requirements` + `stealTarget` birlikte olan görevlerde (ör.
- * "Steal 2 and secure 1 Gold") ilerleme = Σ min(collected, required) +
- * min(stolen, stealTarget). Çalma ayrıca `steals_met` koşuludur; görev yalnızca
- * HEM kaynak HEM çalma sağlandığında tamamlanır.
+ *   - aksi halde: progress = coins
  */
 export const progressOf = (
-  p: Pick<Player, 'id' | 'objective' | 'coins' | 'stolen' | 'collectedTypes' | 'objectiveProgress'>,
+  p: Pick<Player, 'id' | 'objective' | 'coins' | 'collectedTypes' | 'objectiveProgress'>,
 ) => {
   const objective = objectiveOf(p)
   // HEDEF SINIRI (0037): ilerleme hedefi ASLA aşamaz. Sunucu değeri de
@@ -98,31 +92,27 @@ export const progressOf = (
       (sum, [type, required]) => Math.min(p.collectedTypes?.[type as CoinType] || 0, required || 0) + sum,
       0,
     )
-    // ÇALMA BİLEŞENİ (0038): kaynak + çalma görevlerinde çalma da sayılır.
-    const stealTarget = objective.stealTarget || 0
-    const steals = stealTarget > 0 ? Math.min(p.stolen || 0, stealTarget) : 0
-    return cap(resources + steals)
+    return cap(resources)
   }
   if (objective?.coinType && objective.coinType !== 'mixed') {
     return cap(p.collectedTypes?.[objective.coinType] || 0)
   }
-  return cap(objective?.kind === 'steal' ? p.stolen || 0 : p.coins || 0)
+  return cap(p.coins || 0)
 }
 
 /**
  * Görev tamamlandı mı? Sunucudaki `duo_mission_satisfied` ile BİREBİR aynı.
- *   resources_met AND steals_met AND progress >= target
+ *   resources_met AND progress >= target
  */
 export const objectiveSatisfied = (
-  p: Pick<Player, 'id' | 'objective' | 'coins' | 'stolen' | 'collectedTypes'>,
+  p: Pick<Player, 'id' | 'objective' | 'coins' | 'collectedTypes'>,
 ) => {
   const objective = objectiveOf(p)
   if (!objective) return false
   const resourcesMet = Object.entries(objective.requirements || {}).every(
     ([type, required]) => (p.collectedTypes?.[type as CoinType] || 0) >= (required || 0),
   )
-  const stealsMet = objective.kind !== 'steal' || (p.stolen || 0) >= (objective.stealTarget || objective.target)
-  return resourcesMet && stealsMet && progressOf(p) >= objective.target
+  return resourcesMet && progressOf(p) >= objective.target
 }
 
 /** Sunucunun missionDone alanı öncelikli; yoksa sadece etiket göstermek için türetilir. */

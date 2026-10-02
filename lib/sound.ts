@@ -12,7 +12,7 @@ export type SoundName =
   | 'countdown'
   | 'start'
   | 'collect'
-  | 'steal'
+  | 'risky'
   | 'bump'
   | 'scout'
   | 'chaos'
@@ -45,9 +45,11 @@ const RECIPES: Record<SoundName, ToneSpec[]> = {
     { freq: 880, to: 1320, dur: 0.22, type: 'sawtooth', gain: 0.14, delay: 0.16 },
   ],
   collect: [{ freq: 880, to: 1320, dur: 0.09, type: 'triangle', gain: 0.16 }],
-  steal: [
-    { freq: 300, to: 140, dur: 0.16, type: 'sawtooth', gain: 0.2 },
-    { freq: 900, to: 500, dur: 0.12, type: 'square', gain: 0.12, delay: 0.05 },
+  // Riskli coin (altın/zümrüt/elmas bonus): parlak, yükselen bir "fırsat"
+  // sesi — normal toplamadan farklı ki oyuncu büyük ödülü aldığını anlasın.
+  risky: [
+    { freq: 660, to: 990, dur: 0.1, type: 'triangle', gain: 0.18 },
+    { freq: 990, to: 1480, dur: 0.14, type: 'triangle', gain: 0.16, delay: 0.08 },
   ],
   bump: [{ freq: 180, to: 90, dur: 0.12, type: 'square', gain: 0.18 }],
   scout: [

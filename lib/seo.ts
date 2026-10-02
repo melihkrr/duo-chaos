@@ -17,7 +17,7 @@ export const SITE_URL = (
 
 export const SITE_NAME = 'DUO CHAOS'
 
-export const SITE_TITLE = 'DUO CHAOS — See it. Steal it. Win it.'
+export const SITE_TITLE = 'DUO CHAOS — See it. Grab it. Win it.'
 
 export const SITE_DESCRIPTION =
   'DUO CHAOS is a fast, replayable two-player party game. Race your rival for shared resources, complete secret objectives, and survive chaos events. Play free in your browser — no download required.'
@@ -32,7 +32,7 @@ export const SITE_KEYWORDS = [
   'free online game',
   'secret objectives',
   'chaos events',
-  'steal game',
+  'risky coins',
   'competitive arcade game',
   'play with friends',
   'no download game',

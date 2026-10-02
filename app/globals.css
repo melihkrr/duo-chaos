@@ -1428,6 +1428,25 @@ h3 {
   box-shadow: 0 0 0 3px #fff, 0 3px 0 rgba(43, 36, 64, 0.25);
 }
 
+/* Riskli coin (altın/zümrüt/elmas bonus): kısa ömürlü, yüksek puanlı özel
+   coin. Normal coinlerden AYIRT EDİLEBİLMESİ için nabız atan altın bir hale
+   ve hafif büyüme animasyonu alır. Oyuncu "şimdi koş!" sinyalini net görür. */
+.coin-risky {
+  z-index: 3;
+  animation: risky-pulse 0.7s var(--ease-soft) infinite alternate;
+}
+
+@keyframes risky-pulse {
+  from {
+    transform: scale(1);
+    box-shadow: 0 0 0 3px #fff, 0 0 0 6px rgba(245, 196, 81, 0.55), 0 3px 0 rgba(43, 36, 64, 0.25);
+  }
+  to {
+    transform: scale(1.22);
+    box-shadow: 0 0 0 3px #fff, 0 0 0 11px rgba(245, 196, 81, 0.15), 0 3px 0 rgba(43, 36, 64, 0.25);
+  }
+}
+
 /* Elmas (jackpot) "+50" rozeti: elmasın son konumunda yukarı süzülerek
    kaybolur. Oyuncuya büyük ödülü aldığına dair net, tatmin edici bir geri
    bildirim verir. */
@@ -1533,11 +1552,7 @@ h3 {
   }
 }
 
-/* --- Ekran sarsıntısı (juice): çalma/çarpışma anında arena titrer --- */
-.arena.shake-steal {
-  animation: shake-hard 0.32s var(--ease-soft);
-}
-
+/* --- Ekran sarsıntısı (juice): çarpışma anında arena titrer --- */
 .arena.shake-bump {
   animation: shake-soft 0.32s var(--ease-soft);
 }

@@ -5,7 +5,7 @@ import { ChaosBanner } from './ChaosBanner'
 import { CosmeticsPicker } from './CosmeticsPicker'
 import { VirtualJoystick } from './VirtualJoystick'
 import { Button } from '../ui/Button'
-import { ARENA, OBSTACLES, avatarGlyph, emoteById, trailById } from '../../lib/config'
+import { ARENA, OBSTACLES, avatarGlyph, emoteById, isRiskyCoin, trailById } from '../../lib/config'
 import { SCORE_POP_MS } from '../../lib/useGameLoop'
 import { objectiveOf, progressOf, targetOf } from '../../lib/display'
 import type { ChaosApi } from '../../lib/useChaos'
@@ -54,10 +54,10 @@ type Props = {
    */
   scorePopRef: React.RefObject<Array<{ id: number; x: number; y: number; value: number; at: number }>>
   /**
-   * Ekran sarsıntısı sinyali: çalma/çarpışma anında `{ at, kind }` yazılır.
+   * Ekran sarsıntısı sinyali: çarpışma anında `{ at, kind }` yazılır.
    * `Battle` değer değiştiğinde arena'ya kısa bir shake animasyonu uygular.
    */
-  shakeRef: React.RefObject<{ at: number; kind: 'steal' | 'bump' } | null>
+  shakeRef: React.RefObject<{ at: number; kind: 'bump' } | null>
   /** Rakip oyundan ayrıldı mı? True iken oyun duraklar ve bir uyarı gösterilir. */
   rivalLeft: boolean
   /**
@@ -70,7 +70,8 @@ type Props = {
   onLeaveRoom: () => void
 }
 
-const coinClass = (type: string) => `coin coin-${type}`
+const coinClass = (type: string, risky: boolean) =>
+  `coin coin-${type}${risky ? ' coin-risky' : ''}`
 
 /** Görev tamamlanma kutlamasının ekranda kalma süresi (ms). */
 const CELEBRATE_MS = 1_400
@@ -162,7 +163,7 @@ export function Battle({
   const [scorePops, setScorePops] = useState<Array<{ id: number; x: number; y: number; value: number; at: number }>>([])
   // Ekran sarsıntısı: `shakeRef` değiştiğinde kısa süreliğine bir CSS sınıfı
   // uygularız (arena'ya "vuruş" hissi verir).
-  const [shake, setShake] = useState<{ at: number; kind: 'steal' | 'bump' } | null>(null)
+  const [shake, setShake] = useState<{ at: number; kind: 'bump' } | null>(null)
   // Tam ekrana alınacak sarmalayıcı düğüm (`.battle-wrap`).
   const wrapRef = useRef<HTMLElement | null>(null)
   // Yerel avatarın DOM düğümü. Konumu her karede doğrudan buna yazarız.
@@ -530,7 +531,7 @@ export function Battle({
           .map((coin) => (
             <span
               key={coin.id}
-              className={coinClass(coin.type)}
+              className={coinClass(coin.type, isRiskyCoin(coin.id))}
               style={{ left: `${coin.x}%`, top: `${coin.y}%` }}
             />
           ))}

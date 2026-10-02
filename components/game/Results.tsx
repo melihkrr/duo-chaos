@@ -61,13 +61,12 @@ export function Results({
 
       <div className="score-list">
         {state.players.map((player, index) => {
-          // TUR TOPLAMI (SUNUCU OTORİTESİ): `roundCoins`/`roundStolen` sunucunun
-          // tur boyunca biriktirdiği GERÇEK toplamlardır ve HER İKİ istemcide de
-          // AYNIDIR. `player.coins`/`player.stolen` görev tamamlanmasında
-          // sıfırlandığı için tur sonu istatistikleri için kullanılmaz; aksi
-          // halde iki istemci farklı değer gösterir (çelişkili sonuç ekranı).
+          // TUR TOPLAMI (SUNUCU OTORİTESİ): `roundCoins` sunucunun tur boyunca
+          // biriktirdiği GERÇEK toplamdır ve HER İKİ istemcide de AYNIDIR.
+          // `player.coins` görev tamamlanmasında sıfırlandığı için tur sonu
+          // istatistikleri için kullanılmaz; aksi halde iki istemci farklı değer
+          // gösterir (çelişkili sonuç ekranı).
           const roundCoins = player.roundCoins ?? player.coins ?? 0
-          const roundStolen = player.roundStolen ?? player.stolen ?? 0
           // Yalnızca PUAN gösterilir. Görev/round/match/XP kaldırıldı: puan
           // zaten oyunun tek ölçüsü, XP ise kişisel bir ilerleme verisi.
           //
@@ -106,18 +105,14 @@ export function Results({
                   <small>{t('Score')}</small>
                   {score}
                 </span>
-                {/* Tur içi performans kırılımı: toplanan coin, çalınan coin ve
-                    tamamlanan görev. Maç sonunda tur istatistikleri sıfırlandığı
-                    için yalnızca tur sonuçlarında gösterilir. */}
+                {/* Tur içi performans kırılımı: toplanan coin ve tamamlanan
+                    görev. Maç sonunda tur istatistikleri sıfırlandığı için
+                    yalnızca tur sonuçlarında gösterilir. */}
                 {!isMatchOver && (
                   <span className="score-stats" aria-label={t('Round stats')}>
                     <span className="stat-chip" title={t('Coins collected')}>
                       <span aria-hidden>🪙</span>
                       {roundCoins}
-                    </span>
-                    <span className="stat-chip" title={t('Coins stolen')}>
-                      <span aria-hidden>🦹</span>
-                      {roundStolen}
                     </span>
                     <span className="stat-chip" title={t('Missions completed')}>
                       <span aria-hidden>🎯</span>

@@ -14,7 +14,6 @@ export const MOVE_SEND_MS = 16
 // çok daha kısa olduğundan tek bir paket kaybı bile sorun yaratmaz.
 export const MOVE_HEARTBEAT_MS = 1_000
 export const ACTION_MS = 90
-export const STEAL_COOLDOWN_MS = 700
 export const BUMP_SLOW_MS = 400
 export const BUMP_SPEED_MULTIPLIER = 0.55
 export const RECONCILE_MS = 1000
@@ -83,7 +82,6 @@ export const COLLECT_RADIUS = 9
  * "havada" bir noktasında bloklanıyordu.
  */
 export const PLAYER_HIT_R = 2.6
-export const STEAL_RADIUS = PLAYER_HIT_R * 2
 /**
  * Rakip pozisyonu için ÜSTEL yumuşatma oranı (1/saniye). Kare hızından
  * bağımsız çalışır: her karede `alpha = 1 - exp(-k * dt)` kadar hedefe
@@ -137,19 +135,36 @@ export const OBSTACLES: Array<{ cx: number; cy: number; w: number; h: number; an
 
 // --- Görev hedefleri (oyunun yeni MVP mantığına göre) ---
 export const COLLECT_TARGET = 7
-export const STEAL_TARGET = 3
 export const COIN_TYPES: CoinType[] = ['gold', 'blue', 'red', 'emerald']
+
+// --- RISKY COIN (yüksek puanlı bonus coin yarışı) ---
+/**
+ * Haritada periyodik olarak doğan yüksek puanlı bonus coinler. Temas YOK;
+ * yalnızca toplama yarışı. Sunucu tarafı: `duo_risky_coin_id_base()` (2000+).
+ * Bu değerler sunucudaki `duo_risky_coin_value()` ile BİREBİR aynı olmalıdır.
+ */
+export const RISKY_COIN_ID_BASE = 2000
+export const RISKY_COIN_SPAWN_MS = 15_000
+export const RISKY_COIN_LIFETIME_MS = 8_000
+export const RISKY_COIN_VALUES: Record<string, number> = {
+  gold: 40,
+  emerald: 45,
+  diamond: 60,
+}
+export const isRiskyCoin = (coinId: number) => coinId >= RISKY_COIN_ID_BASE
+export const riskyCoinValue = (type: CoinType) => RISKY_COIN_VALUES[type] ?? 30
 
 /**
  * Görev havuzu. `points` = görev tamamlanınca kazanılan PUAN ödülü.
  *
  * PUAN DENGESİ (görevler önemini yitirmesin diye):
- *   - Sıradan coin 5, hedef coin 15, zümrüt 25, elmas 50, çalma 20 puandır.
+ *   - Sıradan coin 5, hedef coin 15, zümrüt 25, elmas 50 puandır.
+ *   - Risky coin (bonus) 40-60 puandır; toplama yarışıyla kazanılır.
  *   - Bir tur 90 sn; oyuncu tipik olarak ~15-25 coin toplar (~150-250 puan).
  *   - Görev ödülleri 40-70 arasındadır: birkaç coin'den YÜKSEK, böylece
  *     görevler skorun yaklaşık YARISINI oluşturur ve belirleyici kalır; ama
- *     tek başına da her şeyi çözmez, coin/çalma da önemini korur.
- *   - Zorluk arttıkça ödül artar (hedef sayısı + çalma/çoklu-kaynak görevleri).
+ *     tek başına da her şeyi çözmez, coin/risky yarışı da önemini korur.
+ *   - Zorluk arttıkça ödül artar (hedef sayısı + çoklu-kaynak görevleri).
  *
  * ÖNEMLİ: Bu değerler sunucudaki `duo_objective_pool()` ile BİREBİR aynı
  * olmalıdır; aksi halde iki taraf farklı puan hesaplar.
@@ -158,11 +173,11 @@ export const OBJECTIVE_POOL: Objective[] = [
   { id: 'gold-rush', kind: 'collect', label: 'Collect 3 Gold', shortLabel: '3 Gold', target: 3, coinType: 'gold', points: 45 },
   { id: 'blue-raid', kind: 'collect', label: 'Collect 2 Blue + 2 Red', shortLabel: '2 Blue + 2 Red', target: 4, coinType: 'mixed', requirements: { blue: 2, red: 2 }, points: 60 },
   { id: 'emerald-hunt', kind: 'collect', label: 'Collect 3 Emerald', shortLabel: '3 Emerald', target: 3, coinType: 'emerald', points: 55 },
-  { id: 'resource-control', kind: 'steal', label: 'Steal 3 from your rival', shortLabel: '3 stolen', target: 3, coinType: 'mixed', points: 60 },
+  { id: 'risky-hunter', kind: 'collect', label: 'Collect 2 Risky Coins', shortLabel: '2 Risky', target: 2, coinType: 'mixed', points: 65 },
   { id: 'jackpot-run', kind: 'collect', label: 'Collect 1 Gold + 2 Blue', shortLabel: '1 Gold + 2 Blue', target: 3, coinType: 'mixed', requirements: { gold: 1, blue: 2 }, points: 50 },
   { id: 'red-burn', kind: 'collect', label: 'Collect 2 Red + 1 Emerald', shortLabel: '2 Red + 1 Emerald', target: 3, coinType: 'mixed', requirements: { red: 2, emerald: 1 }, points: 55 },
   { id: 'blue-pressure', kind: 'collect', label: 'Collect 4 Blue', shortLabel: '4 Blue', target: 4, coinType: 'blue', points: 50 },
-  { id: 'gold-robbery', kind: 'steal', label: 'Steal 2 and secure 1 Gold', shortLabel: '2 stolen + 1 Gold', target: 3, coinType: 'mixed', requirements: { gold: 1 }, stealTarget: 2, points: 70 },
+  { id: 'emerald-rush', kind: 'collect', label: 'Collect 2 Emerald + 1 Gold', shortLabel: '2 Emerald + 1 Gold', target: 3, coinType: 'mixed', requirements: { emerald: 2, gold: 1 }, points: 70 },
 ]
 
 export const CHAOS_EVENTS: ChaosEvent[] = [

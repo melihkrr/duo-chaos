@@ -8,8 +8,8 @@ type Translate = (source: string, values?: Record<string, string | number>) => s
 
 const TRANSLATIONS: Record<string, string> = {
   '✨ 2-player realtime party duel': '✨ 2 oyunculu gerçek zamanlı parti düellosu',
-  'Two players. One arena. Grab the coins your mission asks for, steal from your rival, and finish with the highest score. Fast, chaotic, and best played with a friend.':
-    'İki oyuncu. Tek arena. Görevinin istediği paraları topla, rakibinden çal ve en yüksek skorla bitir. Hızlı, kaotik ve arkadaşınla daha eğlenceli.',
+  'Two players. One arena. Grab the coins your mission asks for, race your rival for risky bonus coins, and finish with the highest score. Fast, chaotic, and best played with a friend.':
+    'İki oyuncu. Tek arena. Görevinin istediği paraları topla, riskli bonus paralar için rakibinle yarış ve en yüksek skorla bitir. Hızlı, kaotik ve arkadaşınla daha eğlenceli.',
   'Choose your animal': 'Hayvanını seç',
   'Change your animal': 'Hayvanını değiştir',
   'Your rival sees this avatar in the arena.': 'Rakibin bu avatarı arenada görür.',
@@ -89,7 +89,7 @@ const TRANSLATIONS: Record<string, string> = {
   Score: 'Skor',
   'Round stats': 'Tur istatistikleri',
   'Coins collected': 'Toplanan para',
-  'Coins stolen': 'Çalınan para',
+  'Risky coins': 'Riskli para',
   'Missions completed': 'Tamamlanan görev',
   '✅ Rematch — waiting for rival': '✅ Rövanş — rakip bekleniyor',
   Rematch: 'Rövanş',
@@ -257,8 +257,8 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     document.documentElement.lang = language
     document.title =
       language === 'tr'
-        ? 'DUO CHAOS — Gör. Çal. Kazan.'
-        : 'DUO CHAOS — See it. Steal it. Win it.'
+        ? 'DUO CHAOS — Gör. Kap. Kazan.'
+        : 'DUO CHAOS — See it. Grab it. Win it.'
   }, [language])
 
   const value = useMemo<I18nValue>(
@@ -281,11 +281,11 @@ export const localizedObjectiveLabel = (objective: Objective | null | undefined,
     'gold-rush': ['Collect 3 Gold', '3 Altın Topla'],
     'blue-raid': ['Collect 2 Blue + 2 Red', '2 Mavi + 2 Kırmızı Topla'],
     'emerald-hunt': ['Collect 3 Emerald', '3 Zümrüt Topla'],
-    'resource-control': ['Steal 3 from your rival', 'Rakibinden 3 Para Çal'],
+    'risky-hunter': ['Collect 2 Risky Coins', '2 Riskli Para Topla'],
     'jackpot-run': ['Collect 1 Gold + 2 Blue', '1 Altın + 2 Mavi Topla'],
     'red-burn': ['Collect 2 Red + 1 Emerald', '2 Kırmızı + 1 Zümrüt Topla'],
     'blue-pressure': ['Collect 4 Blue', '4 Mavi Topla'],
-    'gold-robbery': ['Steal 2 and secure 1 Gold', '2 Para Çal ve 1 Altın Topla'],
+    'emerald-rush': ['Collect 2 Emerald + 1 Gold', '2 Zümrüt + 1 Altın Topla'],
   }
   return labels[objective.id]?.[language === 'tr' ? 1 : 0] ?? objective.label
 }

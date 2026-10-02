@@ -90,7 +90,7 @@ export function Home({
             DUO <span>CHAOS</span>
           </h1>
           <p className="lede">
-            {t('Two players. One arena. Grab the coins your mission asks for, steal from your rival, and finish with the highest score. Fast, chaotic, and best played with a friend.')}
+            {t('Two players. One arena. Grab the coins your mission asks for, race your rival for risky bonus coins, and finish with the highest score. Fast, chaotic, and best played with a friend.')}
           </p>
 
           <div className="name-row">

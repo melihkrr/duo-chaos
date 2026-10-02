@@ -10,7 +10,11 @@ export type ChaosEventType =
   | 'double-score'
   | 'red-alert'
 
-export type ObjectiveKind = 'collect' | 'steal'
+/**
+ * Görev türü. Steal mekaniği oyundan tamamen kaldırıldı (bkz. 0051_risky_coins.sql);
+ * artık yalnızca toplama görevleri vardır.
+ */
+export type ObjectiveKind = 'collect'
 
 /** Oyuncunun seçebileceği emote (kısa tepki animasyonu). */
 export type EmoteId = 'wave' | 'taunt' | 'shock' | 'gg' | 'fire'
@@ -42,7 +46,7 @@ export type AvatarId =
 
 /** Sunucudan gelen kısmi ipucu (Guess/Read mekaniği). */
 export type ScoutHint = {
-  /** Rakibin görevinin türü: toplama mı, çalma mı. */
+  /** Rakibin görevinin türü (yalnızca toplama). */
   kind: ObjectiveKind
   /** Rakibin hedeflediği ana coin türü (varsa). */
   coinType?: CoinType | 'mixed'
@@ -60,15 +64,14 @@ export type Objective = {
   target: number
   coinType?: CoinType | 'mixed'
   requirements?: Partial<Record<CoinType, number>>
-  stealTarget?: number
   /**
    * Görev tamamlandığında kazanılan PUAN ödülü.
    *
    * ÖNEMLİ: Skor artık "tamamlanan görev sayısı" DEĞİL, toplanan PUAN'dır.
-   * Puan; coin toplama + çalma + bu görev ödülünden birikir. Görevlerin
-   * önemini yitirmemesi için ödül, birkaç coin değerinden yüksek tutulur
-   * (bkz. OBJECTIVE_POOL). Sunucu `duo_objective_pool` ile birebir aynı
-   * olmalıdır.
+   * Puan; coin toplama + risky coin bonusu + bu görev ödülünden birikir.
+   * Görevlerin önemini yitirmemesi için ödül, birkaç coin değerinden yüksek
+   * tutulur (bkz. OBJECTIVE_POOL). Sunucu `duo_objective_pool` ile birebir
+   * aynı olmalıdır.
    */
   points?: number
 }
@@ -86,13 +89,15 @@ export type Player = {
   x: number
   y: number
   coins: number
+  /** @deprecated Steal kaldırıldı; geriye dönük uyumluluk için korunur (hep 0). */
   stolen: number
   /**
-   * TUR TOPLAMI (sunucu otoritesi). `coins`/`stolen` görev tamamlanmasında
+   * TUR TOPLAMI (sunucu otoritesi). `coins` görev tamamlanmasında
    * SIFIRLANDIĞI için tur sonu istatistikleri için güvenilmez. Bu alanlar tur
    * boyunca birikir ve İKİ istemcide de AYNI sunucu değerini taşır.
    */
   roundCoins?: number
+  /** @deprecated Steal kaldırıldı; geriye dönük uyumluluk için korunur (hep 0). */
   roundStolen?: number
   collectedTypes?: Partial<Record<CoinType, number>>
   /**
@@ -106,8 +111,8 @@ export type Player = {
    */
   objectiveProgress?: number
   /**
-   * PUAN TABANLI SKOR. Coin toplama + çalma + görev ödüllerinin TOPLAMI.
-   * Sunucu otoritesidir (`duo_collect`/`duo_steal`/`duo_reroll_objective`).
+   * PUAN TABANLI SKOR. Coin toplama + risky coin bonusu + görev ödüllerinin
+   * TOPLAMI. Sunucu otoritesidir (`duo_collect_batch`/`duo_reroll_objective`).
    * Karşılaştırma kıstası budur — görev sayısı DEĞİL.
    */
   score: number

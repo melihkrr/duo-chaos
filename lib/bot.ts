@@ -4,10 +4,11 @@ import {
   MOVE_SPEED,
   OBSTACLES,
   PLAYER_HIT_R,
-  STEAL_RADIUS,
   getCoinValue,
+  isRiskyCoin,
+  riskyCoinValue,
 } from './config'
-import { objectiveOf, progressOf, targetOf } from './display'
+import { objectiveOf } from './display'
 import type { Coin, CoinType, Objective, Player } from './types'
 
 /**
@@ -20,9 +21,9 @@ import type { Coin, CoinType, Objective, Player } from './types'
  *    (`coins`), kendi görevi (`me.objective`), kendi sayaçları ve rakibin
  *    GÖRÜNÜR konumu. Rakibin görevi/ilerlemesi gibi gizli bilgileri OKUMAZ.
  * 2) AYNI KURALLAR: Bot, insanla BİREBİR aynı kurallara tabidir — aynı
- *    `MOVE_SPEED`, aynı `COLLECT_RADIUS`, aynı `STEAL_RADIUS`, aynı coin
- *    değerleri (`getCoinValue`), aynı görev tamamlama mantığı (`display.ts`).
- *    Ayrıcalıklı hız/menzil/ışınlanma YOKTUR.
+ *    `MOVE_SPEED`, aynı `COLLECT_RADIUS`, aynı coin değerleri
+ *    (`getCoinValue`/`riskyCoinValue`), aynı görev tamamlama mantığı
+ *    (`display.ts`). Ayrıcalıklı hız/menzil/ışınlanma YOKTUR.
  * 3) MEDIUM ZORLUK: Bot hedefe yönelir ama MÜKEMMEL değildir. Ara sıra
  *    ("mistake" olasılığı) yanlış bir coine yönelir veya bir an duraksar.
  *    Böylece rekabetçi ama yenilebilir olur.
@@ -52,8 +53,6 @@ export type BotDecision = {
   dy: number
   /** Bot bu karede toplamak istediği coin id'leri (menzil içindeyse). */
   collectIds: number[]
-  /** Bot bu karede çalmak istiyor mu? */
-  steal: boolean
 }
 
 /** Botun "yanlış karar" (mistake) olasılığı — MEDIUM zorluk. */
@@ -62,9 +61,6 @@ const MISTAKE_CHANCE = 0.18
 const MISTAKE_MS = 900
 /** Botun hedefini yeniden değerlendirme aralığı (ms). */
 const RETARGET_MS = 420
-const STEAL_APPROACH_DISTANCE = STEAL_RADIUS - 1
-/** Botun çalma denemesi için minimum bekleme (ms) — insanla aynı cooldown. */
-const BOT_STEAL_COOLDOWN_MS = 700
 const NAVIGATION_CLEARANCE = 0.75
 
 type NavigationPoint = { x: number; y: number }
@@ -101,8 +97,6 @@ export type BotMemory = {
   mistakeUntil: number
   /** Hata sırasında yönelinecek "yanlış" coin id'si. */
   mistakeCoinId: number
-  /** Son çalma denemesi zamanı. */
-  lastStealAt: number
   /** Botun son bilinen konumu (kareler arası süreklilik için). */
   x: number
   y: number
@@ -113,7 +107,6 @@ export const createBotMemory = (x: number, y: number): BotMemory => ({
   lastRetargetAt: 0,
   mistakeUntil: 0,
   mistakeCoinId: -1,
-  lastStealAt: 0,
   x,
   y,
 })
@@ -127,6 +120,11 @@ export const createBotMemory = (x: number, y: number): BotMemory => ({
  */
 export const coinPriority = (coin: Coin, objective: Objective | null, collectedTypes?: Partial<Record<CoinType, number>>): number => {
   if (coin.collectedBy) return -1
+
+  // Riskli coinler (altın/zümrüt/elmas bonus) her şeyden önce gelir: yüksek
+  // puanlıdır ve kısa süre sonra kaybolur, bu yüzden bot onlara koşar.
+  if (isRiskyCoin(coin.id)) return 200
+
   if (!objective) return 1
 
   // Elmas her zaman çok değerlidir (tek seferlik +50).
@@ -147,11 +145,6 @@ export const coinPriority = (coin: Coin, objective: Objective | null, collectedT
   // Tek tür görevi (ör. "Collect 4 Blue").
   if (objective.coinType && objective.coinType !== 'mixed') {
     return coin.type === objective.coinType ? 50 : 1
-  }
-
-  // Çalma görevi: coin toplamak görevi ilerletmez; yine de puan için toplanır.
-  if (objective.kind === 'steal') {
-    return coin.type === 'emerald' ? 6 : 3
   }
 
   return 3
@@ -304,25 +297,15 @@ const nextNavigationPointToAny = (
 const nextNavigationPoint = (from: NavigationPoint, target: NavigationPoint) =>
   nextNavigationPointToAny(from, [target]) ?? target
 
-const stealApproachPoints = (rival: NavigationPoint): NavigationPoint[] =>
-  Array.from({ length: 16 }, (_, index) => {
-    const angle = (index * Math.PI * 2) / 16
-    return {
-      x: rival.x + Math.cos(angle) * STEAL_APPROACH_DISTANCE,
-      y: rival.y + Math.sin(angle) * STEAL_APPROACH_DISTANCE,
-    }
-  })
-
 const approachWithNavigation = (
   fromX: number,
   fromY: number,
   toX: number,
   toY: number,
   collectIds: number[],
-  steal: boolean,
 ): BotDecision => {
   const waypoint = nextNavigationPoint({ x: fromX, y: fromY }, { x: toX, y: toY })
-  return approach(fromX, fromY, waypoint.x, waypoint.y, collectIds, steal)
+  return approach(fromX, fromY, waypoint.x, waypoint.y, collectIds)
 }
 
 /**
@@ -332,44 +315,15 @@ const approachWithNavigation = (
 export const decideBot = (input: BotInput, memory: BotMemory): BotDecision => {
   const { me, rival, coins, now, chaosEventId } = input
   const objective = objectiveOf(me)
-  const target = targetOf(objective)
-  const progress = progressOf(me)
 
   // Botun konumu: hafızadaki konum (oyun döngüsü her karede günceller).
   const bx = memory.x
   const by = memory.y
 
-  // --- 1) ÇALMA GÖREVİ ÖNCELİĞİ ---
-  const stealObjective = objective?.kind === 'steal'
-  const stealsRemaining = objective?.stealTarget
-    ? Math.max(0, objective.stealTarget - (me.stolen ?? 0))
-    : Math.max(0, target - progress)
-  const stealNeeded = stealObjective && stealsRemaining > 0
+  // --- 1) MENZİLDEKİ COİNLER ---
   const collectIds = coins
     .filter((coin) => !coin.collectedBy && dist(bx, by, coin.x, coin.y) <= COLLECT_RADIUS)
     .map((coin) => coin.id)
-
-  // While steal requirements remain, pursuing the rival takes precedence over
-  // coins and medium-difficulty detours. Navigation picks a reachable point
-  // inside the actual steal radius and routes around obstacles.
-  if (stealNeeded && rival) {
-    const rivalDistance = dist(bx, by, rival.x, rival.y)
-    if (rivalDistance <= STEAL_RADIUS) {
-      return {
-        dx: 0,
-        dy: 0,
-        collectIds,
-        steal: now - memory.lastStealAt >= BOT_STEAL_COOLDOWN_MS,
-      }
-    }
-
-    const waypoint = nextNavigationPointToAny(
-      { x: bx, y: by },
-      stealApproachPoints(rival),
-    )
-    if (waypoint) return approach(bx, by, waypoint.x, waypoint.y, collectIds, false)
-    return { dx: 0, dy: 0, collectIds, steal: false }
-  }
 
   // --- 2) HATA (MISTAKE) DURUMU ---
   // Bot ara sıra yanlış bir coine yönelir veya duraksar. Bu, "yenilebilir"
@@ -377,7 +331,7 @@ export const decideBot = (input: BotInput, memory: BotMemory): BotDecision => {
   if (now < memory.mistakeUntil) {
     const wrong = coins.find((c) => c.id === memory.mistakeCoinId && !c.collectedBy)
     if (wrong) {
-      return approachWithNavigation(bx, by, wrong.x, wrong.y, [], false)
+      return approachWithNavigation(bx, by, wrong.x, wrong.y, [])
     }
     // Yanlış hedef kaybolduysa hatayı bitir.
     memory.mistakeUntil = 0
@@ -393,7 +347,6 @@ export const decideBot = (input: BotInput, memory: BotMemory): BotDecision => {
       (ARENA.minX + ARENA.maxX) / 2,
       (ARENA.minY + ARENA.maxY) / 2,
       [],
-      false,
     )
   }
 
@@ -411,7 +364,7 @@ export const decideBot = (input: BotInput, memory: BotMemory): BotDecision => {
         memory.mistakeUntil = now + MISTAKE_MS
         memory.mistakeCoinId = worst.id
         memory.targetCoinId = worst.id
-        return approachWithNavigation(bx, by, worst.x, worst.y, [], false)
+        return approachWithNavigation(bx, by, worst.x, worst.y, [])
       }
     }
     // Doğru hedef: en yüksek öncelikli, en yakın coin (öncelik + mesafe).
@@ -445,11 +398,10 @@ export const decideBot = (input: BotInput, memory: BotMemory): BotDecision => {
   }
 
   // --- 4) HAREKET ---
-  // Coin hunting resumes when no steal component remains.
   if (targetCoin) {
-    return approachWithNavigation(bx, by, targetCoin.x, targetCoin.y, collectIds, false)
+    return approachWithNavigation(bx, by, targetCoin.x, targetCoin.y, collectIds)
   }
-  return { dx: 0, dy: 0, collectIds, steal: false }
+  return { dx: 0, dy: 0, collectIds }
 }
 
 /** Bir hedefe doğru normalize edilmiş yön üretir. */
@@ -459,13 +411,12 @@ const approach = (
   toX: number,
   toY: number,
   collectIds: number[],
-  steal: boolean,
 ): BotDecision => {
   const dx = toX - fromX
   const dy = toY - fromY
   const len = Math.hypot(dx, dy)
-  if (len < 1e-3) return { dx: 0, dy: 0, collectIds, steal }
-  return { dx: dx / len, dy: dy / len, collectIds, steal }
+  if (len < 1e-3) return { dx: 0, dy: 0, collectIds }
+  return { dx: dx / len, dy: dy / len, collectIds }
 }
 
 /**
@@ -485,4 +436,4 @@ export const botStepDistance = (dt: number, slowed: boolean) => {
  * Oyunun gerçek puanı `getCoinValue` ile aynıdır — burada yeniden kullanılır.
  */
 export const botCoinValue = (coin: Coin, chaosEventId: string | undefined, objective: Objective | null) =>
-  getCoinValue(coin.type, chaosEventId, objective)
+  isRiskyCoin(coin.id) ? riskyCoinValue(coin.type) : getCoinValue(coin.type, chaosEventId, objective)

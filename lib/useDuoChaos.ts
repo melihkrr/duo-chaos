@@ -1065,22 +1065,6 @@ export const useDuoChaos = () => {
       })
     })
 
-    const offSteal = room.on('steal', (payload) => {
-      const data = payload as {
-        by?: string
-        objectiveState?: import('./objectiveSync').AuthoritativeActionState
-        round?: number
-      }
-      if (!data || data.by === room.playerId) return
-      noteRivalAlive()
-      playSound('bump')
-      const authoritativeState = data.objectiveState
-      const actionRound = data.round
-      if (authoritativeState && typeof actionRound === 'number') {
-        setState((prev) => applyAuthoritativeRivalState(prev, authoritativeState, actionRound))
-      }
-    })
-
     const offEmote = room.on('emote', (payload) => {
       const data = payload as { by?: string; id?: EmoteId }
       if (!data || data.by === room.playerId || !data.id) return
@@ -1253,7 +1237,6 @@ export const useDuoChaos = () => {
       offHello()
       offMove()
       offCollect()
-      offSteal()
       offEmote()
       offTrail()
       offAvatar()
