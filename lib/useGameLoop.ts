@@ -712,14 +712,16 @@ export const useGameLoop = (deps: LoopDeps) => {
           // karede `livePos` ref'i üzerinden doğrudan DOM'a uygulanır; state'e
           // yazmak 60Hz render tetikler ve hareketi bozar. State'teki x/y
           // yalnızca tur başında (spawn) doğru olması yeterlidir.
+          //
+          // ÇALMA SAYACI — SUNUCU OTORİTESİ (0042): Burada `stolen`/`roundStolen`
+          // İYİMSER olarak ARTIRILMAZ. Önceden her `stealing` karesinde yerel
+          // artırılıyordu; sunucu da artırdığı için `mergeProgress` monotonik
+          // (`Math.max`) birleştirmesi yerel fazla değeri KALICI kilitliyordu
+          // ("çalma sayısı iki katına çıktı"). Artık çalma sayacı YALNIZCA
+          // sunucudan gelir: `duo_steal_versioned` yanıtındaki `state` ve
+          // `duo_public_state` yoklaması. Böylece çift sayma imkânsızdır.
           if (stealing) {
             changed = true
-            next = {
-              ...next,
-              stolen: next.stolen + 1,
-              // TUR TOPLAMI: sonuç ekranı `roundStolen` okur; iyimser artır.
-              roundStolen: (next.roundStolen ?? 0) + 1,
-            }
           }
           // Görev tamamlandıysa: yalnızca YEREL kutlama durumunu işaretle.
           //

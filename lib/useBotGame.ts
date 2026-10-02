@@ -62,10 +62,11 @@ const COMBO_WINDOW_MS = 2_200
 const COMBO_STREAK_AT = 4
 const OBJECTIVE_CELEBRATE_MS = 1_400
 /**
- * Çalma başına puan. Çok oyunculu `duo_steal` RPC'sindeki `v_steal_score := 20`
- * ile BİREBİR aynıdır; tek oyunculu modda da aynı puanı uygularız.
+ * Çalma başına puan. Çok oyunculu `duo_steal_versioned` RPC'sindeki
+ * `v_steal_score := 25` (0042) ile BİREBİR aynıdır; tek oyunculu modda da
+ * aynı puanı uygularız. (Eski değer 20 idi; kullanıcı beklentisi +25/-25.)
  */
-const STEAL_SCORE = 20
+const STEAL_SCORE = 25
 
 export type BotGameApi = {
   state: State
