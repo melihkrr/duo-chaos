@@ -14,6 +14,7 @@ import {
 import { friendlyError } from './errors'
 import {
   applyAuthoritativeRivalState,
+  applyAuthoritativeVictimState,
   createPositionActionQueue,
   isRpcSuccess,
   runAfterPositionSync,
@@ -476,6 +477,25 @@ export const useDuoChaos = () => {
   const remotePos = useRef<Map<string, { x: number; y: number; at: number }>>(new Map())
   // Rakibin emote etiketini süresi dolunca temizlemek için zamanlayıcı.
   const remoteEmoteTimer = useRef<number>(0)
+  // Rakip bizi çaldığında sunucunun bildirdiği OTORİTER kurban değerleri.
+  // `duo_public_state` yoklaması ~1 sn gecikmeli olabildiğinden (replica lag),
+  // eski/yüksek skoru geri getirebilir. Bu "taban" (floor) değerleri, yoklama
+  // birleştirmesinde sunucu değerini bu tavanla sınırlar; böylece çalınan puan
+  // ASLA geri gelmez ve puan yanlış oyuncuda görünmez.
+  const victimFloorRef = useRef<{
+    round: number
+    // Zaman damgası: taban yalnızca çalma anından sonraki KISA bir pencerede
+    // (bayat yoklama gecikmesini kapsayacak kadar) uygulanır. Aksi halde
+    // kurbanın SONRADAN kazandığı meşru puanları da kalıcı olarak engellerdi.
+    at: number
+    score: number
+    roundScore: number
+    coins: number
+    roundCoins: number
+  } | null>(null)
+  // Kurban tabanının geçerlilik penceresi (ms). `duo_public_state` yoklaması
+  // ~1 sn gecikmeli olabildiğinden 2 yoklama turunu kapsayacak kadar tutarız.
+  const VICTIM_FLOOR_TTL_MS = 2_500
   // NOT: Eskiden burada `rivalBroadcastSeenRef` adlı KALICI bir mandal vardı:
   // tur içinde bir kez `move` broadcast'i görüldüyse sunucu snapshot'ı rakip
   // konumu için sonsuza dek devre dışı kalıyordu. Bu, "bir süre sonra rakip
@@ -1069,15 +1089,32 @@ export const useDuoChaos = () => {
       const data = payload as {
         by?: string
         objectiveState?: import('./objectiveSync').AuthoritativeActionState
+        victimState?: import('./objectiveSync').AuthoritativeVictimState
         round?: number
       }
       if (!data || data.by === room.playerId) return
       noteRivalAlive()
       playSound('bump')
       const authoritativeState = data.objectiveState
+      const victimState = data.victimState
       const actionRound = data.round
       if (authoritativeState && typeof actionRound === 'number') {
         setState((prev) => applyAuthoritativeRivalState(prev, authoritativeState, actionRound))
+      }
+      // Rakip BİZİ çaldı: sunucunun bildirdiği otoriter -25 deltasını YEREL
+      // oyuncuya (index 0) ANINDA uygularız. Ayrıca bu değerleri "taban" olarak
+      // kaydederiz; yoklama birleştirmesi bayat (yüksek) bir skoru geri
+      // getiremesin diye.
+      if (victimState && typeof actionRound === 'number') {
+        victimFloorRef.current = {
+          round: actionRound,
+          at: Date.now(),
+          score: typeof victimState.score === 'number' ? victimState.score : 0,
+          roundScore: typeof victimState.roundScore === 'number' ? victimState.roundScore : 0,
+          coins: typeof victimState.coins === 'number' ? victimState.coins : 0,
+          roundCoins: typeof victimState.roundCoins === 'number' ? victimState.roundCoins : 0,
+        }
+        setState((prev) => applyAuthoritativeVictimState(prev, victimState, actionRound))
       }
     })
 
@@ -1374,6 +1411,29 @@ export const useDuoChaos = () => {
             // değiştiyse sunucu değeri (yeni görev için `false`) geçerlidir.
             if (!objectiveChanged) {
               merged.missionDone = Boolean(player.missionDone || server.missionDone)
+            }
+            // KURBAN TABANI (KÖK SORUN: "puan yanlış oyuncuda görünüyor"):
+            // Rakip bizi çaldığında sunucu -25 uygular, ancak `duo_public_state`
+            // yoklaması ~1 sn gecikmeli (replica lag) olabildiğinden ESKİ/yüksek
+            // skoru döndürebilir. Bu bayat değer doğrudan uygulanırsa çalınan
+            // puan GERİ GELİR ve "puan bana verildi" gibi görünür. Çözüm:
+            // sunucu değerini, çalma anında kaydettiğimiz OTORİTER tabanla
+            // SINIRLA (tavan), sonra yerel değerle `max` al. Böylece skor asla
+            // tabanın üstüne çıkamaz ama yerel iyimser değerin altına da düşmez.
+            const floor = victimFloorRef.current
+            if (
+              floor &&
+              floor.round === prev.round &&
+              Date.now() - floor.at < VICTIM_FLOOR_TTL_MS
+            ) {
+              const capScore = Math.min(merged.score ?? 0, floor.score)
+              const capRoundScore = Math.min(merged.roundScore ?? 0, floor.roundScore)
+              const capCoins = Math.min(merged.coins ?? 0, floor.coins)
+              const capRoundCoins = Math.min(merged.roundCoins ?? 0, floor.roundCoins)
+              merged.score = Math.max(player.score ?? 0, capScore)
+              merged.roundScore = Math.max(player.roundScore ?? 0, capRoundScore)
+              merged.coins = Math.max(player.coins ?? 0, capCoins)
+              merged.roundCoins = Math.max(player.roundCoins ?? 0, capRoundCoins)
             }
           }
           // SUNUCU OTORİTESİ (skor + ilerleme): `duo_tick` artık periyodik
@@ -1882,6 +1942,9 @@ export const useDuoChaos = () => {
     // Sunucu turu ilerletti → misafir de aynı seed'den yeniden tohumla.
     if (state.round > syncedRoundRef.current) {
       syncedRoundRef.current = state.round
+      // Yeni turda kurban tabanı geçersizdir; eski turun skor tavanı yeni
+      // turun skorunu yanlışlıkla sınırlamasın.
+      victimFloorRef.current = null
       resetRound(state.round, roundSeedFor(room.code, state.round))
       setNextReady(false)
       setRivalNextReady(false)
