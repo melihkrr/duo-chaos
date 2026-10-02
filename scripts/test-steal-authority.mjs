@@ -51,6 +51,10 @@ const movementMigration = await readFile(
   new URL('../supabase/migrations/0051_movement_contact_steal.sql', import.meta.url),
   'utf8',
 )
+const preserveSampleMigration = await readFile(
+  new URL('../supabase/migrations/0052_steal_preserve_movement_sample.sql', import.meta.url),
+  'utf8',
+)
 
 // --- Mirror of duo_steal_versioned (0051) -----------------------------------
 // Returns { ok, reason?, mutual?, stealer, victim } where stealer/victim are
@@ -96,7 +100,11 @@ const duoStealVersioned = (state, callerSlot, now, expectedRound = null) => {
   const oppToward = movedToward(opp, caller, dist)
   if (!callerToward && !oppToward) return { ok: false, reason: 'not_chasing' }
 
-  // Attacker gains: +25 score, +1 stolen, slowed, movement sample consumed.
+  // Attacker gains: +25 score, +1 stolen, slowed.
+  // NOTE (0052): the movement sample (previousX/Y) is NOT reset. Resetting it
+  // destroyed the "moved toward" evidence and caused the intermittent
+  // "1 hit / 5 miss / 6 hit" live bug. The 700ms contact guard is the only
+  // anti-spam mechanism.
   const applyAttackerGain = (stealer) => {
     stealer.stolen = (stealer.stolen ?? 0) + 1
     stealer.roundStolen = (stealer.roundStolen ?? 0) + 1
@@ -104,10 +112,6 @@ const duoStealVersioned = (state, callerSlot, now, expectedRound = null) => {
     stealer.roundScore = (stealer.roundScore ?? 0) + STEAL_SCORE
     stealer.slowedUntil = now + 400
     stealer.lastStolenAt = now
-    stealer.previousX = stealer.x
-    stealer.previousY = stealer.y
-    stealer.previousPositionAt = null
-    stealer.positionUpdatedAt = null
   }
 
   // Victim loses: -25 score (floored at 0), -1 coin (floored at 0), slowed.
@@ -118,10 +122,6 @@ const duoStealVersioned = (state, callerSlot, now, expectedRound = null) => {
     victim.roundCoins = Math.max(0, (victim.roundCoins ?? 0) - 1)
     victim.slowedUntil = now + 400
     victim.lastStolenAt = now
-    victim.previousX = victim.x
-    victim.previousY = victim.y
-    victim.previousPositionAt = null
-    victim.positionUpdatedAt = null
   }
 
   // SIMULTANEOUS CONTACT: both moved toward each other → BOTH steal atomically.
@@ -305,21 +305,25 @@ console.log('SCENARIO 6 — Neither moves toward the other: no steal')
   check('no coins transferred', state.players.p1.coins === 3 && state.players.p2.coins === 3)
 }
 
-console.log('SCENARIO 7 — Same continuous contact cannot spam steal every frame')
+console.log('SCENARIO 7 — Continuous contact cannot spam steal every frame (700ms guard)')
 {
   const state = makeState()
   state.players.p1.x = 50
   state.players.p2.x = 54.5
+  state.players.p2.coins = 10
   let successes = 0
-  // 60 frames over ~1s (16ms apart) while in contact. Only the first frame has
-  // a fresh movement sample; the guard blocks the rest.
+  // 60 frames over ~1s (16ms apart) while in contact. The movement sample is
+  // recorded ONCE and preserved (0052). The 700ms contact guard — not the
+  // movement sample — limits steals to roughly one per guard window.
   for (let frame = 0; frame < 60; frame += 1) {
     const now = 4_000 + frame * 16
     if (frame === 0) recordMove(state, 'p1', 45)
     const res = duoStealVersioned(state, 'p1', now)
     if (res.ok) successes += 1
   }
-  check('at most one steal during continuous contact', successes === 1, `successes=${successes}`)
+  // ~960ms of contact → at most 2 steals (t=0 and t≈700ms), never 60.
+  check('steals are rate-limited by the guard, not per-frame', successes <= 2, `successes=${successes}`)
+  check('at least one steal landed', successes >= 1, `successes=${successes}`)
   check('stolen counter matches successes', state.players.p1.stolen === successes)
 }
 
@@ -336,11 +340,11 @@ console.log('SCENARIO 8 — After cooldown, attacker can steal again from statio
   const second = duoStealVersioned(state, 'p1', 5_100)
   check('repeat within guard rejected', second.ok === false, second.reason)
   check('rejected with victim_guarded', second.reason === 'victim_guarded', second.reason)
-  // After the guard window, a NEW movement into contact steals again from the
-  // STATIONARY victim (victim does not need to move).
-  recordMove(state, 'p1', 46)
+  // After the guard window, the SAME preserved movement sample still counts as
+  // "moved toward" — no new move is required (0052). This is the exact case
+  // that used to fail intermittently.
   const third = duoStealVersioned(state, 'p1', 5_800)
-  check('after cooldown a new approach steals again', third.ok === true, third.reason)
+  check('after cooldown the preserved sample steals again', third.ok === true, third.reason)
   check('A stolen counter now 2', state.players.p1.stolen === 2)
   check('stationary victim lost a second coin', state.players.p2.coins === 1, `coins=${state.players.p2.coins}`)
 }
@@ -432,6 +436,42 @@ console.log('SCENARIO 11 — SQL migration enforces movement-into-contact attack
   check('simultaneous contact applies both steals', movementMigration.includes('if v_pl_toward and v_opp_toward then'))
   check('simultaneous contact is reported as mutual', movementMigration.includes("'mutual', true"))
   check('only public steal RPC remains executable', movementMigration.includes('grant execute on function public.duo_steal_versioned'))
+  // Strip SQL line comments so the header comment (which documents the OLD
+  // reset behaviour being removed) cannot satisfy the "no reset" assertion.
+  const preserveSampleCode = preserveSampleMigration
+    .split('\n')
+    .filter((line) => !line.trim().startsWith('--'))
+    .join('\n')
+  check('0052 keeps the movement sample (no previous_x reset)', !/previous_x\s*=\s*x/.test(preserveSampleCode))
+  check('0052 still detects movement into contact', preserveSampleMigration.includes('v_pl_toward := v_prev_dist > v_dist'))
+  check('0052 still applies mutual steals', preserveSampleMigration.includes('if v_pl_toward and v_opp_toward then'))
+}
+
+console.log('SCENARIO 12 — Repeated steals during a chase are reliable (0052 regression)')
+{
+  // Reproduces the live "1 hit / 5 miss / 6 hit" bug. The attacker keeps
+  // moving into contact; the movement sample is recorded ONCE and preserved.
+  // Every attempt after the 700ms guard must land — no dependence on a fresh
+  // server move between attempts.
+  const state = makeState()
+  state.players.p1.x = 50
+  state.players.p2.x = 54.5
+  state.players.p2.coins = 10
+  recordMove(state, 'p1', 45) // one real approach into contact
+  let landed = 0
+  let missed = 0
+  // Attempt once per 100ms for 3 seconds (30 attempts).
+  for (let i = 0; i < 30; i += 1) {
+    const now = 10_000 + i * 100
+    const res = duoStealVersioned(state, 'p1', now)
+    if (res.ok) landed += 1
+    else missed += 1
+  }
+  // 3s / 700ms guard → 4 steals (t=0, 700, 1400, 2100, 2800 → 5 windows).
+  check('repeated steals land reliably (no intermittent misses)', landed >= 4, `landed=${landed}`)
+  check('misses are only the guard window, never not_chasing', missed <= 26, `missed=${missed}`)
+  check('stolen counter equals landed steals', state.players.p1.stolen === landed, `stolen=${state.players.p1.stolen} landed=${landed}`)
+  check('victim coins reduced by exactly the landed steals', state.players.p2.coins === 10 - landed, `coins=${state.players.p2.coins}`)
 }
 
 console.log(`\n${failed === 0 ? '\u2714 ALL CHECKS PASSED' : '\u2718 SOME CHECKS FAILED'} \u2014 ${passed} passed, ${failed} failed`)
