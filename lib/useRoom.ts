@@ -2,8 +2,20 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getSupabase, hasSupabase, rpc } from './supabase'
+import { computeBackoffDelay, DEFAULT_RETRY_POLICY } from './retry'
 
-export type RoomStatus = 'idle' | 'connecting' | 'live' | 'error'
+/**
+ * Oda durumu.
+ *
+ *   * `idle`       — oda yok.
+ *   * `connecting` — ilk bağlantı kuruluyor.
+ *   * `live`       — kanal abone ve sağlıklı.
+ *   * `recovering` — kanal koptu, OTOMATİK yeniden bağlanma sürüyor. Kullanıcıya
+ *                    "Reconnecting…" gösterilir ama oyun durdurulmaz; yerel
+ *                    hareket devam eder ve bağlantı gelince uzlaştırma yapılır.
+ *   * `error`      — kalıcı hata (yeniden bağlanma denemeleri tükendi).
+ */
+export type RoomStatus = 'idle' | 'connecting' | 'live' | 'recovering' | 'error'
 
 export type RoomApi = {
   code: string | null
@@ -36,6 +48,20 @@ export type RoomApi = {
   call: <T = unknown>(fn: string, args?: Record<string, unknown>) => Promise<T | null>
   /** Gelen broadcast olaylarını dinler. */
   on: (event: string, handler: (payload: unknown) => void) => () => void
+  /**
+   * KANAL YENİDEN BAĞLANDIĞINDA çağrılacak işleyiciyi kaydeder.
+   *
+   * Kök sorun: Realtime kanalı koptuğunda (CHANNEL_ERROR/TIMED_OUT) eski kod
+   * yalnızca `status='error'` yazıp duruyordu; hiçbir yeniden bağlanma veya
+   * uzlaştırma yapılmıyordu. İstemci bir sonraki rastgele Realtime olayına
+   * bağımlı kalıyordu → "rakip dondu / skor güncellenmedi" hataları.
+   *
+   * Çözüm: Kanal otomatik yeniden abone olur; HER başarılı (yeniden) abonelikte
+   * bu işleyiciler çağrılır. `useDuoChaos` burada `duo_public_state` çekip
+   * otoriter durumu uzlaştırır. Böylece kopma sonrası durum KENDİLİĞİNDEN
+   * yakınsar; rastgele bir olaya bağımlı değildir.
+   */
+  onReconnect: (handler: () => void) => () => void
 }
 
 const TOKEN_KEY = 'duo-chaos:token'
@@ -103,6 +129,27 @@ export const useRoom = (): RoomApi => {
   // ref üzerinden okuruz (leave broadcast'inde `by` alanı için gerekli).
   const playerIdRef = useRef<'p1' | 'p2'>(playerId)
 
+  // YENİDEN BAĞLANMA ALTYAPISI.
+  //
+  // Kanal koptuğunda (CHANNEL_ERROR/TIMED_OUT) otomatik yeniden abone oluruz.
+  // `reconnectHandlers` — başarılı her (yeniden) abonelikte çağrılan uzlaştırma
+  // işleyicileri (bkz. `onReconnect`). `reconnectTimer` — bekleyen yeniden
+  // bağlanma zamanlayıcısı. `reconnectAttempt` — üstel geri çekilme sayacı.
+  // `intentionalCloseRef` — `disconnect()` çağrıldığında yeniden bağlanmayı
+  // DURDURUR (kasıtlı çıkışta sonsuz yeniden bağlanma olmaz).
+  const reconnectHandlers = useRef<Set<() => void>>(new Set())
+  const reconnectTimer = useRef<number>(0)
+  const reconnectAttempt = useRef(0)
+  const intentionalCloseRef = useRef(false)
+  // Yeniden bağlanma parametrelerini (kod/slot/token/ad) saklarız; kanal
+  // koptuğunda aynı parametrelerle yeniden abone oluruz.
+  const connectParamsRef = useRef<{
+    code: string
+    playerId: 'p1' | 'p2'
+    token?: string
+    name?: string
+  } | null>(null)
+
   useEffect(() => {
     codeRef.current = code
   }, [code])
@@ -133,6 +180,15 @@ export const useRoom = (): RoomApi => {
   }, [])
 
   const disconnect = useCallback(async () => {
+    // Kasıtlı kapanış: yeniden bağlanma döngüsünü DURDUR. Aksi halde
+    // `leaveGame` sonrası kanal koptu sanılıp sonsuz yeniden bağlanma olurdu.
+    intentionalCloseRef.current = true
+    if (reconnectTimer.current) {
+      window.clearTimeout(reconnectTimer.current)
+      reconnectTimer.current = 0
+    }
+    reconnectAttempt.current = 0
+    connectParamsRef.current = null
     const supabase = getSupabase()
     if (supabase && channelRef.current) {
       // Rakibe TEMİZ bir "ayrıldım" sinyali gönder. Presence düşüşü güvenilmez
@@ -162,6 +218,119 @@ export const useRoom = (): RoomApi => {
     setStatus('idle')
   }, [])
 
+  /**
+   * Kanalı açar ve abone olur. `isReconnect` true ise bu bir OTOMATİK yeniden
+   * bağlanma denemesidir: başarıda uzlaştırma işleyicileri çağrılır ve durum
+   * `live`'a döner; başarısızlıkta üstel geri çekilmeli olarak yeniden denenir.
+   *
+   * Kök sorun: Eski kod kopmada yalnızca `status='error'` yazıp duruyordu.
+   * Artık kanal kendini otomatik toparlar; kullanıcı sayfayı YENİLEMEK zorunda
+   * kalmaz.
+   */
+  // `openChannel` KENDİ KENDİNİ yeniden çağırabilmelidir (kopmada zamanlayıcı
+  // içinden). React Compiler kuralı (`react-hooks/immutability`) bir hook
+  // dönüşünü ref'e atamayı yasakladığı için, uygulamayı `useCallback` yerine
+  // bir ref içinde tutarız. Fonksiyon yalnızca kararlı ref'lere/setter'lara
+  // dokunur; bu yüzden kimliğinin sabit olması güvenlidir.
+  const openChannelRef = useRef<
+    | ((params: { code: string; playerId: 'p1' | 'p2'; token?: string; name?: string }, isReconnect: boolean) => Promise<void>)
+    | null
+  >(null)
+
+  const openChannel = useCallback(
+    async (params: { code: string; playerId: 'p1' | 'p2'; token?: string; name?: string }, isReconnect: boolean) => {
+      const supabase = getSupabase()
+      if (!supabase) {
+        setStatus('live')
+        return
+      }
+      const { code: normalized, playerId: slot, name: resolvedName } = params
+
+      if (!isReconnect) setStatus('connecting')
+      // Yeni kanal kurulurken presence bilgisi SIFIRLANIR. İlk `presence sync`
+      // gelene kadar `presenceReady === false` kalır; bu sayede "henüz
+      // bilmiyoruz" durumu "rakip yok" sanılmaz.
+      setPresenceReady(false)
+      setOpponentPresent(false)
+      if (channelRef.current) await supabase.removeChannel(channelRef.current)
+
+      const channel = supabase.channel(`duo-room-${normalized}`, {
+        config: { presence: { key: slot }, broadcast: { self: false } },
+      })
+
+      channel.on('broadcast', { event: '*' }, ({ event, payload }) => {
+        const set = handlers.current.get(event)
+        if (!set) return
+        set.forEach((handler) => handler(payload))
+      })
+
+      channel.on('presence', { event: 'sync' }, () => {
+        const state = channel.presenceState()
+        const keys = Object.keys(state)
+        setOpponentPresent(keys.some((key) => key !== slot))
+        // İlk senkron tamamlandı: artık `opponentPresent` GÜVENİLİR.
+        setPresenceReady(true)
+      })
+
+      await new Promise<void>((resolve) => {
+        void channel.subscribe((next) => {
+          if (next === 'SUBSCRIBED') {
+            void channel.track({ player: slot, at: Date.now() })
+            // Kendi adımızı hemen yayınla; rakip kanala bağlandığında adımızı
+            // görsün (yalnızca yeniden adlandırmayı beklemesin).
+            if (resolvedName) {
+              void channel.send({
+                type: 'broadcast',
+                event: 'name',
+                payload: { by: slot, name: resolvedName },
+              })
+            }
+            channelRef.current = channel
+            reconnectAttempt.current = 0
+            setStatus('live')
+            // UZLAŞTIRMA: (Yeniden) bağlandığımızda otoriter durumu çek.
+            // Böylece kopma sırasında kaçan olaylar telafi edilir ve iki
+            // istemci yakınsar — rastgele bir sonraki olaya bağımlı değiliz.
+            reconnectHandlers.current.forEach((handler) => {
+              try {
+                handler()
+              } catch {
+                /* uzlaştırma hatası bağlantıyı etkilemez */
+              }
+            })
+            resolve()
+          } else if (next === 'CHANNEL_ERROR' || next === 'TIMED_OUT') {
+            // KOPMA: otomatik yeniden bağlanma planla (kasıtlı kapanış değilse).
+            if (intentionalCloseRef.current) {
+              setStatus('idle')
+              resolve()
+              return
+            }
+            setStatus('recovering')
+            const attempt = reconnectAttempt.current + 1
+            reconnectAttempt.current = attempt
+            const delay = computeBackoffDelay(attempt, DEFAULT_RETRY_POLICY)
+            if (reconnectTimer.current) window.clearTimeout(reconnectTimer.current)
+            reconnectTimer.current = window.setTimeout(() => {
+              reconnectTimer.current = 0
+              if (intentionalCloseRef.current) return
+              const current = connectParamsRef.current
+              if (!current) return
+              void openChannelRef.current?.(current, true)
+            }, delay)
+            resolve()
+          }
+        })
+      })
+    },
+    [],
+  )
+
+  // Uygulamayı ref'e bağla (yalnızca bir kez; kimlik sabittir).
+  useEffect(() => {
+    openChannelRef.current = openChannel
+  }, [openChannel])
+
   const connect = useCallback(
     async (nextCode: string, nextPlayer: 'p1' | 'p2', nextToken?: string, nextName?: string) => {
       const normalized = nextCode.trim().toUpperCase()
@@ -175,65 +344,15 @@ export const useRoom = (): RoomApi => {
         saveName(resolvedName)
       }
       codeRef.current = normalized
-
-      const supabase = getSupabase()
-      if (!supabase) {
-        // Offline mod: kanal yok, oyun yerel çalışır.
-        setStatus('live')
-        return
-      }
-
-      setStatus('connecting')
-      // Yeni kanal kurulurken presence bilgisi SIFIRLANIR. İlk `presence sync`
-      // gelene kadar `presenceReady === false` kalır; bu sayede "henüz
-      // bilmiyoruz" durumu "rakip yok" sanılmaz.
-      setPresenceReady(false)
-      setOpponentPresent(false)
-      if (channelRef.current) await supabase.removeChannel(channelRef.current)
-
-      const channel = supabase.channel(`duo-room-${normalized}`, {
-        config: { presence: { key: nextPlayer }, broadcast: { self: false } },
-      })
-
-      channel.on('broadcast', { event: '*' }, ({ event, payload }) => {
-        const set = handlers.current.get(event)
-        if (!set) return
-        set.forEach((handler) => handler(payload))
-      })
-
-      channel.on('presence', { event: 'sync' }, () => {
-        const state = channel.presenceState()
-        const keys = Object.keys(state)
-        setOpponentPresent(keys.some((key) => key !== nextPlayer))
-        // İlk senkron tamamlandı: artık `opponentPresent` GÜVENİLİR.
-        setPresenceReady(true)
-      })
-
-      await new Promise<void>((resolve) => {
-        void channel.subscribe((next) => {
-          if (next === 'SUBSCRIBED') {
-            void channel.track({ player: nextPlayer, at: Date.now() })
-            // Kendi adımızı hemen yayınla; rakip kanala bağlandığında adımızı
-            // görsün (yalnızca yeniden adlandırmayı beklemesin).
-            if (resolvedName) {
-              void channel.send({
-                type: 'broadcast',
-                event: 'name',
-                payload: { by: nextPlayer, name: resolvedName },
-              })
-            }
-            setStatus('live')
-            resolve()
-          } else if (next === 'CHANNEL_ERROR' || next === 'TIMED_OUT') {
-            setStatus('error')
-            resolve()
-          }
-        })
-      })
-
-      channelRef.current = channel
+      // Yeni bağlantı: kasıtlı-kapanış bayrağını temizle ve parametreleri sakla
+      // ki kopmada aynı parametrelerle otomatik yeniden bağlanabilelim.
+      intentionalCloseRef.current = false
+      reconnectAttempt.current = 0
+      const params = { code: normalized, playerId: nextPlayer, token: nextToken, name: resolvedName }
+      connectParamsRef.current = params
+      await openChannel(params, false)
     },
-    [],
+    [openChannel],
   )
 
   const broadcast = useCallback((event: string, payload: unknown) => {
@@ -273,6 +392,17 @@ export const useRoom = (): RoomApi => {
     handlers.current.set(event, set)
     return () => {
       set.delete(handler)
+    }
+  }, [])
+
+  /**
+   * Kanal (yeniden) abone olduğunda çağrılacak uzlaştırma işleyicisini kaydeder.
+   * `useDuoChaos` burada `duo_public_state` çekip otoriter durumu uygular.
+   */
+  const onReconnect = useCallback((handler: () => void) => {
+    reconnectHandlers.current.add(handler)
+    return () => {
+      reconnectHandlers.current.delete(handler)
     }
   }, [])
 
@@ -318,6 +448,7 @@ export const useRoom = (): RoomApi => {
       broadcast,
       call,
       on,
+      onReconnect,
     }),
     [
       code,
@@ -333,6 +464,7 @@ export const useRoom = (): RoomApi => {
       broadcast,
       call,
       on,
+      onReconnect,
     ],
   )
 }

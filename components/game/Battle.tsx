@@ -60,6 +60,12 @@ type Props = {
   shakeRef: React.RefObject<{ at: number; kind: 'steal' | 'bump' } | null>
   /** Rakip oyundan ayrıldı mı? True iken oyun duraklar ve bir uyarı gösterilir. */
   rivalLeft: boolean
+  /**
+   * Bağlantı durumu. `'recovering'` iken küçük, rahatsız etmeyen bir
+   * "Yeniden bağlanılıyor…" rozeti gösterilir. Oyun DURMAZ; `useRoom` arka
+   * planda kendini onarır ve durum otomatik olarak `'live'`e döner.
+   */
+  connection: 'idle' | 'connecting' | 'live' | 'recovering' | 'error'
   /** "Odadan ayrıl" — oyuncu odayı terk eder. */
   onLeaveRoom: () => void
 }
@@ -125,6 +131,7 @@ export function Battle({
   scorePopRef,
   shakeRef,
   rivalLeft,
+  connection,
   onLeaveRoom,
 }: Props) {
   const { language, t } = useI18n()
@@ -602,6 +609,16 @@ export function Battle({
         {cosmetics.activeGlyph && (
           <span className="emote-pop" aria-hidden>
             {cosmetics.activeGlyph}
+          </span>
+        )}
+
+        {/* BAĞLANTI ROZETİ (rahatsız etmeyen). Yalnızca kanal yeniden
+            bağlanırken görünür; oyunu DURDURMAZ ve hata gibi görünmez.
+            Oyuncunun sayfayı elle yenilemesi gerekmez. */}
+        {connection === 'recovering' && (
+          <span className="conn-badge" role="status" aria-live="polite">
+            <span className="conn-dot" aria-hidden />
+            {t('Reconnecting…')}
           </span>
         )}
 

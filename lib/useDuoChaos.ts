@@ -20,6 +20,13 @@ import {
   shouldIgnoreStalePhaseSnapshot,
   shouldRetryRematch,
 } from './objectiveSync'
+import {
+  BACKGROUND_RETRY_POLICY,
+  FAST_RETRY_POLICY,
+  createRetryController,
+  isTransientRpcFailure,
+  withRetry,
+} from './retry'
 import { playSound, unlockAudio } from './sound'
 import { useChaos } from './useChaos'
 import { useCosmetics } from './useCosmetics'
@@ -586,12 +593,27 @@ export const useDuoChaos = () => {
   useEffect(() => {
     if (state.phase !== 'countdown' && state.phase !== 'battle') return
     const myToken = room.token ?? room.playerId
-    const id = window.setInterval(() => {
+    // İDEMPOTENT: `duo_tick` zaman damgalarına göre çalışır; iki istemci de
+    // çağırsa bile dünyayı iki kez ilerletmez. Bu yüzden geçici hatalarda
+    // GÜVENLE yeniden denenebilir. Tek bir başarısız tik artık dünyayı
+    // "donmuş" bırakmaz: `createRetryController` başarısızlıkta geri çekilme
+    // uygular, başarıda sayacı sıfırlar (yüksek frekanslı döngü yok).
+    const controller = createRetryController(BACKGROUND_RETRY_POLICY)
+    const tick = () => {
       if (typeof document !== 'undefined' && document.hidden) return
-      void room.call('duo_tick', { p_token: myToken }).catch(() => undefined)
-    }, 1_000)
+      if (!controller.shouldRunNow()) return
+      void controller
+        .run(async () => {
+          const response = await room.call('duo_tick', { p_token: myToken })
+          if (!isRpcSuccess(response) && isTransientRpcFailure(response)) {
+            throw new Error(`duo_tick rejected: ${JSON.stringify(response)}`)
+          }
+        })
+        .catch(() => undefined)
+    }
+    const id = window.setInterval(tick, 1_000)
     // Faz geçişini geciktirmemek için hemen bir tik at.
-    void room.call('duo_tick', { p_token: myToken }).catch(() => undefined)
+    tick()
     return () => window.clearInterval(id)
   }, [room, state.phase])
 
@@ -650,6 +672,41 @@ export const useDuoChaos = () => {
     avatarRef.current = cosmetics.avatar
   }, [cosmetics.avatar])
 
+  // YENİDEN BAĞLANMA UZLAŞMASI (reconnect reconciliation).
+  //
+  // KÖK SORUN: Realtime kanalı düştüğünde (`CHANNEL_ERROR`/`TIMED_OUT`) istemci
+  // yalnızca bir sonraki rastgele olaya kadar "kör" kalıyordu. Kanal geri
+  // geldiğinde bile sunucu durumu (skor, görev ilerlemesi, faz, rakip konumu)
+  // hemen tazelenmiyordu; oyuncu bayat/yanlış durumda takılı kalabiliyordu.
+  //
+  // ÇÖZÜM: `useRoom` her başarılı (yeniden) abonelikte `onReconnect` işleyicisini
+  // tetikler. Burada OTORİTE snapshot'ını (`duo_public_state`) hemen çekeriz ve
+  // `hello`/`trail`/`avatar` sinyallerini yeniden yayınlarız. Böylece her iki
+  // istemci de kısa sürede aynı sunucu durumuna yakınsar; oyuncunun sayfayı
+  // elle yenilemesi GEREKMEZ.
+  useEffect(() => {
+    const off = room.onReconnect(() => {
+      if (!room.code) return
+      const myToken = room.token ?? room.playerId
+      // Rakibe "buradayım" sinyali: karşı tarafın "rakip ayrıldı" uyarısını
+      // hemen temizler (presence senkronu gecikebilir).
+      broadcastRef.current('hello', { by: room.playerId })
+      broadcastRef.current('trail', { by: room.playerId, id: trailRef.current })
+      broadcastRef.current('avatar', { by: room.playerId, id: avatarRef.current })
+      // OTORİTE DURUMU: faz/skor/görev/rakip konumunu hemen tazele. Bu çağrı
+      // idempotenttir; başarısız olursa normal yoklama döngüsü zaten yakalar.
+      void callRef
+        .current<PublicSnapshot>('duo_public_state', { p_token: myToken })
+        .then((data) => {
+          if (!data) return
+          if (typeof data.playerCount === 'number') setServerPlayerCount(data.playerCount)
+          noteServerNow(data.serverNow)
+        })
+        .catch(() => undefined)
+    })
+    return off
+  }, [noteServerNow, room])
+
   useEffect(() => {
     if (!room.code) return
     const publish = () => {
@@ -674,14 +731,26 @@ export const useDuoChaos = () => {
       room.broadcast('move', { by: room.playerId, x, y })
       positionActionQueue.current.enqueueMove(
         async () => {
-          const response = await room.call('duo_move', {
-            p_token: room.token ?? room.playerId,
-            p_x: x,
-            p_y: y,
-          })
-          if (!isRpcSuccess(response)) {
-            throw new Error(`duo_move rejected: ${JSON.stringify(response)}`)
-          }
+          // İDEMPOTENT: `duo_move` yalnızca konumu yazar (yan etkisi yoktur).
+          // Bu yüzden geçici bir hatada GÜVENLE yeniden denenebilir. Sınırlı
+          // üstel geri çekilme sayesinde tek bir başarısız istek oyuncuyu
+          // kalıcı olarak "dondurmaz" (kök sorun).
+          await withRetry(
+            async () => {
+              const response = await room.call('duo_move', {
+                p_token: room.token ?? room.playerId,
+                p_x: x,
+                p_y: y,
+              })
+              if (!isRpcSuccess(response)) {
+                // Mantıksal red (ör. `not_ready`): yeniden denemek anlamsızsa
+                // fırlatmayız; `isTransientRpcFailure` ile ayırt ederiz.
+                if (!isTransientRpcFailure(response)) return
+                throw new Error(`duo_move rejected: ${JSON.stringify(response)}`)
+              }
+            },
+            FAST_RETRY_POLICY,
+          )
         },
         (error) => console.warn('Failed to sync player position', error),
       )
@@ -2695,6 +2764,10 @@ export const useDuoChaos = () => {
   return {
     state,
     room,
+    // Bağlantı durumu: `recovering` iken UI küçük, rahatsız etmeyen bir
+    // "Yeniden bağlanılıyor…" göstergesi çizebilir. Oyuncu sayfayı elle
+    // yenilemek zorunda kalmaz; `useRoom` arka planda kendini onarır.
+    connection: room.status,
     progress,
     chaos,
     cosmetics,

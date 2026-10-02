@@ -52,6 +52,7 @@ const TRANSLATIONS: Record<string, string> = {
   Rival: 'Rakip',
   'Start match': 'Maçı başlat',
   'Waiting for rival…': 'Rakip bekleniyor…',
+  'Reconnecting…': 'Yeniden bağlanılıyor…',
   'Waiting for the host to start…': 'Oda sahibinin başlatması bekleniyor…',
   'Join a game': 'Oyuna katıl',
   'Enter the 6-character code your friend shared.': 'Arkadaşının paylaştığı 6 karakterli kodu gir.',

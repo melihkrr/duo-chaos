@@ -100,6 +100,7 @@ export default function Page() {
             scorePopRef={bot.scorePopRef}
             shakeRef={bot.shakeRef}
             rivalLeft={false}
+            connection="live"
             onLeaveRoom={() => setConfirmLeave(true)}
           />
         )}
@@ -199,6 +200,7 @@ export default function Page() {
           scorePopRef={multiplayer.scorePopRef}
           shakeRef={multiplayer.shakeRef}
           rivalLeft={multiplayer.rivalLeft}
+          connection={multiplayer.connection}
           onLeaveRoom={() => setConfirmLeave(true)}
         />
       )}

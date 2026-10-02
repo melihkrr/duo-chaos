@@ -24,6 +24,7 @@ import { objectiveSatisfied } from './display'
 import { resolveMove } from './movement'
 import { markPendingCollect, settlePendingCollect } from './coinCollectionState'
 import { applyAuthoritativeActionState, isRpcSuccess } from './objectiveSync'
+import { isTransientRpcFailure, withVersionGuardedRetry } from './retry'
 import { playSound } from './sound'
 import type { Coin, Player, State } from './types'
 
@@ -786,13 +787,28 @@ export const useGameLoop = (deps: LoopDeps) => {
     if (collectedIds.length > 0) {
       actions.push(async () => {
         try {
-          const response = await call('duo_collect_batch', {
-            p_token: token,
-            p_coin_ids: collectedIds,
-            p_x: nextX,
-            p_y: nextY,
-            p_expected_objectives_done: me.objectivesDone ?? 0,
-            p_expected_round: state.round,
+          // SÜRÜM-KORUMALI YENİDEN DENEME: `duo_collect_batch` yan etkilidir
+          // (coin toplar, skor yazar). KÖRLEMESİNE tekrar denemek çift toplama
+          // riski taşır. Ancak RPC `p_expected_objectives_done` +
+          // `p_expected_round` sürüm koruması taşır: sunucu işlemi zaten
+          // uyguladıysa AYNI sürümle gelen tekrar isteği REDDEDER (bayat).
+          // Bu yüzden yalnızca GEÇİCİ (ağ/kopma) hatalarda, AYNI sürümle
+          // yeniden deneriz; mantıksal redler (`stale`/`not_ready`) denenmez.
+          const response = await withVersionGuardedRetry(async () => {
+            const result = await call('duo_collect_batch', {
+              p_token: token,
+              p_coin_ids: collectedIds,
+              p_x: nextX,
+              p_y: nextY,
+              p_expected_objectives_done: me.objectivesDone ?? 0,
+              p_expected_round: state.round,
+            })
+            // Geçici mantıksal red → fırlat ki yeniden denensin. Kalıcı red
+            // (stale/not_ready/invalid_*) → normal dön; yeniden deneme yok.
+            if (!isRpcSuccess(result) && isTransientRpcFailure(result)) {
+              throw new Error(`duo_collect_batch transient rejection: ${JSON.stringify(result)}`)
+            }
+            return result
           })
           if (!isRpcSuccess(response)) {
             console.warn('duo_collect_batch rejected', response)
@@ -882,10 +898,22 @@ export const useGameLoop = (deps: LoopDeps) => {
     }
     if (stealing) {
       actions.push(async () => {
-        const response = await call('duo_steal_versioned', {
-          p_token: token,
-          p_expected_objectives_done: me.objectivesDone ?? 0,
-          p_expected_round: state.round,
+        // SÜRÜM-KORUMALI YENİDEN DENEME: `duo_steal_versioned` yan etkilidir
+        // (+25/-25). KÖRLEMESİNE tekrar denemek çift çalma riski taşır. Ancak
+        // RPC `p_expected_objectives_done` + `p_expected_round` sürüm koruması
+        // taşır: sunucu çalmayı zaten uyguladıysa AYNI sürümle gelen tekrar
+        // isteği REDDEDER (bayat). Bu yüzden yalnızca GEÇİCİ hatalarda, AYNI
+        // sürümle yeniden deneriz; mantıksal redler denenmez.
+        const response = await withVersionGuardedRetry(async () => {
+          const result = await call('duo_steal_versioned', {
+            p_token: token,
+            p_expected_objectives_done: me.objectivesDone ?? 0,
+            p_expected_round: state.round,
+          })
+          if (!isRpcSuccess(result) && isTransientRpcFailure(result)) {
+            throw new Error(`duo_steal_versioned transient rejection: ${JSON.stringify(result)}`)
+          }
+          return result
         })
         if (!isRpcSuccess(response)) {
           console.warn('duo_steal rejected', response)
