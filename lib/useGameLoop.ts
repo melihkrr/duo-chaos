@@ -21,6 +21,12 @@ import {
   getCoinValue,
 } from './config'
 import { objectiveSatisfied } from './display'
+import {
+  installInputResetListeners,
+  neutralKeys,
+  resetAllInput,
+  type KeyState,
+} from './inputReset'
 import { resolveMove } from './movement'
 import { markPendingCollect, settlePendingCollect } from './coinCollectionState'
 import { applyAuthoritativeActionState, isRpcSuccess } from './objectiveSync'
@@ -93,8 +99,6 @@ type LoopDeps = {
   remotePos: React.RefObject<Map<string, { x: number; y: number; at: number }>>
 }
 
-const keys = { up: false, down: false, left: false, right: false }
-
 /**
  * Sanal joystick vektörü (-1..1). Klavye ile aynı anda kullanılabilir;
  * ikisi toplanır ve normalize edilir. `useGameLoop` bu nesneyi dışarı verir,
@@ -165,6 +169,11 @@ export const useGameLoop = (deps: LoopDeps) => {
   // Sanal joystick vektörü. `VirtualJoystick` `setJoystick` ile buraya yazar;
   // böylece her pointer hareketinde React render tetiklenmez (yalnızca RAF okur).
   const joystick = useRef<JoystickVector>({ x: 0, y: 0 })
+  // KLAVYE GİRDİSİ (hook'a özel). ÖNCEDEN modül seviyesinde TEK bir nesneydi;
+  // bu yüzden bir hook örneğinde basılı kalan tuş DİĞER örneklere ve yeni
+  // round'lara sızıyordu. Artık her `useGameLoop` kendi ref'ini tutar ve round
+  // geçişinde sıfırlanır.
+  const keys = useRef<KeyState>(neutralKeys())
   const pendingCollectedCoinIds = useRef(new Set<number>())
   // GÖREV KİMLİĞİ: sunucu bir görev tamamlanınca yeni bir görev atar ve
   // `collected_types`'ı SIFIRLAR. İstemci iyimser ilerlemeyi `me.objectiveProgress`
@@ -268,31 +277,33 @@ export const useGameLoop = (deps: LoopDeps) => {
     const down = (event: KeyboardEvent) => {
       if (isTypingTarget(event.target)) return
       const key = event.key.toLowerCase()
-      if (key === 'w' || key === 'arrowup') keys.up = true
-      else if (key === 's' || key === 'arrowdown') keys.down = true
-      else if (key === 'a' || key === 'arrowleft') keys.left = true
-      else if (key === 'd' || key === 'arrowright') keys.right = true
+      if (key === 'w' || key === 'arrowup') keys.current.up = true
+      else if (key === 's' || key === 'arrowdown') keys.current.down = true
+      else if (key === 'a' || key === 'arrowleft') keys.current.left = true
+      else if (key === 'd' || key === 'arrowright') keys.current.right = true
       else return
       event.preventDefault()
     }
     const up = (event: KeyboardEvent) => {
       if (isTypingTarget(event.target)) return
       const key = event.key.toLowerCase()
-      if (key === 'w' || key === 'arrowup') keys.up = false
-      else if (key === 's' || key === 'arrowdown') keys.down = false
-      else if (key === 'a' || key === 'arrowleft') keys.left = false
-      else if (key === 'd' || key === 'arrowright') keys.right = false
-    }
-    const blur = () => {
-      keys.up = keys.down = keys.left = keys.right = false
+      if (key === 'w' || key === 'arrowup') keys.current.up = false
+      else if (key === 's' || key === 'arrowdown') keys.current.down = false
+      else if (key === 'a' || key === 'arrowleft') keys.current.left = false
+      else if (key === 'd' || key === 'arrowright') keys.current.right = false
     }
     window.addEventListener('keydown', down)
     window.addEventListener('keyup', up)
-    window.addEventListener('blur', blur)
+    // Sekme odağı/görünürlüğü değişince TÜM girdiyi sıfırla: arka plana
+    // düşerken tarayıcı `keyup` göndermez, bu yüzden basılı tuş "takılı"
+    // kalır ve geri dönüldüğünde karakter kendi kendine hareket eder.
+    const removeResetListeners = installInputResetListeners(() => {
+      resetAllInput({ keys: keys.current, joystick: joystick.current })
+    })
     return () => {
       window.removeEventListener('keydown', down)
       window.removeEventListener('keyup', up)
-      window.removeEventListener('blur', blur)
+      removeResetListeners()
     }
   }, [])
 
@@ -330,6 +341,9 @@ export const useGameLoop = (deps: LoopDeps) => {
       // Savaş dışındayken yerel konum ref'ini bırak; yeni turda `state`'ten
       // yeniden tohumlanır (oyuncu doğru başlangıç noktasına döner).
       localPos.current = null
+      // SAVAŞ DIŞI FAZDA GİRDİYİ SIFIRLA (countdown/results/matchover/home).
+      // Round bittiğinde tuş/joystick basılı kalmışsa yeni round'a taşınmasın.
+      resetAllInput({ keys: keys.current, joystick: joystick.current })
       return
     }
 
@@ -362,6 +376,10 @@ export const useGameLoop = (deps: LoopDeps) => {
       const roundAdvanced = state.round > lastRound.current
       lastRound.current = state.round
       if (roundAdvanced) {
+        // YENİ ROUND: hareket girdisini KESİNLİKLE nötrle. Aksi halde round
+        // tam tuş/joystick basılıyken biterse yeni round'da karakter kendi
+        // kendine hareket etmeye devam eder (kullanıcı raporu).
+        resetAllInput({ keys: keys.current, joystick: joystick.current })
         localPos.current = { x: me.x, y: me.y }
         // Ekrana basılacak konumu da spawn'dan tohumla (ilk karede (0,0)
         // görünmesini engeller).
@@ -382,10 +400,10 @@ export const useGameLoop = (deps: LoopDeps) => {
     // --- Girdi: klavye + sanal joystick birleşir. ---
     let dx = 0
     let dy = 0
-    if (keys.up) dy -= 1
-    if (keys.down) dy += 1
-    if (keys.left) dx -= 1
-    if (keys.right) dx += 1
+    if (keys.current.up) dy -= 1
+    if (keys.current.down) dy += 1
+    if (keys.current.left) dx -= 1
+    if (keys.current.right) dx += 1
     dx += joystick.current.x
     dy += joystick.current.y
 

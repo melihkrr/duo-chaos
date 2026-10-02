@@ -17,6 +17,7 @@ import {
   spawnCoins,
 } from './config'
 import { objectiveSatisfied, progressOf } from './display'
+import { installInputResetListeners, resetAllInput } from './inputReset'
 import { resolveMove } from './movement'
 import { playSound } from './sound'
 import { useChaos } from './useChaos'
@@ -196,9 +197,16 @@ export const useBotGame = (): BotGameApi => {
     }
     window.addEventListener('keydown', down)
     window.addEventListener('keyup', up)
+    // Sekme arka plana atıldığında / pencere odağı kaybolduğunda basılı tuşlar
+    // `keyup` almaz → "stuck key" oluşur. Görünürlük/odak değişiminde girdiyi
+    // nötrle ki yeni tur eski girdiyle başlamasın.
+    const removeResetListeners = installInputResetListeners(() => {
+      resetAllInput({ keys: keys.current, joystick: joystick.current })
+    })
     return () => {
       window.removeEventListener('keydown', down)
       window.removeEventListener('keyup', up)
+      removeResetListeners()
     }
   }, [])
 
@@ -251,6 +259,10 @@ export const useBotGame = (): BotGameApi => {
       }))
       lastChaosSlot.current = null
       // Ref'leri sıfırla.
+      // Girdi state'i (klavye + joystick + gamepad) yeni turda KESİNLİKLE
+      // nötr olmalı; aksi halde önceki turda basılı kalan yön yeni turda
+      // otomatik hareket ettirir.
+      resetAllInput({ keys: keys.current, joystick: joystick.current })
       localPos.current = null
       livePos.current = null
       liveRivalPos.current = null
@@ -418,6 +430,10 @@ export const useBotGame = (): BotGameApi => {
     }
     if (prev.phase !== 'battle') {
       localPos.current = null
+      // Savaş dışı fazlarda (countdown/results/matchover) girdiyi sürekli
+      // nötrle: tur geçişi sırasında gelen keydown/keyup olayları yeni tura
+      // yanlış state taşımasın.
+      resetAllInput({ keys: keys.current, joystick: joystick.current })
       return
     }
 
@@ -428,6 +444,9 @@ export const useBotGame = (): BotGameApi => {
     // Yeni tur: konum ref'lerini spawn'dan tohumla.
     if (lastRound.current !== prev.round) {
       lastRound.current = prev.round
+      // Tur ilerlediğinde girdiyi nötrle (çok oyunculu `useGameLoop` ile aynı
+      // davranış) → yeni tur nötr girdiyle başlar.
+      resetAllInput({ keys: keys.current, joystick: joystick.current })
       localPos.current = { x: me.x, y: me.y }
       livePos.current = { x: me.x, y: me.y }
       botMemory.current = createBotMemory(bot.x, bot.y)
