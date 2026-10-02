@@ -61,6 +61,10 @@ const selfSufficientStealMigration = await readFile(
   new URL('../supabase/migrations/0052_self_sufficient_steal_sample.sql', import.meta.url),
   'utf8',
 )
+const fromPositionStealMigration = await readFile(
+  new URL('../supabase/migrations/0053_steal_from_position.sql', import.meta.url),
+  'utf8',
+)
 
 // --- Mirror of duo_steal_versioned (0042) -----------------------------------
 // Returns { ok, reason?, stealer, victim } where stealer/victim are the
@@ -259,6 +263,124 @@ const duoStealPositioned = (state, stealerSlot, now, nextX, nextY) => {
   victim.previousPositionAt = null
 
   return { ok: true, stealer, victim, synthesized }
+}
+
+// --- Mirror of duo_steal_versioned (0053) from-position path ----------------
+// The caller supplies BOTH ends of its movement segment: `fromX/fromY` (the
+// previous frame position) and `nextX/nextY` (this frame position). When the
+// stored sample is missing/stale, the server uses the caller-supplied segment
+// instead of the stored position, so the synthesized approach is exact and
+// non-zero whenever the player is genuinely closing on the rival.
+//
+// Returns { ok, reason?, synthesized?, usedFrom? }.
+const duoStealFromPositioned = (state, stealerSlot, now, nextX, nextY, fromX, fromY) => {
+  const stealer = state.players[stealerSlot]
+  const victimSlot = stealerSlot === 'p1' ? 'p2' : 'p1'
+  const victim = state.players[victimSlot]
+
+  if (state.phase !== 'battle') return { ok: false, reason: 'not_battle' }
+  if (
+    (victim.lastStolenAt ?? 0) > 0 &&
+    now - (victim.lastStolenAt ?? 0) < STEAL_CONTACT_GUARD_MS
+  ) {
+    return { ok: false, reason: 'victim_guarded' }
+  }
+  if (
+    (stealer.lastStolenAt ?? 0) > 0 &&
+    now - (stealer.lastStolenAt ?? 0) < STEAL_CONTACT_GUARD_MS
+  ) {
+    return { ok: false, reason: 'steal_cooldown' }
+  }
+  if ((victim.coins ?? 0) <= 0) return { ok: false, reason: 'no_coins' }
+
+  const moved = nextX !== stealer.x || nextY !== stealer.y
+  if (moved) {
+    stealer.x = nextX
+    stealer.y = nextY
+  }
+
+  // Validate the caller-supplied segment (mirrors 0053).
+  const MAX_FROM_LEN = 20
+  let usedFrom = false
+  if (fromX !== null && fromY !== null) {
+    const fromLen = Math.hypot(nextX - fromX, nextY - fromY)
+    if (
+      fromLen > 0 &&
+      fromLen <= MAX_FROM_LEN &&
+      Math.abs(fromX - stealer.x) <= 0.001 + fromLen &&
+      Math.abs(fromY - stealer.y) <= 0.001 + fromLen
+    ) {
+      usedFrom = true
+    }
+  }
+
+  const dist = Math.hypot(victim.x - stealer.x, victim.y - stealer.y)
+  if (dist > STEAL_RADIUS) return { ok: false, reason: 'too_far' }
+
+  let prevX = stealer.previousX
+  let prevY = stealer.previousY
+  let prevAt = stealer.previousPositionAt
+  let sampleAt = stealer.previousMovedAt
+  let synthesized = false
+
+  const stale =
+    prevX === null ||
+    prevY === null ||
+    prevAt === null ||
+    sampleAt === null ||
+    now - prevAt > STEAL_MOVEMENT_FRESH_MS ||
+    now - sampleAt > STEAL_MOVEMENT_FRESH_MS ||
+    prevAt > now ||
+    sampleAt > now ||
+    sampleAt <= prevAt
+
+  if (stale) {
+    synthesized = true
+    if (usedFrom) {
+      prevX = fromX
+      prevY = fromY
+    } else {
+      prevX = stealer.x
+      prevY = stealer.y
+    }
+    prevAt = now - 1
+    sampleAt = now
+  }
+
+  const playerElapsed = (sampleAt - prevAt) / 1_000
+  if (playerElapsed <= 0) return { ok: false, reason: 'not_chasing', synthesized, usedFrom }
+  const approach =
+    (Math.hypot(victim.x - prevX, victim.y - prevY) - dist) / playerElapsed
+  const opponentApproach =
+    victim.previousX !== null &&
+    victim.previousY !== null &&
+    victim.previousMovedAt !== null &&
+    victim.previousPositionAt !== null &&
+    now - victim.previousMovedAt <= STEAL_MOVEMENT_FRESH_MS &&
+    now - victim.previousPositionAt <= STEAL_MOVEMENT_FRESH_MS &&
+    victim.previousMovedAt > victim.previousPositionAt
+      ? (Math.hypot(stealer.x - victim.previousX, stealer.y - victim.previousY) - dist) /
+        ((victim.previousMovedAt - victim.previousPositionAt) / 1_000)
+      : 0
+  if (
+    approach <= STEAL_APPROACH_EPSILON ||
+    approach <= opponentApproach + STEAL_APPROACH_EPSILON
+  ) {
+    return { ok: false, reason: 'not_chasing', synthesized, usedFrom }
+  }
+
+  stealer.stolen = (stealer.stolen ?? 0) + 1
+  stealer.roundStolen = (stealer.roundStolen ?? 0) + 1
+  stealer.score = (stealer.score ?? 0) + STEAL_SCORE
+  stealer.roundScore = (stealer.roundScore ?? 0) + STEAL_SCORE
+  victim.coins = Math.max(0, (victim.coins ?? 0) - 1)
+  victim.roundCoins = Math.max(0, (victim.roundCoins ?? 0) - 1)
+  victim.score = Math.max(0, (victim.score ?? 0) - STEAL_SCORE)
+  victim.roundScore = Math.max(0, (victim.roundScore ?? 0) - STEAL_SCORE)
+  victim.slowedUntil = now + 400
+  victim.lastStolenAt = now
+
+  return { ok: true, stealer, victim, synthesized, usedFrom }
 }
 
 const makeState = (overrides = {}) => ({
@@ -496,6 +618,15 @@ console.log('SCENARIO 9 — SQL migrations enforce server-recorded directional c
   check('0052 preserves the pursuer comparison epsilon', selfSufficientStealMigration.includes('v_player_approach <= v_opponent_approach + 0.5'))
   check('0052 preserves the +25/-25 scoring', selfSufficientStealMigration.includes('v_steal_score int := 25'))
   check('0052 re-grants only the public steal RPC', selfSufficientStealMigration.includes('grant execute on function public.duo_steal_versioned'))
+  // --- 0053: caller-supplied from-position for the steal sample --------------
+  check('0053 adds the from-position parameters', fromPositionStealMigration.includes('p_from_x numeric default null') && fromPositionStealMigration.includes('p_from_y numeric default null'))
+  check('0053 validates the from-position segment length', fromPositionStealMigration.includes('v_max_from_len numeric := 20'))
+  check('0053 uses the caller segment when the stored sample is stale', fromPositionStealMigration.includes('v_prev_x := v_from_x;') && fromPositionStealMigration.includes('v_prev_y := v_from_y;'))
+  check('0053 keeps the stored-position synthesis as a fallback', fromPositionStealMigration.includes('Synthesize from the stored position (0052 fallback).'))
+  check('0053 keeps the 6-arg overload for older clients', fromPositionStealMigration.includes('select public.duo_steal_versioned('))
+  check('0053 preserves the +25/-25 scoring', fromPositionStealMigration.includes('v_steal_score int := 25'))
+  check('0053 preserves the pursuer comparison epsilon', fromPositionStealMigration.includes('v_player_approach <= v_opponent_approach + 0.5'))
+  check('0053 re-grants the public steal RPC', fromPositionStealMigration.includes('grant execute on function public.duo_steal_versioned'))
 }
 
 console.log('SCENARIO 10 — A stopped player cannot steal using their stale approach')
@@ -611,6 +742,92 @@ console.log('SCENARIO 12 — Positioned steal is self-sufficient (the intermitte
   legacy.players.p1.previousPositionAt = null
   const legacyRes = duoStealVersioned(legacy, 'p1', 1_000)
   check('legacy no-position path still rejects a missing sample', legacyRes.ok === false && legacyRes.reason === 'not_chasing', legacyRes.reason)
+}
+
+console.log('SCENARIO 13 — Caller-supplied from-position fixes "contact but no steal"')
+{
+  // Reproduces the reported bug EXACTLY: the player walks onto the rival while
+  // MOVING. `duo_step_ok` passes, so the stored row advances to the new
+  // position. `previous_x` is NULL (nulled by a preceding steal / never set on
+  // the first move of a round), so the 0052 synthesis produced a ZERO-LENGTH
+  // sample → `not_chasing`. 0053 uses the caller-supplied from-position instead.
+  const state = makeState()
+  state.players.p1.x = 50
+  state.players.p1.y = 50
+  state.players.p2.x = 52
+  state.players.p2.y = 50
+  // Post-steal / first-move state: no stored sample at all.
+  state.players.p1.previousX = null
+  state.players.p1.previousY = null
+  state.players.p1.previousMovedAt = null
+  state.players.p1.previousPositionAt = null
+  state.players.p2.previousX = null
+  state.players.p2.previousY = null
+  state.players.p2.previousMovedAt = null
+  state.players.p2.previousPositionAt = null
+
+  // The caller moved from x=49.5 to x=51 this frame (closing on the rival).
+  const res = duoStealFromPositioned(state, 'p1', 1_000, 51, 50, 49.5, 50)
+  check('from-position steal succeeds while moving with no stored sample', res.ok === true, res.reason)
+  check('the caller-supplied segment was used', res.usedFrom === true)
+  check('the sample was synthesized', res.synthesized === true)
+  check('stealer gains exactly +25', state.players.p1.score === 125, `score=${state.players.p1.score}`)
+  check('victim loses exactly -25', state.players.p2.score === 75, `score=${state.players.p2.score}`)
+
+  // WITHOUT the from-position (0052 behavior) the same call is rejected: the
+  // stored position equals the new position → zero-length sample.
+  const noFrom = makeState()
+  noFrom.players.p1.x = 50
+  noFrom.players.p1.y = 50
+  noFrom.players.p2.x = 52
+  noFrom.players.p2.y = 50
+  noFrom.players.p1.previousX = null
+  noFrom.players.p1.previousY = null
+  noFrom.players.p1.previousMovedAt = null
+  noFrom.players.p1.previousPositionAt = null
+  const noFromRes = duoStealFromPositioned(noFrom, 'p1', 1_000, 51, 50, null, null)
+  check('without a from-position the moving steal is still rejected', noFromRes.ok === false && noFromRes.reason === 'not_chasing', noFromRes.reason)
+
+  // A genuine, fresh stored sample still takes precedence over the caller
+  // segment (anti-cheat: the server-observed approach wins).
+  const fresh = makeState()
+  fresh.players.p1.x = 50
+  fresh.players.p1.y = 50
+  fresh.players.p2.x = 52
+  fresh.players.p2.y = 50
+  fresh.players.p1.previousX = 45
+  fresh.players.p1.previousY = 50
+  fresh.players.p1.previousMovedAt = 1_000
+  fresh.players.p1.previousPositionAt = 900
+  const freshRes = duoStealFromPositioned(fresh, 'p1', 1_000, 51, 50, 49.5, 50)
+  check('a fresh stored sample is preferred over the caller segment', freshRes.ok === true && freshRes.synthesized === false, freshRes.reason)
+
+  // An implausibly long caller segment is ignored (anti-cheat), falling back to
+  // the stored-position synthesis → zero-length → rejected.
+  const cheated = makeState()
+  cheated.players.p1.x = 50
+  cheated.players.p1.y = 50
+  cheated.players.p2.x = 52
+  cheated.players.p2.y = 50
+  cheated.players.p1.previousX = null
+  cheated.players.p1.previousY = null
+  cheated.players.p1.previousMovedAt = null
+  cheated.players.p1.previousPositionAt = null
+  const cheatedRes = duoStealFromPositioned(cheated, 'p1', 1_000, 51, 50, -100, 50)
+  check('an implausibly long from-position is ignored', cheatedRes.usedFrom === false && cheatedRes.ok === false, cheatedRes.reason)
+
+  // A stationary positioned steal (from == to) is still rejected.
+  const stationary = makeState()
+  stationary.players.p1.x = 50
+  stationary.players.p1.y = 50
+  stationary.players.p2.x = 52
+  stationary.players.p2.y = 50
+  stationary.players.p1.previousX = null
+  stationary.players.p1.previousY = null
+  stationary.players.p1.previousMovedAt = null
+  stationary.players.p1.previousPositionAt = null
+  const stationaryRes = duoStealFromPositioned(stationary, 'p1', 1_000, 50, 50, 50, 50)
+  check('a stationary from-position steal is rejected', stationaryRes.ok === false && stationaryRes.reason === 'not_chasing', stationaryRes.reason)
 }
 
 console.log(`\n${failed === 0 ? '\u2714 ALL CHECKS PASSED' : '\u2718 SOME CHECKS FAILED'} \u2014 ${passed} passed, ${failed} failed`)

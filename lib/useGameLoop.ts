@@ -613,6 +613,13 @@ export const useGameLoop = (deps: LoopDeps) => {
     // dursa bile `STEAL_RADIUS` içinde görünmüyordu → çalma neredeyse hiç
     // tetiklenmiyordu. Artık CANLI konumu (`liveRivalPos`) esas alırız; ref
     // henüz tohumlanmadıysa (ilk kare) state konumuna düşeriz.
+    //
+    // KÖK SORUN 2 ("temas var ama çalma olmuyor"): `lastSteal.current = now`
+    // BURADA, yani istek gönderilmeden ÖNCE yazılıyordu. Sunucu isteği
+    // reddettiğinde (ör. `not_chasing`) 700 ms'lik bekleme yine de yanmış
+    // oluyordu; oyuncu rakibin üstünde dururken saniyede ~1 deneme yapabiliyor
+    // ve çoğu reddediliyordu → "çok nadir tetikleniyor". Artık bekleme YALNIZCA
+    // sunucu çalmayı ONAYLADIĞINDA tüketilir (aşağıdaki `steal` eyleminde).
     let stealing = false
     const rivalPos = liveRivalPos.current ?? rivalTarget
     if (
@@ -620,7 +627,6 @@ export const useGameLoop = (deps: LoopDeps) => {
       now - lastSteal.current >= STEAL_COOLDOWN_MS &&
       Math.hypot(rivalPos.x - nextX, rivalPos.y - nextY) <= STEAL_RADIUS
     ) {
-      lastSteal.current = now
       stealing = true
     }
 
@@ -925,6 +931,13 @@ export const useGameLoop = (deps: LoopDeps) => {
             p_expected_round: state.round,
             p_x: nextX,
             p_y: nextY,
+            // HAREKET SEGMENTİ (0053): sunucunun yön örneklemesini KESİN ve
+            // sıfırdan farklı yapabilmesi için bu karenin BAŞLANGIÇ konumunu da
+            // göndeririz. Aksi halde sunucu, önceki çalma sonrası NULL'lanan
+            // `previous_*` kolonları yüzünden sıfır uzunlukta bir örnek üretip
+            // `not_chasing` ile reddediyordu ("temas var ama çalma olmuyor").
+            p_from_x: fromX,
+            p_from_y: fromY,
           })
           if (!isRpcSuccess(result) && isTransientRpcFailure(result)) {
             throw new Error(`duo_steal_versioned transient rejection: ${JSON.stringify(result)}`)
@@ -935,6 +948,10 @@ export const useGameLoop = (deps: LoopDeps) => {
           console.warn('duo_steal rejected', response)
           return
         }
+        // Beklemeyi YALNIZCA başarılı çalmada tüket. Reddedilen bir istek
+        // 700 ms'lik pencereyi yakmaz; oyuncu temas halindeyken bir sonraki
+        // karede yeniden deneyebilir.
+        lastSteal.current = performance.now()
         applyServerState(response, state.round)
         playSound('steal')
         shakeRef.current = { at: performance.now(), kind: 'steal' }
