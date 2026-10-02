@@ -166,8 +166,19 @@ export const useGameLoop = (deps: LoopDeps) => {
   // eder. Anti-cheat korunur: hareketsiz bir kurban, üstüne gelen kovalayandan
   // çalamaz (rakip yaklaşma hızı daha yüksek olduğu için reddedilir).
   //
-  // Halka tampon (ring buffer) küçüktür ve yalnızca son ~500 ms'i tutar.
+  // Halka tampon (ring buffer) küçüktür ve yalnızca son ~2000 ms'i tutar.
   const posHistory = useRef<Array<{ x: number; y: number; at: number }>>([])
+  // KOVALAMA ÇAPASI (0057): oyuncunun rakibe YAKLAŞIRKEN bulunduğu, rakibe en
+  // UZAK olduğu konum. `posHistory` yalnızca son ~2000 ms'i tuttuğu için, oyuncu
+  // rakibin üstünde saniyelerce durduğunda kovalamanın başlangıcı tampondan
+  // DÜŞER ve geri-bakış sıfıra yakın kalır → sunucu `not_chasing` ile reddeder.
+  //
+  // Bu ref, kovalama boyunca rakibe olan mesafenin MAKSİMUM olduğu noktayı
+  // kalıcı olarak saklar. Sunucu (0057) geri-bakışı bir HIZ değil, YER
+  // DEĞİŞTİRME (displacement) olarak yorumlar: `dist(rakip, çapa) - dist(rakip,
+  // şimdi)`. Çapa kovalamanın başında olduğu için bu fark büyüktür ve temas
+  // varsa çalma kabul edilir. Rakip uzaklaşınca (temas kaybolunca) sıfırlanır.
+  const chaseAnchor = useRef<{ x: number; y: number; at: number; dist: number } | null>(null)
   // Yerel oyuncunun EKRANA basılan konumu. `Battle` bu ref'i doğrudan DOM
   // transform'una yazar; böylece 60Hz hareket React render'ı TETİKLEMEZ.
   // Bu, "hareket donuyor / birden ilerliyor" sorununun asıl çözümüdür:
@@ -430,6 +441,9 @@ export const useGameLoop = (deps: LoopDeps) => {
         // Konum geçmişini de sıfırla: yeni turda eski turun konumlarından
         // türetilen bir "yaklaşma" örneklemesi kullanılmasın.
         posHistory.current = []
+        // Kalıcı kovalama çapasını da sıfırla (0057): yeni turda eski turun
+        // yaklaşma vektörü kullanılmasın.
+        chaseAnchor.current = null
         // Yeni turda combo serisini ve uçan puan rozetlerini sıfırla.
         comboRef.current = { count: 0, at: 0 }
         scorePopRef.current = []
@@ -475,12 +489,16 @@ export const useGameLoop = (deps: LoopDeps) => {
     }
     // Ref'i hemen güncelle — bir sonraki kare bu değerden devam eder.
     localPos.current = { x: nextX, y: nextY }
-    // Konum geçmişine bu kareyi ekle (yaklaşma geri-bakışı için). Yalnızca son
-    // ~500 ms tutulur; dizi küçük kalır ve her karede O(1) ekleme yapılır.
+    // Konum geçmişine bu kareyi ekle (yaklaşma geri-bakışı için). 0056: pencere
+    // 500 ms'den 2000 ms'ye çıkarıldı. Neden: oyuncu rakibi kovalayıp TEMAS
+    // NOKTASINDA durduğunda, "son hareketli konum" güncel konumla AYNI olur
+    // (sıfır uzunluk). Gerçek yaklaşma vektörünü elde etmek için kovalamanın
+    // DAHA ERKENİNDEN (oyuncu hâlâ uzaktayken) bir örneğe ihtiyacımız var.
+    // 2000 ms, 60Hz'de ~120 örnek tutar; dizi küçük kalır.
     {
       const history = posHistory.current
       history.push({ x: nextX, y: nextY, at: now })
-      while (history.length > 0 && now - history[0].at > 500) history.shift()
+      while (history.length > 0 && now - history[0].at > 2000) history.shift()
     }
     // Ekrana basılacak konumu da her karede güncelle. `Battle` bunu doğrudan
     // DOM'a yazar; React render'ı beklemez → akıcı hareket.
@@ -704,23 +722,59 @@ export const useGameLoop = (deps: LoopDeps) => {
       stealing = true
     }
 
-    // YAKLAŞMA GERİ-BAKIŞI (0055): ~350 ms önceki konumumuzu bul. Oyuncu
-    // rakibin üstünde DURURKEN yaklaşma hızı ~0'dır; sunucu bu konumu
-    // kullanarak "az önce yaklaşıyordu" diyebilir ve temas varsa çalmayı kabul
-    // eder. Geçmiş yeterince eski değilse (yeni tur / ilk kare) null göndeririz
-    // ve sunucu eski (yalnızca anlık yaklaşma) davranışına düşer.
+    // YAKLAŞMA GERİ-BAKIŞI (0055/0056/0057): oyuncunun rakibe YAKLAŞIRKEN
+    // bulunduğu, rakibe EN UZAK olduğu konumu (kovalama çapası) gönder. Oyuncu
+    // rakibin üstünde DURURKEN yaklaşma hızı ~0'dır; sunucu bu çapayı kullanarak
+    // "gerçekten yaklaştı" diyebilir ve temas varsa çalmayı kabul eder.
+    //
+    // KÖK SORUN ("temas var ama çalma olmuyor — rakibin üstünde DURURKEN"):
+    // Önceki sürümler (a) "en az 350 ms önceki en YAKIN örneği" ya da (b) "son
+    // HAREKETLİ örneği" seçiyordu. Her ikisi de başarısız oldu:
+    //   (a) `posHistory` HER karede (dururken de) doldurulduğu için, oyuncu
+    //       350 ms'den uzun süre durduğunda o örnek de HAREKETSİZ oluyordu →
+    //       sıfır uzunluk → `v_has_lookback = false` → `not_chasing`.
+    //   (b) Oyuncu rakibi kovalayıp TAM TEMAS NOKTASINDA durduğunda "son
+    //       hareketli konum" güncel konumla AYNI oluyordu → yine sıfır uzunluk.
+    //   Ayrıca 2000 ms'lik tampon bile uzun kovalamalarda kovalamanın BAŞINI
+    //   kaybediyordu (özellikle ağ gecikmesiyle kare aralığı büyüyünce).
+    //
+    // ÇÖZÜM (0057): KOVALAMA ÇAPASI. Kovalama boyunca rakibe olan mesafenin
+    // MAKSİMUM olduğu konumu kalıcı olarak sakla. Sunucu (0057) geri-bakışı bir
+    // HIZ değil, YER DEĞİŞTİRME olarak yorumlar:
+    //     kazanç = dist(rakip, çapa) - dist(rakip, şimdi)
+    // Çapa kovalamanın başında olduğu için bu fark büyüktür (ör. 10 birim) ve
+    // temas varsa çalma kabul edilir. Tampon taşmasından ETKİLENMEZ. Rakip
+    // uzaklaşınca (temas kaybolunca) çapa sıfırlanır; böylece eski bir kovalama
+    // yeni bir temasa taşınmaz.
+    const STEAL_CONTACT_DIST = STEAL_RADIUS + STEAL_CONTACT_SLACK
+    if (rivalPos) {
+      const rivalDist = Math.hypot(rivalPos.x - nextX, rivalPos.y - nextY)
+      if (rivalDist <= STEAL_CONTACT_DIST) {
+        // Temas var: çapa yoksa (yeni temas) ya da oyuncu şu an rakibe daha
+        // uzaksa (yani kovalama başlangıcı) çapayı güncelle. Böylece çapa
+        // kovalama boyunca rakibe EN UZAK noktada kalır.
+        const anchor = chaseAnchor.current
+        if (!anchor || rivalDist > anchor.dist) {
+          chaseAnchor.current = { x: nextX, y: nextY, at: now, dist: rivalDist }
+        }
+      } else if (rivalDist > STEAL_CONTACT_DIST * 2) {
+        // Temas tamamen kayboldu (rakibin epey uzağındayız): çapayı sıfırla ki
+        // eski bir kovalama yeni bir temasa taşınmasın.
+        chaseAnchor.current = null
+      }
+    }
     let lookbackX: number | null = null
     let lookbackY: number | null = null
+    // Geri-bakış örneğinin ZAMANI (epoch ms). Sunucu bunu yalnızca teşhis için
+    // kullanır (0057'de yaklaşma artık yer değiştirme olduğu için pencere
+    // önemsizdir). Örnek yoksa null.
+    let lookbackAt: number | null = null
     if (stealing) {
-      const history = posHistory.current
-      const targetAt = now - 350
-      // En az 350 ms önceki en YAKIN örneği seç (geçmiş eskiden yeniye sıralı).
-      for (let i = history.length - 1; i >= 0; i -= 1) {
-        if (history[i].at <= targetAt) {
-          lookbackX = history[i].x
-          lookbackY = history[i].y
-          break
-        }
+      const anchor = chaseAnchor.current
+      if (anchor) {
+        lookbackX = anchor.x
+        lookbackY = anchor.y
+        lookbackAt = anchor.at
       }
     }
 
@@ -1032,13 +1086,16 @@ export const useGameLoop = (deps: LoopDeps) => {
             // `not_chasing` ile reddediyordu ("temas var ama çalma olmuyor").
             p_from_x: fromX,
             p_from_y: fromY,
-            // YAKLAŞMA GERİ-BAKIŞI (0055): ~350 ms önceki konumumuzu da
-            // göndeririz. Oyuncu rakibin üstünde DURURKEN (yaklaşma hızı ~0)
-            // sunucu bu pencereye bakarak "az önce yaklaşıyordu" diyebilir ve
-            // temas varsa çalmayı kabul eder. Pencere yoksa (ilk kare) null
-            // göndeririz; sunucu eski davranışa düşer.
+            // YAKLAŞMA GERİ-BAKIŞI (0055/0056): oyuncunun GERÇEKTEN HAREKET
+            // ETTİĞİ en son konumu da göndeririz. Oyuncu rakibin üstünde
+            // DURURKEN (yaklaşma hızı ~0) sunucu bu pencereye bakarak "az önce
+            // yaklaşıyordu" diyebilir ve temas varsa çalmayı kabul eder. Örnek
+            // yoksa (ilk kare / hiç hareket etmedi) null göndeririz; sunucu eski
+            // davranışa düşer. `p_lookback_at`, sunucunun yaklaşma hızını GERÇEK
+            // zaman penceresiyle hesaplamasını sağlar (0056).
             p_lookback_x: lookbackX,
             p_lookback_y: lookbackY,
+            p_lookback_at: lookbackAt,
           })
           if (!isRpcSuccess(result) && isTransientRpcFailure(result)) {
             throw new Error(`duo_steal_versioned transient rejection: ${JSON.stringify(result)}`)
