@@ -256,6 +256,56 @@ export const applyAuthoritativeActionState = (
   return { ...previous, players }
 }
 
+/**
+ * Apply the authoritative VICTIM delta returned by `duo_steal_versioned`.
+ *
+ * KÖK SORUN ("çalan bendim ama puan benden gitti"): Çalınan oyuncunun skoru
+ * yalnızca ~1 sn'lik `duo_public_state` yoklamasıyla düşürülüyordu. Yoklama
+ * GECİKMELİ olduğundan, çalma anında istemci hâlâ ESKİ (yüksek) skoru
+ * gösteriyor; ardından yoklama gelince skor düşüyordu → "puan önce bende
+ * göründü sonra gitti" / "çalan bendim ama puan benden gitti" algısı.
+ *
+ * ÇÖZÜM: Sunucu çalma yanıtında `victimState` (çalınanın GÜNCEL skoru/coin'i)
+ * döndürür. Bu fonksiyon onu rakibe (index 1) ANINDA uygular. Skor ve tur
+ * skoru için `Math.min` kullanırız: bu bir DÜŞÜŞ delta'sıdır, artış değil.
+ * Ancak `Math.min` KALICI bir tavan oluşturmaz — sonraki yoklamalar daha
+ * yüksek (meşru) bir değer getirirse normal birleştirme onu uygular.
+ */
+export const applyAuthoritativeVictimState = (
+  previous: State,
+  server: AuthoritativeActionState,
+  actionRound: number,
+): State => {
+  if (previous.round !== actionRound) return previous
+
+  const victim = previous.players[1]
+  if (!victim) return previous
+
+  const serverScore =
+    typeof server.score === 'number' && Number.isFinite(server.score) ? server.score : undefined
+  const serverRoundScore =
+    typeof server.roundScore === 'number' && Number.isFinite(server.roundScore)
+      ? server.roundScore
+      : undefined
+
+  const players = previous.players.map((player, index) => {
+    if (index !== 1) return player
+    return {
+      ...player,
+      coins: server.coins ?? player.coins,
+      roundCoins: server.roundCoins ?? player.roundCoins,
+      // Çalınanın skoru DÜŞER: otoriter değeri doğrudan uygularız (min).
+      score: serverScore === undefined ? player.score : Math.min(player.score ?? 0, serverScore),
+      roundScore:
+        serverRoundScore === undefined
+          ? player.roundScore
+          : Math.min(player.roundScore ?? 0, serverRoundScore),
+    }
+  })
+
+  return { ...previous, players }
+}
+
 export const applyAuthoritativeRivalState = (
   previous: State,
   server: AuthoritativeActionState,
