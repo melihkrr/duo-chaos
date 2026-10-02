@@ -118,12 +118,20 @@ const rpc = async (client, fn, args) => {
   return rows[0].result
 }
 
+// Room codes are 6 chars. Use a 5-char random suffix (100k space) to make
+// collisions with leftover rooms from previous runs vanishingly unlikely.
 const makeCode = (prefix) =>
-  `${prefix}${Math.floor(Math.random() * 10000)
+  `${prefix}${Math.floor(Math.random() * 100000)
     .toString()
-    .padStart(4, '0')}`.slice(0, 6)
+    .padStart(5, '0')}`.slice(0, 6)
 
 const bootstrapRoom = async (client, code, hostToken, guestToken) => {
+  // A leftover room with the same code would make duo_create_room fail and
+  // leave no player row (→ not_a_player). Clear any stale room first so the
+  // harness is deterministic across repeated runs.
+  await client.query(`delete from duo_coins where room_code = $1`, [code])
+  await client.query(`delete from duo_players where room_code = $1`, [code])
+  await client.query(`delete from duo_rooms where code = $1`, [code])
   await rpc(client, 'duo_create_room', { p_code: code, p_token: hostToken, p_name: 'Host' })
   await rpc(client, 'duo_join_room', { p_code: code, p_token: guestToken, p_name: 'Guest' })
   await rpc(client, 'duo_start_round', { p_code: code, p_token: hostToken })

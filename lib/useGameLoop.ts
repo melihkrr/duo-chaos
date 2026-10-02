@@ -905,6 +905,8 @@ export const useGameLoop = (deps: LoopDeps) => {
             p_token: token,
             p_expected_objectives_done: me.objectivesDone ?? 0,
             p_expected_round: state.round,
+            p_x: nextX,
+            p_y: nextY,
           })
           if (!isRpcSuccess(result) && isTransientRpcFailure(result)) {
             throw new Error(`duo_steal_versioned transient rejection: ${JSON.stringify(result)}`)
@@ -927,7 +929,7 @@ export const useGameLoop = (deps: LoopDeps) => {
       })
     }
     if (actions.length > 0) {
-      const positionIncludedInCollection = collectedIds.length > 0 && !stealing
+      const positionIncludedInCollection = collectedIds.length > 0 || stealing
       void runPositionedActions(
         nextX,
         nextY,

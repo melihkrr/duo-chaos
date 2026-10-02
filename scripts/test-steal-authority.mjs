@@ -53,6 +53,10 @@ const staleDirectionMigration = await readFile(
   new URL('../supabase/migrations/0050_expire_stale_steal_direction.sql', import.meta.url),
   'utf8',
 )
+const positionedStealMigration = await readFile(
+  new URL('../supabase/migrations/0051_positioned_steal.sql', import.meta.url),
+  'utf8',
+)
 
 // --- Mirror of duo_steal_versioned (0042) -----------------------------------
 // Returns { ok, reason?, stealer, victim } where stealer/victim are the
@@ -352,13 +356,20 @@ console.log('SCENARIO 8 — Being nearby is not enough: steal requires avatar co
 console.log('SCENARIO 9 — SQL migrations enforce server-recorded directional contact')
 {
   const config = await readFile(new URL('../lib/config.ts', import.meta.url), 'utf8')
+  const gameLoop = await readFile(new URL('../lib/useGameLoop.ts', import.meta.url), 'utf8')
   check('client radius tracks both avatar collision radii', config.includes('STEAL_RADIUS = PLAYER_HIT_R * 2'))
   check('server radius matches the avatar contact boundary', directionMigration.includes('if v_dist > 5.2 then'))
   check('previous positions are captured by a database trigger', directionMigration.includes('duo_players_track_previous_position'))
   check('both players are locked before contact validation', /order by slot\s+for update/.test(staleDirectionMigration))
   check('stale approach snapshots expire after 300ms', staleDirectionMigration.includes("v_direction_fresh interval := interval '300 milliseconds'"))
   check('head-on contact cannot be awarded by RPC arrival order', staleDirectionMigration.includes('v_player_approach <= v_opponent_approach + 0.5'))
-  check('only public steal RPC remains executable', staleDirectionMigration.includes('grant execute on function public.duo_steal_versioned'))
+  check('positioned steal validates movement in the same transaction', positionedStealMigration.includes('duo_step_ok(') && positionedStealMigration.includes('p_x numeric default null'))
+  check('same-RPC movement bypasses only the stale prior-sample age check', positionedStealMigration.includes('not v_positioned_moved') && positionedStealMigration.includes('v_pl.previous_position_at < v_now - (case'))
+  check('opponent samples are considered only while their latest movement is fresh', positionedStealMigration.includes('v_opp.position_updated_at >= v_now - v_legacy_direction_fresh'))
+  check('older deployed clients retain the one-second movement-sample window', positionedStealMigration.includes("v_legacy_direction_fresh interval := interval '1 second'"))
+  check('steal client sends its position with the action', /p_x:\s*nextX,\s*p_y:\s*nextY/.test(gameLoop))
+  check('steal action skips the separate position RPC', /collectedIds\.length > 0 \|\| stealing/.test(gameLoop))
+  check('only public steal RPC remains executable', positionedStealMigration.includes('grant execute on function public.duo_steal_versioned'))
 }
 
 console.log('SCENARIO 10 — A stopped player cannot steal using their stale approach')
