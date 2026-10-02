@@ -151,6 +151,23 @@ export const useGameLoop = (deps: LoopDeps) => {
   // ("donma + birden ilerleme" sorununun kökü buydu: döngü, commit edilmemiş
   // eski `state.players[0]`'dan hesapladığı için ilerleme kaybediyordu).
   const localPos = useRef<{ x: number; y: number } | null>(null)
+  // YEREL KONUM GEÇMİŞİ (yaklaşma geri-bakışı).
+  //
+  // KÖK SORUN ("temas var ama çalma olmuyor — özellikle rakibin üstünde
+  // DURURKEN"): Sunucunun yönlü anti-cheat'i, çalma ANINDA oyuncunun rakibe
+  // YAKLAŞIYOR olmasını şart koşar (`v_player_approach > 0.5`). Gerçek oyunda
+  // doğal akış şudur: oyuncu rakibi kovalar → yetişir → temas eder → DURUR.
+  // Durduğu anda yaklaşma hızı ~0 olur ve sunucu HER denemeyi `not_chasing` ile
+  // reddeder; oyuncu "üstüne geldim ama hiçbir şey olmuyor" der.
+  //
+  // ÇÖZÜM: İstemci, çalma isteğiyle birlikte ~350 ms ÖNCEKİ konumunu da
+  // gönderir (`p_lookback_x/y`). Sunucu, oyuncu ŞU AN yaklaşmıyorsa bile kısa
+  // bir geri-bakış penceresinde yaklaşmışsa ve şu an TEMAS varsa çalmayı kabul
+  // eder. Anti-cheat korunur: hareketsiz bir kurban, üstüne gelen kovalayandan
+  // çalamaz (rakip yaklaşma hızı daha yüksek olduğu için reddedilir).
+  //
+  // Halka tampon (ring buffer) küçüktür ve yalnızca son ~500 ms'i tutar.
+  const posHistory = useRef<Array<{ x: number; y: number; at: number }>>([])
   // Yerel oyuncunun EKRANA basılan konumu. `Battle` bu ref'i doğrudan DOM
   // transform'una yazar; böylece 60Hz hareket React render'ı TETİKLEMEZ.
   // Bu, "hareket donuyor / birden ilerliyor" sorununun asıl çözümüdür:
@@ -410,6 +427,9 @@ export const useGameLoop = (deps: LoopDeps) => {
         // ilk karelerinde (taze broadcast gelmeden) eski turun son konumu
         // kullanılır ve çalma menzili yanlış hesaplanabilir.
         liveRivalPos.current = null
+        // Konum geçmişini de sıfırla: yeni turda eski turun konumlarından
+        // türetilen bir "yaklaşma" örneklemesi kullanılmasın.
+        posHistory.current = []
         // Yeni turda combo serisini ve uçan puan rozetlerini sıfırla.
         comboRef.current = { count: 0, at: 0 }
         scorePopRef.current = []
@@ -455,6 +475,13 @@ export const useGameLoop = (deps: LoopDeps) => {
     }
     // Ref'i hemen güncelle — bir sonraki kare bu değerden devam eder.
     localPos.current = { x: nextX, y: nextY }
+    // Konum geçmişine bu kareyi ekle (yaklaşma geri-bakışı için). Yalnızca son
+    // ~500 ms tutulur; dizi küçük kalır ve her karede O(1) ekleme yapılır.
+    {
+      const history = posHistory.current
+      history.push({ x: nextX, y: nextY, at: now })
+      while (history.length > 0 && now - history[0].at > 500) history.shift()
+    }
     // Ekrana basılacak konumu da her karede güncelle. `Battle` bunu doğrudan
     // DOM'a yazar; React render'ı beklemez → akıcı hareket.
     livePos.current = { x: nextX, y: nextY }
@@ -675,6 +702,26 @@ export const useGameLoop = (deps: LoopDeps) => {
       Math.hypot(rivalPos.x - nextX, rivalPos.y - nextY) <= STEAL_RADIUS + STEAL_CONTACT_SLACK
     ) {
       stealing = true
+    }
+
+    // YAKLAŞMA GERİ-BAKIŞI (0055): ~350 ms önceki konumumuzu bul. Oyuncu
+    // rakibin üstünde DURURKEN yaklaşma hızı ~0'dır; sunucu bu konumu
+    // kullanarak "az önce yaklaşıyordu" diyebilir ve temas varsa çalmayı kabul
+    // eder. Geçmiş yeterince eski değilse (yeni tur / ilk kare) null göndeririz
+    // ve sunucu eski (yalnızca anlık yaklaşma) davranışına düşer.
+    let lookbackX: number | null = null
+    let lookbackY: number | null = null
+    if (stealing) {
+      const history = posHistory.current
+      const targetAt = now - 350
+      // En az 350 ms önceki en YAKIN örneği seç (geçmiş eskiden yeniye sıralı).
+      for (let i = history.length - 1; i >= 0; i -= 1) {
+        if (history[i].at <= targetAt) {
+          lookbackX = history[i].x
+          lookbackY = history[i].y
+          break
+        }
+      }
     }
 
     // --- Tek `setState`: hareket + rakip + toplama + çalma + yeniden doğma. ---
@@ -985,6 +1032,13 @@ export const useGameLoop = (deps: LoopDeps) => {
             // `not_chasing` ile reddediyordu ("temas var ama çalma olmuyor").
             p_from_x: fromX,
             p_from_y: fromY,
+            // YAKLAŞMA GERİ-BAKIŞI (0055): ~350 ms önceki konumumuzu da
+            // göndeririz. Oyuncu rakibin üstünde DURURKEN (yaklaşma hızı ~0)
+            // sunucu bu pencereye bakarak "az önce yaklaşıyordu" diyebilir ve
+            // temas varsa çalmayı kabul eder. Pencere yoksa (ilk kare) null
+            // göndeririz; sunucu eski davranışa düşer.
+            p_lookback_x: lookbackX,
+            p_lookback_y: lookbackY,
           })
           if (!isRpcSuccess(result) && isTransientRpcFailure(result)) {
             throw new Error(`duo_steal_versioned transient rejection: ${JSON.stringify(result)}`)
