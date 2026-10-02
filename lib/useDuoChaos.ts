@@ -816,6 +816,37 @@ export const useDuoChaos = () => {
     [room, moveLocal],
   )
 
+  /**
+   * PLAYER BUMP — konum kuyruğuna SIRALI bir `duo_bump` yazar.
+   *
+   * NEDEN AYRI BİR YOL: `duo_bump` çağrısından ÖNCE `duo_move` çalıştırmak
+   * YANLIŞTI. `duo_move` temas anındaki (knockback ÖNCESİ) konumu sunucuya
+   * yazıyordu; oyuncu ilerlemeye devam edince bir sonraki `duo_move` sunucunun
+   * depoladığı eski konuma göre "erişilemez" (`too_fast`) bulunup reddediliyor
+   * ve istemci `moveLocal` ile İLK ÇARPIŞMA konumuna geri ışınlanıyordu.
+   *
+   * `duo_bump` zaten çağıranın konumunu `duo_step_ok` ile doğrulayıp kendisi
+   * yazar; bu yüzden öncesinde ayrı bir `duo_move` GEREKSİZDİR. Bu yol yalnızca
+   * `duo_bump`'ı konum kuyruğuna ekler (böylece diğer konum yazımlarıyla
+   * sıralı kalır) ve sunucunun döndürdüğü yetkili konumlara uzlaşır.
+   */
+  const runBump = useCallback(
+    (x: number, y: number, onResolved: (result: unknown) => void) => {
+      positionActionQueue.current.enqueueMove(
+        async () => {
+          const response = await room.call('duo_bump', {
+            p_token: room.token ?? room.playerId,
+            p_x: x,
+            p_y: y,
+          })
+          onResolved(response)
+        },
+        (error) => console.warn('Failed to resolve player bump', error),
+      )
+    },
+    [room],
+  )
+
   const advancePhase = useCallback(
     async (from: Phase) => {
       let data: {
@@ -949,6 +980,7 @@ export const useDuoChaos = () => {
     playerId: room.playerId,
     publishMove,
     runPositionedActions,
+    runBump,
     broadcast: room.broadcast,
     call: room.call,
     syncChaos: chaos.sync,

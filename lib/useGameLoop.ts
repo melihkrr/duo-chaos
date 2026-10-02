@@ -83,6 +83,13 @@ type LoopDeps = {
     actions: Array<() => Promise<void>>,
     positionIncludedInAction?: boolean,
   ) => Promise<void>
+  /**
+   * PLAYER BUMP — `duo_bump`'ı konum kuyruğuna SIRALI yazar (öncesinde ayrı
+   * bir `duo_move` ÇALIŞTIRMAZ). `duo_bump` çağıranın konumunu sunucuda
+   * doğrulayıp kendisi yazdığı için bu güvenlidir ve "ilk çarpışma konumuna
+   * geri ışınlanma" hatasını önler. `onResolved` sunucu yanıtıyla çağrılır.
+   */
+  runBump: (x: number, y: number, onResolved: (result: unknown) => void) => void
   /** Toplama/çalma olayını yayınlar. */
   broadcast: (event: string, payload: unknown) => void
   /** Sunucu RPC'si. */
@@ -322,6 +329,7 @@ export const useGameLoop = (deps: LoopDeps) => {
       playerId,
       publishMove,
       runPositionedActions,
+      runBump,
       broadcast,
       call,
       syncChaos,
@@ -615,47 +623,44 @@ export const useGameLoop = (deps: LoopDeps) => {
           playSound('bump')
           const bumpX = nextX
           const bumpY = nextY
-          void runPositionedActions(bumpX, bumpY, [
-            async () => {
-              try {
-                const response = await call('duo_bump', {
-                  p_token: token,
-                  p_x: bumpX,
-                  p_y: bumpY,
-                })
-                const res = response as
-                  | {
-                      ok?: boolean
-                      bumped?: boolean
-                      x?: number
-                      y?: number
-                      rivalX?: number
-                      rivalY?: number
-                    }
-                  | null
-                if (!res || res.ok !== true) return
-                // Yerel oyuncuyu sunucunun yetkili konumuna oturt (kalıcı
-                // desenkron oluşmasın). `localPos`/`livePos` birlikte güncellenir.
-                if (typeof res.x === 'number' && typeof res.y === 'number') {
-                  localPos.current = { x: res.x, y: res.y }
-                  livePos.current = { x: res.x, y: res.y }
-                }
-                // Rakibi de yetkili konumuna oturt: interpolasyon hedefini ve
-                // ekrana basılan konumu güncelle. Böylece iki istemci bump
-                // sonrası AYNI konumlarda kalır.
-                if (typeof res.rivalX === 'number' && typeof res.rivalY === 'number') {
-                  remoteTarget.current = { x: res.rivalX, y: res.rivalY }
-                  remoteSample.current = null
-                  remoteVel.current = { x: 0, y: 0 }
-                  liveRivalPos.current = { x: res.rivalX, y: res.rivalY }
-                }
-              } finally {
-                bumpPendingRef.current = false
+          // ÖNEMLİ: Burada `runPositionedActions` KULLANILMAZ. O yol önce
+          // `duo_move(bumpX, bumpY)` (knockback ÖNCESİ konum) çalıştırırdı;
+          // sunucu bu eski konumu depolardı ve oyuncu ilerlemeye devam edince
+          // bir sonraki `duo_move` "too_fast" ile reddedilip istemci İLK
+          // ÇARPIŞMA konumuna geri ışınlanırdı. `duo_bump` çağıranın konumunu
+          // zaten `duo_step_ok` ile doğrulayıp kendisi yazdığı için öncesinde
+          // ayrı bir `duo_move` GEREKSİZDİR.
+          runBump(bumpX, bumpY, (response) => {
+            try {
+              const res = response as
+                | {
+                    ok?: boolean
+                    bumped?: boolean
+                    x?: number
+                    y?: number
+                    rivalX?: number
+                    rivalY?: number
+                  }
+                | null
+              if (!res || res.ok !== true) return
+              // Yerel oyuncuyu sunucunun yetkili konumuna oturt (kalıcı
+              // desenkron oluşmasın). `localPos`/`livePos` birlikte güncellenir.
+              if (typeof res.x === 'number' && typeof res.y === 'number') {
+                localPos.current = { x: res.x, y: res.y }
+                livePos.current = { x: res.x, y: res.y }
               }
-            },
-          ]).catch((error: unknown) => {
-            bumpPendingRef.current = false
-            console.warn('Failed to resolve player bump', error)
+              // Rakibi de yetkili konumuna oturt: interpolasyon hedefini ve
+              // ekrana basılan konumu güncelle. Böylece iki istemci bump
+              // sonrası AYNI konumlarda kalır.
+              if (typeof res.rivalX === 'number' && typeof res.rivalY === 'number') {
+                remoteTarget.current = { x: res.rivalX, y: res.rivalY }
+                remoteSample.current = null
+                remoteVel.current = { x: 0, y: 0 }
+                liveRivalPos.current = { x: res.rivalX, y: res.rivalY }
+              }
+            } finally {
+              bumpPendingRef.current = false
+            }
           })
         }
       }

@@ -292,9 +292,37 @@ console.log('\n11. Joystick movement unchanged')
 {
   const loopSource = await readFile(new URL('../lib/useGameLoop.ts', import.meta.url), 'utf8')
   check('joystick still feeds the same dx/dy input', /dx \+= joystick\.current\.x/.test(loopSource))
-  check('bump uses the existing position queue (no new movement system)', /runPositionedActions\(bumpX, bumpY/.test(loopSource))
+  check('bump uses the existing position queue (no new movement system)', /runBump\(bumpX, bumpY/.test(loopSource))
   check('bump does not use setTimeout', !/setTimeout[\s\S]{0,120}duo_bump/.test(loopSource))
   check('bump does not poll', !/setInterval[\s\S]{0,120}duo_bump/.test(loopSource))
+}
+
+// ---------------------------------------------------------------------------
+// 11b. REGRESSION: no stale `duo_move` before `duo_bump` (teleport-back fix)
+// ---------------------------------------------------------------------------
+// The original bug: the bump path ran `runPositionedActions(bumpX, bumpY, ...)`
+// which first wrote the PRE-knockback contact position via `duo_move`. The
+// server stored that stale position; the player kept moving; the next
+// `duo_move` was rejected `too_fast` and the client snapped back to the first
+// contact point ("ışınlanma"). The fix routes the bump through a dedicated
+// `runBump` that enqueues ONLY `duo_bump` (which validates + writes the caller
+// position itself).
+console.log('\n11b. No stale duo_move before duo_bump (teleport-back fix)')
+{
+  const loopSource = await readFile(new URL('../lib/useGameLoop.ts', import.meta.url), 'utf8')
+  const duoSource = await readFile(new URL('../lib/useDuoChaos.ts', import.meta.url), 'utf8')
+  check('bump no longer calls runPositionedActions with the contact position', !/runPositionedActions\(bumpX, bumpY/.test(loopSource))
+  check('bump calls the dedicated runBump path', /runBump\(bumpX, bumpY/.test(loopSource))
+  check('runBump is declared in LoopDeps', /runBump: \(x: number, y: number, onResolved/.test(loopSource))
+  check('runBump is destructured from deps', /^\s*runBump,$/m.test(loopSource))
+  check('runBump enqueues duo_bump via the position queue', /enqueueMove\([\s\S]{0,400}duo_bump/.test(duoSource))
+  // The bump path must NOT run a `duo_move` before `duo_bump`.
+  const bumpStart = duoSource.indexOf('const runBump = useCallback')
+  const bumpEnd = duoSource.indexOf('const advancePhase = useCallback')
+  const bumpBlock = duoSource.slice(bumpStart, bumpEnd)
+  check('runBump block located', bumpStart !== -1 && bumpEnd > bumpStart)
+  check('runBump does not call duo_move', !/duo_move/.test(bumpBlock))
+  check('runBump reconciles to the authoritative server position', /onResolved\(response\)/.test(bumpBlock))
 }
 
 // ---------------------------------------------------------------------------
