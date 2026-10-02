@@ -29,11 +29,7 @@ import {
 } from './inputReset'
 import { resolveMove } from './movement'
 import { markPendingCollect, settlePendingCollect } from './coinCollectionState'
-import {
-  applyAuthoritativeActionState,
-  applyAuthoritativeVictimState,
-  isRpcSuccess,
-} from './objectiveSync'
+import { applyAuthoritativeActionState, isRpcSuccess } from './objectiveSync'
 import { isTransientRpcFailure, withVersionGuardedRetry } from './retry'
 import { playSound } from './sound'
 import type { Coin, Player, State } from './types'
@@ -922,20 +918,11 @@ export const useGameLoop = (deps: LoopDeps) => {
         // taşır: sunucu çalmayı zaten uyguladıysa AYNI sürümle gelen tekrar
         // isteği REDDEDER (bayat). Bu yüzden yalnızca GEÇİCİ hatalarda, AYNI
         // sürümle yeniden deneriz; mantıksal redler denenmez.
-        //
-        // KÖK SORUN DÜZELTMESİ ("bazen çalıyor bazen çalmıyor"): Sunucu artık
-        // "kovalayan"ı hareket geçmişinden TAHMİN ETMEZ; BAŞLATAN çalandır.
-        // Bu yüzden istemci KENDİ konumunu (`nextX/nextY`) gönderir. Sunucu bu
-        // konumu `duo_step_ok` ile doğrular (anti-teleport) ve rakibin depolu
-        // konumuna göre GERÇEK teması ölçer. Konum gönderilmezse sunucu bayat
-        // depolu konuma düşer ve temas yanlışlıkla `too_far` olabilirdi.
         const response = await withVersionGuardedRetry(async () => {
           const result = await call('duo_steal_versioned', {
             p_token: token,
             p_expected_objectives_done: me.objectivesDone ?? 0,
             p_expected_round: state.round,
-            p_x: nextX,
-            p_y: nextY,
           })
           if (!isRpcSuccess(result) && isTransientRpcFailure(result)) {
             throw new Error(`duo_steal_versioned transient rejection: ${JSON.stringify(result)}`)
@@ -947,20 +934,6 @@ export const useGameLoop = (deps: LoopDeps) => {
           return
         }
         applyServerState(response, state.round)
-        // ÇALINANIN ANLIK DELTASI: Sunucu `victimState` döndürür. Rakibin
-        // skoru/coin'i BAYAT bir `duo_public_state` yoklamasıyla değil, bu
-        // otoriter deltayla ANINDA düşürülür. Böylece "çalan bendim ama puan
-        // benden gitti" görüntüsü (gecikmeli yoklama) ortadan kalkar.
-        const victimState = (response as { victimState?: unknown }).victimState
-        if (victimState && typeof victimState === 'object') {
-          depsRef.current.setState((prev) =>
-            applyAuthoritativeVictimState(
-              prev,
-              victimState as import('./objectiveSync').AuthoritativeActionState,
-              state.round,
-            ),
-          )
-        }
         playSound('steal')
         shakeRef.current = { at: performance.now(), kind: 'steal' }
         const result = response as { state?: unknown }
