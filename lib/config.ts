@@ -94,6 +94,20 @@ export const PLAYER_HIT_R = 2.6
  * Zaman sabiti ≈ 1/k saniye. k=12 → ~83ms; akıcı ama tepkisel.
  */
 export const REMOTE_SMOOTHING_K = 12
+/**
+ * Yumuşak-bayat pencerede (REMOTE_POS_TTL < yaş ≤ REMOTE_HARD_TTL_MS) son
+ * bilinen rakip hızının sönümleme oranı (1/saniye).
+ *
+ * KÖK SORUN ("rakip sık sık donuyor"): Bayat bir pakette hız ANINDA sıfırlanıp
+ * rakip son konumda donduruluyordu. Supabase Realtime "best-effort" olduğundan
+ * mobilde paketler sık sık 1.5 sn'yi aşar; rakip gerçekte hareket ederken
+ * ekranda donuyordu. Bu katsayı, kısa kayıplarda hızı yumuşakça söndürerek
+ * rakipin akıcı ilerlemesini sürdürür (ek ağ trafiği YOK).
+ *
+ * k=3 → zaman sabiti ≈ 333 ms; 1.5 sn'lik kayıpta hız ~%1'e iner, yani
+ * gerçek kopmada rakip doğal biçimde durur, kısa kayıpta ise akıcı kalır.
+ */
+export const REMOTE_VEL_DECAY_K = 3
 // NOT: Eskiden `REMOTE_SNAP_DISTANCE` vardı; büyük farklarda rakibi ANINDA
 // hedefe zıplatıyordu. Bu, sunucu snapshot'ına düşülen durumlarda NORMAL
 // hareket sırasında tetiklenip rakibi ileri-geri ışınlıyordu ("bazen rakip bir

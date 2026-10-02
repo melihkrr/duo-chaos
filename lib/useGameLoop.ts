@@ -15,6 +15,7 @@ import {
   REMOTE_HARD_TTL_MS,
   REMOTE_POS_TTL,
   REMOTE_SMOOTHING_K,
+  REMOTE_VEL_DECAY_K,
   STEAL_COOLDOWN_MS,
   STEAL_RADIUS,
   getCoinValue,
@@ -494,8 +495,28 @@ export const useGameLoop = (deps: LoopDeps) => {
           }
           remoteSample.current = { x: rivalBroadcast.x, y: rivalBroadcast.y, at: rivalBroadcast.at }
         }
-        // Hedefi hız ile ileri taşı (yalnızca taze veri varken).
-        const vel = fresh ? remoteVel.current : { x: 0, y: 0 }
+        // Hedefi hız ile ileri taşı (dead-reckoning).
+        //
+        // KÖK SORUN ("rakip sık sık donuyor"): Önceden hız YALNIZCA `fresh`
+        // (yaş < REMOTE_POS_TTL = 1.5 sn) iken uygulanıyordu; bayat bir pakette
+        // `vel = 0` yapılıp rakip SON BİLİNEN konumda DONDURULUYORDU. Supabase
+        // Realtime "best-effort" olduğundan mobilde paketler sık sık 1.5 sn'yi
+        // aşar; rakip gerçekte hareket ederken ekranda donuyordu.
+        //
+        // ÇÖZÜM: Yumuşak-bayat pencerede (yaş ≤ REMOTE_HARD_TTL_MS) son bilinen
+        // hızı KORU ve zamanla ÜSTEL olarak söndür. Böylece kısa paket
+        // kayıplarında rakip akıcı ilerlemeye devam eder; gerçek kopmada
+        // (hard-stale) hız sıfırlanır ve sunucu snapshot'ına yumuşakça oturur.
+        // Ek ağ trafiği YOKTUR — yalnızca mevcut verinin daha iyi kullanımı.
+        const vel = hardStale
+          ? { x: 0, y: 0 }
+          : fresh
+            ? remoteVel.current
+            : // Yumuşak-bayat: son hızı zamanla söndür (tahmin ufkunu sınırla).
+              (() => {
+                const decay = Math.exp(-REMOTE_VEL_DECAY_K * (broadcastAge - REMOTE_POS_TTL) / 1000)
+                return { x: remoteVel.current.x * decay, y: remoteVel.current.y * decay }
+              })()
         const leadX = goalX + vel.x * dt
         const leadY = goalY + vel.y * dt
         const dist = Math.hypot(remote.x - leadX, remote.y - leadY)

@@ -2017,15 +2017,31 @@ export const useDuoChaos = () => {
             }),
           }
         }
+        // SKOR OTORİTESİ (LOBİ): Sunucu `match_scores`/`round_scores` alanlarını
+        // GERÇEKTEN hesaplar. Yeniden bağlanma sonrası lobide beklerken bu
+        // değerleri uygulamazsak kümülatif maç skoru kaybolur ("yeniden
+        // bağlanınca skor 0"). Sunucu anlamlı bir değer döndürdüğünde uygularız;
+        // boş/0 ise yerel değeri koruruz (yeni maç başlangıcı).
+        const lobbyServerMatchScores =
+          data.matchScores && Object.keys(data.matchScores).length > 0
+            ? mapScores(data.matchScores, myId)
+            : null
+        const lobbyServerRoundScores =
+          data.roundScores && Object.keys(data.roundScores).length > 0
+            ? mapScores(data.roundScores, myId)
+            : null
+        const nextMatchScores = lobbyServerMatchScores ?? prev.matchScores
         return {
           ...prev,
           phase: nextPhase,
           round: data.round ?? prev.round,
           endsAt: localEndsAt > 0 ? localEndsAt : prev.endsAt,
           countdownEndsAt: localCountdownEndsAt > 0 ? localCountdownEndsAt : prev.countdownEndsAt,
+          matchScores: nextMatchScores,
+          roundScores: lobbyServerRoundScores ?? prev.roundScores,
           // Lobi/geri sayım fazında kazanan YOKTUR; sunucunun (skoru hep 0
           // olduğu için daima 'p1' dönen) `winner` alanını UYGULAMAYIZ.
-          winner: nextPhase === 'matchover' ? winnerFromScores(prev.matchScores) : undefined,
+          winner: nextPhase === 'matchover' ? winnerFromScores(nextMatchScores) : undefined,
           players,
         }
       })
@@ -2152,21 +2168,88 @@ export const useDuoChaos = () => {
       const normalized = code.trim().toUpperCase()
       const token = readToken(normalized)
       if (!token) return false
+      // KÖK SORUN (kullanıcı raporu: "davet linkiyle katılınca eski ad
+      // kullanılıyor"): Burada sunucunun döndürdüğü `data.name` (önceki
+      // oturumdan kalan BAYAT ad) yerel adı EZİYORDU. Ayrıca sunucuya hiç
+      // `p_name` göndermediğimiz için satır da güncellenmiyordu.
+      //
+      // ÇÖZÜM: Kullanıcının AÇIKÇA girdiği güncel adı (`room.name`, Home
+      // input'u ile canlı senkron) sunucuya `p_name` olarak göndeririz ve
+      // bağlantıda da bu adı kullanırız. Yerel ad boşsa sunucu adına düşeriz.
+      const localName = (room.name ?? '').trim()
       try {
-        // Sunucudan hangi slotta olduğumuzu öğren (p1 mi p2 mi?).
+        // Sunucudan hangi slotta olduğumuzu öğren (p1 mi p2 mi?). Güncel adı
+        // da göndeririz; sunucu satırı tazeler ve yanıtta güncel adı döner.
         const data = await room.call<{ player_id?: string; name?: string }>('duo_join_room', {
           p_code: normalized,
           p_token: token,
+          p_name: localName || null,
         })
         const slot: 'p1' | 'p2' = data?.player_id === 'p1' ? 'p1' : 'p2'
-        await room.connect(normalized, slot, token, data?.name ?? room.name)
-        resetMatch()
-        if (data?.name) updatePlayer('p1', { name: data.name })
-        // Skor sunucudan gelir: `duo_public_state` yoklaması (lobi/battle)
-        // gerçek `score`/`roundScore` değerlerini uygular. Bu yüzden burada
-        // yerel skor geri yüklemesi YAPMAYIZ (istemci-taraflı workaround
-        // kaldırıldı).
-        setPhase('lobby')
+        // Yerel (açıkça girilen) ad ÖNCELİKLİDİR; yoksa sunucu adı kullanılır.
+        const resolvedName = localName || (data?.name ?? '').trim()
+        await room.connect(normalized, slot, token, resolvedName || undefined)
+        // KÖK SORUN (kullanıcı raporu: "yeniden bağlanınca skor 0 oluyor"):
+        // Eski kod burada KOŞULSUZ `resetMatch()` çağırıp fazı `lobby`'ye
+        // çekiyordu. Bu, sunucudaki GERÇEK skoru/turu/fazı SİLİYORDU. Lobi
+        // yoklaması da lobide skoru otoriter saymadığı (`scoresAreAuthoritative
+        // = nextPhase !== 'lobby'`) ve `matchScores`'u hiç geri yüklemediği
+        // için skor 0'da kalıyordu.
+        //
+        // ÇÖZÜM: Sunucu otoritesini KORU. `duo_public_state`'ten gerçek faz,
+        // tur, `matchScores`/`roundScores` ve oyuncu skorlarını çekip uygularız.
+        // Böylece yeniden bağlanan oyuncu kaldığı yerden devam eder; oyuncu
+        // satırı YENİDEN OLUŞTURULMAZ/SIFIRLANMAZ (sunucu satırı zaten var).
+        const snapshot = await room
+          .call<PublicSnapshot>('duo_public_state', { p_token: token })
+          .catch(() => null)
+        if (snapshot) {
+          noteServerNow(snapshot.serverNow)
+          const localEndsAt = toLocal(snapshot.endsAt)
+          const localCountdownEndsAt = toLocal(snapshot.countdownEndsAt)
+          if (localCountdownEndsAt > 0) serverDeadlineRef.current.countdownEndsAt = localCountdownEndsAt
+          if (localEndsAt > 0) serverDeadlineRef.current.endsAt = localEndsAt
+          const serverMatchScores = mapScores(snapshot.matchScores, slot)
+          const serverRoundScores = mapScores(snapshot.roundScores, slot)
+          const serverPhase = snapshot.phase ?? 'lobby'
+          const serverRound = typeof snapshot.round === 'number' ? snapshot.round : 1
+          setState((prev) => {
+            const players = prev.players.map((player) => {
+              const server = snapshot.players?.find(
+                (item) => mapPlayerId(String(item.id), slot) === player.id,
+              )
+              if (!server) return player
+              const serverName =
+                typeof server.name === 'string' && server.name.trim() ? server.name : player.name
+              return {
+                ...player,
+                name: serverName,
+                // SUNUCU OTORİTESİ: gerçek skorları geri yükle (sıfırlama YOK).
+                score: typeof server.score === 'number' ? server.score : player.score,
+                roundScore:
+                  typeof server.roundScore === 'number' ? server.roundScore : player.roundScore,
+                totalScore:
+                  typeof server.totalScore === 'number' ? server.totalScore : player.totalScore,
+              }
+            })
+            return {
+              ...prev,
+              phase: serverPhase,
+              round: serverRound,
+              matchScores: serverMatchScores ?? prev.matchScores,
+              roundScores: serverRoundScores ?? prev.roundScores,
+              endsAt: localEndsAt > 0 ? localEndsAt : prev.endsAt,
+              countdownEndsAt:
+                localCountdownEndsAt > 0 ? localCountdownEndsAt : prev.countdownEndsAt,
+              players,
+            }
+          })
+        } else {
+          // Snapshot alınamadı (geçici ağ hatası): yerel durumu SIFIRLAMAYIZ;
+          // yalnızca lobiye düşeriz. Yoklama gelince gerçek durum uygulanır.
+          setPhase('lobby')
+        }
+        if (resolvedName) updatePlayer('p1', { name: resolvedName })
         syncUrl(`/play/${normalized}`)
         return true
       } catch {
@@ -2174,7 +2257,7 @@ export const useDuoChaos = () => {
         return false
       }
     },
-    [resetMatch, room, setPhase, updatePlayer],
+    [noteServerNow, room, setPhase, setState, toLocal, updatePlayer],
   )
 
   const startGame = useCallback(async () => {

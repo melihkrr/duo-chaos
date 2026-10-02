@@ -19,6 +19,13 @@ type Props = {
   error?: string | null
   /** Kayıtlı görünen ad (localStorage'dan). */
   initialName?: string
+  /**
+   * Kullanıcı adı her değiştirdiğinde çağrılır. Oda durumundaki (`room.name`)
+   * adı CANLI tutar; böylece davet linkiyle otomatik katılma (`restore`) veya
+   * kod ile katılma (`joinRoom`) sırasında KULLANICININ AÇIKÇA GİRDİĞİ ad
+   * kullanılır — bayat önbellek/sunucu adı DEĞİL.
+   */
+  onNameChange?: (name: string) => void
 }
 
 const STEPS = [
@@ -29,7 +36,16 @@ const STEPS = [
 ]
 const NAME_MAX = 16
 
-export function Home({ progress, onCreate, onJoin, onPlayBot, busy, error, initialName = '' }: Props) {
+export function Home({
+  progress,
+  onCreate,
+  onJoin,
+  onPlayBot,
+  busy,
+  error,
+  initialName = '',
+  onNameChange,
+}: Props) {
   const { t } = useI18n()
   const { profile, progress: raw, online } = progress
   const [joinOpen, setJoinOpen] = useState(false)
@@ -94,7 +110,11 @@ export function Home({ progress, onCreate, onJoin, onPlayBot, busy, error, initi
                   nameDirtyRef.current = true
                   const nextName = event.target.value.slice(0, NAME_MAX)
                   setName(nextName)
-                  saveName(nextName)
+                  // Oda durumundaki adı CANLI güncelle (bayat adı önler) ve
+                  // localStorage'a yaz. `onNameChange` verilmişse oda state'i
+                  // üzerinden güncelleriz; aksi halde doğrudan kaydederiz.
+                  if (onNameChange) onNameChange(nextName)
+                  else saveName(nextName)
                 }}
                 placeholder={t('e.g. Little Panda')}
                 maxLength={NAME_MAX}

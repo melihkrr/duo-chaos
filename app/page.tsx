@@ -38,7 +38,10 @@ export default function Page() {
       setMode('multiplayer')
       void (async () => {
         const restored = await multiplayer.restore(code)
-        if (!restored) await multiplayer.joinRoom(code)
+        // `restore` başarısızsa normal katılmaya düş. KULLANICININ AÇIKÇA
+        // GİRDİĞİ adı (oda state'indeki güncel ad) geçiririz; böylece bayat
+        // önbellek adı yerine güncel ad kullanılır.
+        if (!restored) await multiplayer.joinRoom(code, multiplayer.room.name)
       })()
     }
     sync()
@@ -156,6 +159,9 @@ export default function Page() {
           busy={multiplayer.busy}
           error={multiplayer.error}
           initialName={room.name}
+          // Adı yazarken oda state'ini CANLI tut: davet linkiyle otomatik
+          // katılma sırasında kullanıcının girdiği ad kullanılsın.
+          onNameChange={multiplayer.setName}
         />
       )}
 

@@ -1,17 +1,35 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useRef } from 'react'
 
 type Props = {
   onChange: (dx: number, dy: number) => void
   size?: number
 }
 
-/** Dokunmatik/pointer için sanal joystick. -1..1 aralığında vektör üretir. */
+/**
+ * Dokunmatik/pointer için sanal joystick. -1..1 aralığında vektör üretir.
+ *
+ * KÖK SORUN (JOYSTICK GECİKMESİ): Önceden her `pointermove` olayında
+ * `setKnob(...)` (React state) çağrılıyordu. Bu, saniyede onlarca kez React
+ * render'ı tetikliyor; render kuyruğu biriktiğinde girdi işleme gecikiyor ve
+ * karakter joystick'e geç tepki veriyordu ("joystick lag").
+ *
+ * ÇÖZÜM: Knob konumunu React state yerine DOĞRUDAN DOM'a (`transform`) yazarız.
+ * `onChange` da zaten oyun döngüsünün ref'ine yazar (render tetiklemez). Böylece
+ * pointer olayı → girdi vektörü yolu tamamen render'sız, senkron ve gecikmesiz
+ * olur. Bileşen artık pointer hareketinde HİÇ yeniden render edilmez.
+ */
 export function VirtualJoystick({ onChange, size = 132 }: Props) {
   const ref = useRef<HTMLDivElement | null>(null)
-  const [knob, setKnob] = useState({ x: 0, y: 0 })
+  const knobRef = useRef<HTMLSpanElement | null>(null)
   const active = useRef(false)
+
+  // Knob'u doğrudan DOM'a uygula (React render'ı yok).
+  const paintKnob = (x: number, y: number) => {
+    const knob = knobRef.current
+    if (knob) knob.style.transform = `translate(${x * 40}px, ${y * 40}px)`
+  }
 
   const update = (clientX: number, clientY: number) => {
     const el = ref.current
@@ -27,13 +45,13 @@ export function VirtualJoystick({ onChange, size = 132 }: Props) {
       dx /= length
       dy /= length
     }
-    setKnob({ x: dx, y: dy })
+    paintKnob(dx, dy)
     onChange(dx, dy)
   }
 
   const end = () => {
     active.current = false
-    setKnob({ x: 0, y: 0 })
+    paintKnob(0, 0)
     onChange(0, 0)
   }
 
@@ -56,10 +74,7 @@ export function VirtualJoystick({ onChange, size = 132 }: Props) {
         if (active.current) end()
       }}
     >
-      <span
-        className="joystick-knob"
-        style={{ transform: `translate(${knob.x * 40}px, ${knob.y * 40}px)` }}
-      />
+      <span ref={knobRef} className="joystick-knob" style={{ transform: 'translate(0px, 0px)' }} />
     </div>
   )
 }
