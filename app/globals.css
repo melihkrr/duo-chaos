@@ -1848,7 +1848,7 @@ h3 {
   user-select: none;
   -webkit-user-select: none;
   pointer-events: none;
-  opacity: 0;
+  opacity: 0.8;
   transition: opacity 0.12s var(--ease-soft);
   will-change: opacity;
 }

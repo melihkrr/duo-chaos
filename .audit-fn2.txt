@@ -1,0 +1,1742 @@
+
+
+########## duo_advance_phase(text,text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_advance_phase(p_code text, p_token text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_code text := upper(trim(p_code));
+  v_pl duo_players;
+  v_room duo_rooms;
+  v_now bigint := (extract(epoch from now()) * 1000)::bigint;
+  v_round_scores jsonb;
+  v_match_scores jsonb;
+  v_next_phase duo_phase;
+  v_winner text;
+begin
+  v_pl := duo_require_player(v_code, p_token);
+
+  select * into v_room from duo_rooms where code = v_code for update;
+  if not found then
+    raise exception 'room_not_found' using errcode = 'P0001';
+  end if;
+
+  if v_room.phase = 'countdown' then
+    if v_now < v_room.countdown_ends_at - 250 then
+      raise exception 'not_ready' using errcode = 'P0001';
+    end if;
+    update duo_rooms
+      set phase = 'battle',
+          countdown_ends_at = 0,
+          ends_at = v_now + 90000,
+          updated_at = now()
+      where code = v_code;
+    return jsonb_build_object('ok', true, 'phase', 'battle', 'serverNow', v_now, 'endsAt', v_now + 90000);
+
+  elsif v_room.phase = 'battle' then
+    if v_now < v_room.ends_at - 500 then
+      raise exception 'not_ready' using errcode = 'P0001';
+    end if;
+
+    v_round_scores := '{}'::jsonb;
+    v_match_scores := coalesce(v_room.match_scores, '{}'::jsonb);
+
+    update duo_players
+      set round_score = score,
+          total_score = coalesce((v_match_scores->>player_id)::int, 0) + score
+      where room_code = v_code;
+
+    select jsonb_object_agg(player_id, score) into v_round_scores
+      from duo_players where room_code = v_code;
+
+    select jsonb_object_agg(player_id, total_score) into v_match_scores
+      from duo_players where room_code = v_code;
+
+    v_next_phase := case when v_room.round >= 3 then 'matchover' else 'results' end;
+
+    if v_next_phase = 'matchover' then
+      select player_id into v_winner
+        from duo_players
+        where room_code = v_code
+        order by total_score desc, slot asc
+        limit 1;
+    end if;
+
+    update duo_rooms
+      set phase = v_next_phase,
+          round_scores = v_round_scores,
+          match_scores = v_match_scores,
+          winner = v_winner,
+          chaos_event = null,
+          chaos_ends_at = 0,
+          updated_at = now()
+      where code = v_code;
+
+    return jsonb_build_object(
+      'ok', true,
+      'phase', v_next_phase,
+      'winner', v_winner,
+      'roundScores', v_round_scores,
+      'matchScores', v_match_scores,
+      'serverNow', v_now
+    );
+  end if;
+
+  -- `results` / `matchover` / `lobby`: tur zaten bitmiş (veya hiç başlamamış).
+  -- Burada HİÇBİR ŞEY yapmayız; mevcut fazı döndürürüz. Böylece `duo_tick`
+  -- ile yarışan bir "turu bitir" çağrısı turu İKİ KEZ ilerletemez ve sonuç
+  -- ekranı atlanmaz. Sonraki tura geçiş yalnızca `duo_next_round` ile olur.
+  return jsonb_build_object(
+    'ok', true,
+    'phase', v_room.phase,
+    'winner', v_room.winner,
+    'roundScores', v_room.round_scores,
+    'matchScores', v_room.match_scores,
+    'serverNow', v_now
+  );
+end;
+$function$
+
+
+
+########## duo_next_round(text,text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_next_round(p_code text, p_token text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_code text := upper(trim(p_code));
+  v_pl duo_players;
+  v_room duo_rooms;
+begin
+  v_pl := duo_require_player(v_code, p_token);
+
+  select * into v_room from duo_rooms where code = v_code for update;
+  if not found then
+    raise exception 'room_not_found' using errcode = 'P0001';
+  end if;
+
+  if v_pl.player_id <> 'p1' then
+    raise exception 'not_host' using errcode = 'P0001';
+  end if;
+
+  -- Yalnızca sonuç ekranından ilerlenebilir. Oda zaten bir sonraki turun
+  -- `countdown`/`battle` fazındaysa (gecikmiş/çift çağrı) mevcut durumu
+  -- döndürürüz — tur İKİ KEZ artmaz.
+  if v_room.phase <> 'results' then
+    return jsonb_build_object(
+      'ok', true,
+      'phase', v_room.phase,
+      'round', v_room.round,
+      'countdownEndsAt', v_room.countdown_ends_at,
+      'serverNow', (extract(epoch from now()) * 1000)::bigint
+    );
+  end if;
+
+  if v_room.round >= 3 then
+    raise exception 'not_ready' using errcode = 'P0001';
+  end if;
+
+  update duo_rooms set round = round + 1, updated_at = now() where code = v_code;
+  return duo_start_round(v_code, p_token);
+end;
+$function$
+
+
+
+########## duo_start_round(text,text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_start_round(p_code text, p_token text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_code text := upper(trim(p_code));
+  v_pl duo_players;
+  v_room duo_rooms;
+  v_count int;
+  v_pair jsonb;
+  v_seed text;
+  v_now bigint := (extract(epoch from now()) * 1000)::bigint;
+  v_countdown_end bigint;
+  v_battle_end bigint;
+begin
+  select * into v_room from duo_rooms where code = v_code;
+  if not found then
+    return jsonb_build_object('ok', false, 'reason', 'room_not_found');
+  end if;
+
+  select * into v_pl from duo_players where room_code = v_code and token = p_token;
+  if not found then
+    return jsonb_build_object('ok', false, 'reason', 'not_member');
+  end if;
+
+  if v_pl.player_id <> 'p1' then
+    return jsonb_build_object('ok', false, 'reason', 'not_host');
+  end if;
+
+  select count(*) into v_count from duo_players where room_code = v_code;
+  if v_count < 2 then
+    return jsonb_build_object('ok', false, 'reason', 'not_ready');
+  end if;
+
+  -- Yalnızca ilk tur (lobby) veya sonraki tur (results) başlatılabilir.
+  if v_room.phase not in ('lobby', 'results') then
+    return jsonb_build_object(
+      'ok', false,
+      'reason', 'not_ready',
+      'phase', v_room.phase,
+      'round', v_room.round,
+      'countdownEndsAt', v_room.countdown_ends_at,
+      'serverNow', v_now
+    );
+  end if;
+
+  v_seed := v_code || ':' || v_room.round::text;
+  v_pair := duo_objective_pair(v_seed);
+
+  v_countdown_end := v_now + 3000;
+  v_battle_end := v_countdown_end + 90000;
+
+  update duo_rooms
+    set phase = 'countdown',
+        countdown_ends_at = v_countdown_end,
+        ends_at = v_battle_end,
+        chaos_event = null,
+        chaos_ends_at = 0,
+        winner = null,
+        round_seed = v_seed,
+        updated_at = now()
+    where code = v_code;
+
+  update duo_players
+    set objective = case when player_id = 'p1' then v_pair->'p1' else v_pair->'p2' end,
+        coins = 0,
+        stolen = 0,
+        -- TUR TOPLAMI: yeni turda sıfırlanır.
+        round_coins = 0,
+        round_stolen = 0,
+        collected_types = '{}'::jsonb,
+        -- KALICI İLERLEME (0031): yeni turda sıfırlanır.
+        objective_progress = 0,
+        -- PUAN TABANLI SKOR: tur başına puan sıfırlanır.
+        score = 0,
+        round_score = 0,
+        objectives_done = 0,
+        mission_done = false,
+        rematch = false,
+        scout_charges = 2,
+        scout_used_at = 0,
+        revealed_hint = null,
+        slowed_until = 0,
+        x = case when slot = 1 then 18 else 82 end,
+        y = 50
+    where room_code = v_code;
+
+  perform duo_spawn_coins(v_code);
+
+  return jsonb_build_object(
+    'ok', true,
+    'round', v_room.round,
+    'countdownEndsAt', v_countdown_end,
+    'endsAt', v_battle_end,
+    'serverNow', v_now
+  );
+end;
+$function$
+
+
+
+########## duo_public_state(text,text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_public_state(p_code text, p_token text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_code text := upper(trim(p_code));
+  v_room duo_rooms;
+  v_me duo_players;
+  v_players jsonb;
+  v_coins jsonb;
+  v_count int;
+  v_now bigint := (extract(epoch from now()) * 1000)::bigint;
+begin
+  select * into v_room from duo_rooms where code = v_code;
+  if not found then
+    raise exception 'room_not_found' using errcode = 'P0001';
+  end if;
+
+  v_me := duo_require_player(v_code, p_token);
+
+  update duo_players set last_seen_at = now()
+    where room_code = v_code and slot = v_me.slot;
+
+  perform duo_respawn_coins(v_code);
+  select count(*) into v_count from duo_players where room_code = v_code;
+
+  select jsonb_agg(
+    jsonb_build_object(
+      'id', p.player_id,
+      'name', p.name,
+      'x', p.x,
+      'y', p.y,
+      'coins', p.coins,
+      'stolen', p.stolen,
+      'roundCoins', p.round_coins,
+      'roundStolen', p.round_stolen,
+      'collectedTypes', p.collected_types,
+      'objectiveProgress', coalesce(p.objective_progress, 0),
+      'score', p.score,
+      'roundScore', p.round_score,
+      'totalScore', p.total_score,
+      'objectivesDone', p.objectives_done,
+      'objective', p.objective,
+      'missionDone', p.mission_done,
+      'rematch', p.rematch,
+      'emote', p.emote,
+      'trail', p.trail,
+      'avatar', p.avatar,
+      'slowedUntil', p.slowed_until,
+      'scoutCharges', case when p.player_id = v_me.player_id then p.scout_charges else null end,
+      'scoutUsedAt', case when p.player_id = v_me.player_id then p.scout_used_at else null end,
+      'revealedHint', case when p.player_id = v_me.player_id then v_me.revealed_hint else null end
+    )
+    order by p.slot
+  )
+  into v_players
+  from duo_players p
+  where p.room_code = v_code;
+
+  select jsonb_agg(
+    jsonb_build_object(
+      'id', c.coin_id,
+      'x', c.x,
+      'y', c.y,
+      'type', c.type,
+      'collectedBy', c.collected_by,
+      'respawnAt', c.respawn_at
+    )
+    order by c.coin_id
+  )
+  into v_coins
+  from duo_coins c
+  where c.room_code = v_code;
+
+  return jsonb_build_object(
+    'phase', v_room.phase,
+    'round', v_room.round,
+    'playerCount', v_count,
+    'serverNow', v_now,
+    'countdownEndsAt', v_room.countdown_ends_at,
+    'endsAt', v_room.ends_at,
+    'chaosEvent', case when v_room.chaos_event is null then null else jsonb_build_object(
+        'id', v_room.chaos_event,
+        'name', case v_room.chaos_event
+          when 'gold-rush' then 'Gold Rush'
+          when 'blackout' then 'Blackout'
+          when 'magnet' then 'Magnet Storm'
+          when 'swap' then 'Chaos Swap'
+          when 'jackpot' then 'Jackpot'
+          when 'double-score' then 'Double Points'
+          when 'red-alert' then 'Red Alert'
+        end,
+        'description', case v_room.chaos_event
+          when 'gold-rush' then 'Gold coins grant +25 points for 15s.'
+          when 'blackout' then 'Arena visibility drops for 15s. Follow the glow and keep moving.'
+          when 'magnet' then 'Coins drift toward the center and pressure rises.'
+          when 'swap' then 'One of your targets is swapped mid-round.'
+          when 'jackpot' then 'A single Diamond appears. First player gets +50.'
+          when 'double-score' then 'All standard coins are worth double for 15s.'
+          when 'red-alert' then 'Red coins grant +25 bonus points for 15s.'
+        end,
+        'boost', case v_room.chaos_event
+          when 'gold-rush' then 'Gold bonus +25'
+          when 'blackout' then 'Visibility reduced'
+          when 'magnet' then 'Resource control'
+          when 'swap' then 'Plans break'
+          when 'jackpot' then 'Diamond +50'
+          when 'double-score' then '2x coin points'
+          when 'red-alert' then 'Red bonus +25'
+        end
+      ) end,
+    'chaosEventEndsAt', v_room.chaos_ends_at,
+    'winner', v_room.winner,
+    'roundScores', v_room.round_scores,
+    'matchScores', v_room.match_scores,
+    'coins', coalesce(v_coins, '[]'::jsonb),
+    'players', coalesce(v_players, '[]'::jsonb)
+  );
+end;
+$function$
+
+
+
+########## duo_create_room(text,text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_create_room(p_code text, p_token text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_code text := upper(trim(p_code));
+  v_existing duo_rooms;
+begin
+  if v_code !~ '^[A-Z0-9]{6}$' then
+    raise exception 'invalid_code' using errcode = 'P0001';
+  end if;
+
+  select * into v_existing from duo_rooms where code = v_code;
+  if found then
+    raise exception 'room_exists' using errcode = 'P0001';
+  end if;
+
+  insert into duo_rooms (code, phase, round, round_seed)
+  values (v_code, 'lobby', 1, v_code || ':1');
+
+  insert into duo_players (room_code, slot, player_id, token, name, x, y)
+  values (v_code, 1, 'p1', p_token, 'PLAYER 1', 18, 50);
+
+  perform duo_spawn_coins(v_code);
+
+  return jsonb_build_object('code', v_code, 'slot', 1, 'player_id', 'p1');
+end;
+$function$
+
+
+
+########## duo_create_room(text,text,text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_create_room(p_code text, p_token text, p_name text DEFAULT NULL::text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_code text := upper(trim(p_code));
+  v_name text := coalesce(nullif(trim(coalesce(p_name, '')), ''), 'PLAYER 1');
+  v_existing duo_rooms;
+begin
+  if v_code !~ '^[A-Z0-9]{6}$' then
+    raise exception 'invalid_code' using errcode = 'P0001';
+  end if;
+
+  -- Cap the display name so a client cannot store an unbounded string.
+  v_name := left(v_name, 16);
+
+  select * into v_existing from duo_rooms where code = v_code;
+  if found then
+    raise exception 'room_exists' using errcode = 'P0001';
+  end if;
+
+  insert into duo_rooms (code, phase, round, round_seed)
+  values (v_code, 'lobby', 1, v_code || ':1');
+
+  insert into duo_players (room_code, slot, player_id, token, name, x, y)
+  values (v_code, 1, 'p1', p_token, v_name, 18, 50);
+
+  perform duo_spawn_coins(v_code);
+
+  return jsonb_build_object('code', v_code, 'slot', 1, 'player_id', 'p1', 'name', v_name);
+end;
+$function$
+
+
+
+########## duo_join_room(text,text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_join_room(p_code text, p_token text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_code text := upper(trim(p_code));
+  v_room duo_rooms;
+  v_existing duo_players;
+  v_count int;
+begin
+  select * into v_room from duo_rooms where code = v_code;
+  if not found then
+    raise exception 'room_not_found' using errcode = 'P0001';
+  end if;
+
+  -- Already a member? Return the existing slot (reconnect path).
+  select * into v_existing
+    from duo_players
+    where room_code = v_code and token = p_token;
+  if found then
+    update duo_players set last_seen_at = now()
+      where room_code = v_code and slot = v_existing.slot;
+    return jsonb_build_object('code', v_code, 'slot', v_existing.slot, 'player_id', v_existing.player_id);
+  end if;
+
+  select count(*) into v_count from duo_players where room_code = v_code;
+  if v_count >= 2 then
+    raise exception 'room_full' using errcode = 'P0001';
+  end if;
+
+  insert into duo_players (room_code, slot, player_id, token, name, x, y)
+  values (v_code, 2, 'p2', p_token, 'PLAYER 2', 82, 50);
+
+  return jsonb_build_object('code', v_code, 'slot', 2, 'player_id', 'p2');
+end;
+$function$
+
+
+
+########## duo_join_room(text,text,text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_join_room(p_code text, p_token text, p_name text DEFAULT NULL::text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_code text := upper(trim(p_code));
+  v_name text := coalesce(nullif(trim(coalesce(p_name, '')), ''), 'PLAYER 2');
+  v_room duo_rooms;
+  v_existing duo_players;
+  v_count int;
+begin
+  select * into v_room from duo_rooms where code = v_code;
+  if not found then
+    raise exception 'room_not_found' using errcode = 'P0001';
+  end if;
+
+  v_name := left(v_name, 16);
+
+  -- Already a member? Return the existing slot (reconnect path).
+  select * into v_existing
+    from duo_players
+    where room_code = v_code and token = p_token;
+  if found then
+    update duo_players
+      set last_seen_at = now(),
+          name = case
+            when nullif(trim(coalesce(p_name, '')), '') is not null then v_name
+            else name
+          end
+      where room_code = v_code and slot = v_existing.slot;
+    return jsonb_build_object(
+      'code', v_code,
+      'slot', v_existing.slot,
+      'player_id', v_existing.player_id,
+      'name', case
+        when nullif(trim(coalesce(p_name, '')), '') is not null then v_name
+        else v_existing.name
+      end
+    );
+  end if;
+
+  select count(*) into v_count from duo_players where room_code = v_code;
+  if v_count >= 2 then
+    raise exception 'room_full' using errcode = 'P0001';
+  end if;
+
+  insert into duo_players (room_code, slot, player_id, token, name, x, y)
+  values (v_code, 2, 'p2', p_token, v_name, 82, 50);
+
+  return jsonb_build_object('code', v_code, 'slot', 2, 'player_id', 'p2', 'name', v_name);
+end;
+$function$
+
+
+
+########## duo_rematch(text,text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_rematch(p_code text, p_token text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_code text := upper(trim(p_code));
+  v_pl duo_players;
+  v_ready int;
+begin
+  v_pl := duo_require_player(v_code, p_token);
+
+  update duo_players set rematch = true
+    where room_code = v_code and slot = v_pl.slot;
+
+  select count(*) into v_ready
+    from duo_players where room_code = v_code and rematch = true;
+
+  if v_ready >= 2 then
+    update duo_rooms
+      set phase = 'lobby',
+          round = 1,
+          countdown_ends_at = 0,
+          ends_at = 0,
+          chaos_event = null,
+          chaos_ends_at = 0,
+          winner = null,
+          round_scores = '{}'::jsonb,
+          match_scores = '{}'::jsonb,
+          round_seed = v_code || ':1',
+          updated_at = now()
+      where code = v_code;
+
+    -- `duo_start_round` ile AYNI tam sıfırlama. `objectives_done` ve
+    -- `objective` dahil; böylece rövanş sonrası durum taze maçla tutarlıdır.
+    update duo_players
+      set coins = 0, stolen = 0, collected_types = '{}'::jsonb,
+          score = 0, round_score = 0, total_score = 0,
+          objectives_done = 0,
+          objective = null,
+          mission_done = false, rematch = false,
+          scout_charges = 2, scout_used_at = 0, revealed_hint = null,
+          slowed_until = 0,
+          x = case when slot = 1 then 18 else 82 end,
+          y = 50
+      where room_code = v_code;
+
+    perform duo_spawn_coins(v_code);
+  end if;
+
+  return jsonb_build_object('ok', true, 'ready', v_ready);
+end;
+$function$
+
+
+
+########## duo_leave(text,text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_leave(p_code text, p_token text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_code text := upper(trim(p_code));
+  v_pl duo_players;
+  v_remaining int;
+begin
+  select * into v_pl from duo_players where room_code = v_code and token = p_token;
+  if not found then
+    return jsonb_build_object('ok', true, 'removed', false);
+  end if;
+
+  delete from duo_players where room_code = v_code and slot = v_pl.slot;
+
+  select count(*) into v_remaining from duo_players where room_code = v_code;
+  if v_remaining = 0 then
+    delete from duo_rooms where code = v_code;
+  end if;
+
+  return jsonb_build_object('ok', true, 'removed', true);
+end;
+$function$
+
+
+
+########## duo_cleanup() ##########
+
+CREATE OR REPLACE FUNCTION public.duo_cleanup()
+ RETURNS integer
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_deleted int;
+begin
+  with gone as (
+    delete from duo_rooms
+    where updated_at < now() - interval '2 hours'
+    returning 1
+  )
+  select count(*) into v_deleted from gone;
+  return v_deleted;
+end;
+$function$
+
+
+
+########## duo_require_player(text,text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_require_player(p_code text, p_token text)
+ RETURNS duo_players
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  pl duo_players;
+begin
+  select * into pl
+    from duo_players
+    where room_code = upper(p_code) and token = p_token;
+
+  if not found then
+    raise exception 'not_a_player' using errcode = 'P0001';
+  end if;
+  return pl;
+end;
+$function$
+
+
+
+########## duo_mission_progress(jsonb,jsonb,integer,integer) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_mission_progress(p_objective jsonb, p_collected jsonb, p_stolen integer, p_coins integer)
+ RETURNS integer
+ LANGUAGE plpgsql
+ IMMUTABLE
+AS $function$
+declare
+  reqs jsonb;
+  req_key text;
+  req_val int;
+  progress int := 0;
+  target int;
+  steal_target int;
+begin
+  if p_objective is null then return 0; end if;
+  target := coalesce((p_objective->>'target')::int, 0);
+  reqs := p_objective->'requirements';
+
+  if reqs is not null and jsonb_typeof(reqs) = 'object' then
+    for req_key, req_val in
+      select key, (value)::text::int from jsonb_each(reqs)
+    loop
+      progress := progress + least(coalesce((p_collected->>req_key)::int, 0), req_val);
+    end loop;
+    -- ÇALMA BİLEŞENİ (0038): "Steal 2 and secure 1 Gold" gibi HEM kaynak HEM
+    -- çalma gerektiren görevlerde çalma da ilerlemeye eklenir.
+    steal_target := coalesce((p_objective->>'stealTarget')::int, 0);
+    if steal_target > 0 then
+      progress := progress + least(coalesce(p_stolen, 0), steal_target);
+    end if;
+  elsif (p_objective->>'coinType') is not null and (p_objective->>'coinType') <> 'mixed' then
+    progress := coalesce((p_collected->>(p_objective->>'coinType'))::int, 0);
+  else
+    progress := case when (p_objective->>'kind') = 'steal' then p_stolen else p_coins end;
+  end if;
+
+  -- HEDEF SINIRI (0037): ilerleme hedefi ASLA aşamaz.
+  if target > 0 then progress := least(progress, target); end if;
+  return coalesce(progress, 0);
+end;
+$function$
+
+
+
+########## duo_mission_satisfied(jsonb,jsonb,integer,integer) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_mission_satisfied(p_objective jsonb, p_collected jsonb, p_stolen integer, p_coins integer)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ IMMUTABLE
+AS $function$
+declare
+  reqs jsonb;
+  req_key text;
+  req_val int;
+  resources_met boolean := true;
+  steals_met boolean := true;
+  progress int := 0;
+  target int;
+  steal_target int;
+begin
+  if p_objective is null then return false; end if;
+  target := coalesce((p_objective->>'target')::int, 0);
+  reqs := p_objective->'requirements';
+
+  if reqs is not null and jsonb_typeof(reqs) = 'object' then
+    for req_key, req_val in
+      select key, (value)::text::int from jsonb_each(reqs)
+    loop
+      if coalesce((p_collected->>req_key)::int, 0) < req_val then
+        resources_met := false;
+      end if;
+      progress := progress + least(coalesce((p_collected->>req_key)::int, 0), req_val);
+    end loop;
+    -- ÇALMA BİLEŞENİ (0038): kaynak + çalma görevlerinde çalma da sayılır.
+    steal_target := coalesce((p_objective->>'stealTarget')::int, 0);
+    if steal_target > 0 then
+      progress := progress + least(coalesce(p_stolen, 0), steal_target);
+    end if;
+  elsif (p_objective->>'coinType') is not null and (p_objective->>'coinType') <> 'mixed' then
+    progress := coalesce((p_collected->>(p_objective->>'coinType'))::int, 0);
+  else
+    progress := case when (p_objective->>'kind') = 'steal' then p_stolen else p_coins end;
+  end if;
+
+  -- HEDEF SINIRI (0037): ilerleme hedefi ASLA aşamaz.
+  if target > 0 then progress := least(progress, target); end if;
+
+  if (p_objective->>'kind') = 'steal' then
+    steals_met := p_stolen >= coalesce((p_objective->>'stealTarget')::int, target);
+  end if;
+
+  return resources_met and steals_met and progress >= target;
+end;
+$function$
+
+
+
+########## duo_coin_value(duo_coin_type,duo_chaos_event,jsonb) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_coin_value(p_type duo_coin_type, p_chaos duo_chaos_event, p_objective jsonb)
+ RETURNS integer
+ LANGUAGE plpgsql
+ IMMUTABLE
+AS $function$
+declare
+  is_target boolean := false;
+  base int;
+begin
+  if p_type = 'diamond' then return 50; end if;
+
+  if p_objective is not null then
+    if (p_objective->'requirements') ? p_type::text then
+      is_target := true;
+    elsif (p_objective->>'coinType') = p_type::text then
+      is_target := true;
+    end if;
+  end if;
+
+  base := case
+    when p_type = 'emerald' then 25
+    when is_target then 15
+    else 5
+  end;
+
+  if p_chaos = 'gold-rush' and p_type = 'gold' then
+    return base + 25;
+  end if;
+  if p_chaos = 'double-score' then
+    return base * 2;
+  end if;
+  if p_chaos = 'red-alert' and p_type = 'red' then
+    return base + 25;
+  end if;
+  return base;
+end;
+$function$
+
+
+
+########## duo_respawn_coins(text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_respawn_coins(p_room text)
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+declare
+  v_now bigint := (extract(epoch from now()) * 1000)::bigint;
+  v_count int;
+begin
+  update duo_coins
+    set collected_by = null,
+        collected_at = 0,
+        respawn_at = 0
+    where room_code = p_room
+      and collected_by is not null
+      and respawn_at > 0
+      and respawn_at <= v_now
+      and type <> 'diamond';
+
+  get diagnostics v_count = row_count;
+  return v_count;
+end;
+$function$
+
+
+
+########## duo_spawn_coins(text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_spawn_coins(p_room text)
+ RETURNS void
+ LANGUAGE plpgsql
+AS $function$
+declare
+  v_seed text;
+  v_state bigint;
+  v_cells int[] := array[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14];
+  v_i int;
+  v_j int;
+  v_tmp int;
+  v_r double precision;
+  v_cell int;
+  v_col int;
+  v_row int;
+  v_x double precision;
+  v_y double precision;
+  v_type duo_coin_type;
+  v_types duo_coin_type[] := array['gold','blue','red','emerald']::duo_coin_type[];
+  v_len int;
+begin
+  -- The client seeds with `round-${round}` for the very first round and with
+  -- `CODE:round` for every round started by `duo_start_round`. We prefer the
+  -- room's stored `round_seed` (authoritative) and fall back to `round-N`.
+  select coalesce(nullif(round_seed, ''), 'round-' || round::text)
+    into v_seed
+    from duo_rooms
+    where code = p_room;
+
+  if v_seed is null then
+    v_seed := 'round-1';
+  end if;
+
+  -- FNV-1a 32-bit hash of the seed (matches the JS implementation).
+  v_state := 2166136261;
+  v_len := length(v_seed);
+  for v_i in 1..v_len loop
+    v_state := (v_state # (ascii(substr(v_seed, v_i, 1)))) & 4294967295;
+    v_state := (v_state * 16777619) & 4294967295;
+  end loop;
+  if v_state = 0 then
+    v_state := 1;
+  end if;
+
+  -- Fisher–Yates shuffle of the 15 grid cells (deterministic).
+  for v_i in reverse 14..1 loop
+    -- next(): xorshift32
+    v_state := (v_state # ((v_state << 13) & 4294967295)) & 4294967295;
+    v_state := (v_state # (v_state >> 17)) & 4294967295;
+    v_state := (v_state # ((v_state << 5) & 4294967295)) & 4294967295;
+    v_r := (v_state & 4294967295)::double precision / 4294967296.0;
+    v_j := floor(v_r * (v_i + 1))::int;
+    v_tmp := v_cells[v_i + 1];
+    v_cells[v_i + 1] := v_cells[v_j + 1];
+    v_cells[v_j + 1] := v_tmp;
+  end loop;
+
+  delete from duo_coins where room_code = p_room;
+
+  for v_i in 0..13 loop
+    v_cell := v_cells[(v_i % 15) + 1];
+    v_col := v_cell % 5;
+    v_row := v_cell / 5;
+
+    -- x = 12 + col*19 + (next()*6 - 3)
+    v_state := (v_state # ((v_state << 13) & 4294967295)) & 4294967295;
+    v_state := (v_state # (v_state >> 17)) & 4294967295;
+    v_state := (v_state # ((v_state << 5) & 4294967295)) & 4294967295;
+    v_r := (v_state & 4294967295)::double precision / 4294967296.0;
+    v_x := 12 + v_col * 19 + (v_r * 6 - 3);
+
+    -- y = 16 + row*30 + (next()*8 - 4)
+    v_state := (v_state # ((v_state << 13) & 4294967295)) & 4294967295;
+    v_state := (v_state # (v_state >> 17)) & 4294967295;
+    v_state := (v_state # ((v_state << 5) & 4294967295)) & 4294967295;
+    v_r := (v_state & 4294967295)::double precision / 4294967296.0;
+    v_y := 16 + v_row * 30 + (v_r * 8 - 4);
+
+    -- type = COIN_TYPES[i % 4]  (round-robin, NOT random) — guarantees every
+    -- type appears at least 3 times so no objective is ever impossible.
+    v_type := v_types[(v_i % 4) + 1];
+
+    insert into duo_coins (room_code, coin_id, x, y, type)
+    values (p_room, v_i, round(v_x::numeric, 4), round(v_y::numeric, 4), v_type);
+  end loop;
+end;
+$function$
+
+
+
+########## duo_spawn_wave(text,integer,integer) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_spawn_wave(p_room text, p_round integer, p_wave integer)
+ RETURNS void
+ LANGUAGE plpgsql
+AS $function$
+declare
+  types duo_coin_type[] := array['gold','blue','red','emerald']::duo_coin_type[];
+  anchor int := (p_round * 17 + p_wave * 23) % 76;
+  i int;
+begin
+  for i in 0..1 loop
+    insert into duo_coins (room_code, coin_id, x, y, type)
+    values (
+      p_room,
+      1000 + p_round * 100 + p_wave * 10 + i,
+      12 + ((anchor + i * 37) % 76),
+      16 + ((anchor * 2 + i * 29) % 68),
+      types[((p_round + p_wave + i) % 4) + 1]
+    )
+    on conflict (room_code, coin_id) do nothing;
+  end loop;
+end;
+$function$
+
+
+
+########## duo_reroll_objective_carry(text,integer,jsonb,integer,integer) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_reroll_objective_carry(p_room text, p_slot integer, p_collected jsonb, p_stolen integer, p_coins integer)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_pl duo_players;
+  v_done int;
+  v_bonus int;
+  v_next jsonb;
+  v_after duo_players;
+begin
+  select * into v_pl
+    from duo_players
+    where room_code = p_room and slot = p_slot
+    for update;
+  if not found then
+    return jsonb_build_object('ok', false, 'reason', 'no_player');
+  end if;
+
+  v_done := coalesce(v_pl.objectives_done, 0) + 1;
+  v_bonus := coalesce((v_pl.objective->>'points')::int, 50);
+  v_next := duo_random_objective(v_pl.objective->>'id');
+
+  update duo_players
+    set objectives_done = v_done,
+        score = coalesce(score, 0) + v_bonus,
+        round_score = coalesce(round_score, 0) + v_bonus,
+        objective = v_next,
+        coins = 0,
+        stolen = 0,
+        collected_types = '{}'::jsonb,
+        objective_progress = 0,
+        mission_done = false
+    where room_code = p_room and slot = p_slot;
+
+  select * into v_after
+    from duo_players
+    where room_code = p_room and slot = p_slot;
+
+  return jsonb_build_object(
+    'ok', true,
+    'objective', v_after.objective,
+    'objectiveProgress', 0,
+    'objectivesDone', coalesce(v_after.objectives_done, 0),
+    'score', coalesce(v_after.score, 0),
+    'roundScore', coalesce(v_after.round_score, 0),
+    'collectedTypes', '{}'::jsonb,
+    'coins', 0,
+    'stolen', 0,
+    'missionDone', false
+  );
+end;
+$function$
+
+
+
+########## duo_sync_coins(text,text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_sync_coins(p_code text, p_token text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_code text := upper(trim(p_code));
+  v_me duo_players;
+  v_coins jsonb;
+begin
+  v_me := duo_require_player(v_code, p_token);
+
+  perform duo_respawn_coins(v_code);
+
+  select jsonb_agg(
+    jsonb_build_object(
+      'id', c.coin_id,
+      'x', c.x,
+      'y', c.y,
+      'type', c.type,
+      'collectedBy', c.collected_by,
+      'respawnAt', c.respawn_at
+    )
+    order by c.coin_id
+  )
+  into v_coins
+  from duo_coins c
+  where c.room_code = v_code;
+
+  return jsonb_build_object('ok', true, 'coins', coalesce(v_coins, '[]'::jsonb));
+end;
+$function$
+
+
+
+########## duo_collect(text,text,integer) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_collect(p_code text, p_token text, p_coin_id integer)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_code text := upper(trim(p_code));
+  v_pl duo_players;
+begin
+  v_pl := duo_require_player(v_code, p_token);
+  select * into v_pl
+    from duo_players
+    where room_code = v_code and slot = v_pl.slot;
+
+  return duo_collect_batch(
+    v_code, p_token, array[p_coin_id], v_pl.x, v_pl.y, v_pl.objectives_done, null
+  );
+end;
+$function$
+
+
+
+########## duo_scout(text,text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_scout(p_code text, p_token text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_code text := upper(trim(p_code));
+  v_pl duo_players;
+  v_opp duo_players;
+  v_room duo_rooms;
+  v_now bigint := (extract(epoch from now()) * 1000)::bigint;
+  v_obj jsonb;
+  v_hint jsonb;
+  v_req_key text;
+  v_req_val int;
+begin
+  v_pl := duo_require_player(v_code, p_token);
+
+  select * into v_room from duo_rooms where code = v_code;
+  if v_room.phase <> 'battle' then
+    return jsonb_build_object('ok', false, 'reason', 'not_battle');
+  end if;
+
+  if v_pl.scout_charges <= 0 then
+    return jsonb_build_object('ok', false, 'reason', 'no_charges');
+  end if;
+
+  if v_now - v_pl.scout_used_at < 8000 then
+    return jsonb_build_object('ok', false, 'reason', 'cooldown');
+  end if;
+
+  select * into v_opp
+    from duo_players
+    where room_code = v_code and slot <> v_pl.slot;
+  if not found then
+    return jsonb_build_object('ok', false, 'reason', 'no_opponent');
+  end if;
+
+  v_obj := v_opp.objective;
+  if v_obj is null then
+    return jsonb_build_object('ok', false, 'reason', 'no_objective');
+  end if;
+
+  -- Build a partial hint. Never expose the full label.
+  v_hint := jsonb_build_object(
+    'kind', v_obj->>'kind',
+    'target', (v_obj->>'target')::int
+  );
+
+  if v_obj->'requirements' is not null and jsonb_typeof(v_obj->'requirements') = 'object' then
+    -- Reveal exactly one required resource (the first by key order).
+    select key, (value)::text::int
+      into v_req_key, v_req_val
+      from jsonb_each(v_obj->'requirements')
+      order by key
+      limit 1;
+    v_hint := v_hint || jsonb_build_object(
+      'coinType', v_req_key,
+      'requirement', jsonb_build_object(v_req_key, v_req_val)
+    );
+  elsif (v_obj->>'coinType') is not null and (v_obj->>'coinType') <> 'mixed' then
+    v_hint := v_hint || jsonb_build_object('coinType', v_obj->>'coinType');
+  end if;
+
+  if (v_obj->>'kind') = 'steal' then
+    v_hint := v_hint || jsonb_build_object(
+      'stealTarget', coalesce((v_obj->>'stealTarget')::int, (v_obj->>'target')::int)
+    );
+  end if;
+
+  update duo_players
+    set scout_charges = scout_charges - 1,
+        scout_used_at = v_now,
+        revealed_hint = v_hint
+    where room_code = v_code and slot = v_pl.slot;
+
+  return jsonb_build_object(
+    'ok', true,
+    'hint', v_hint,
+    'chargesLeft', v_pl.scout_charges - 1
+  );
+end;
+$function$
+
+
+
+########## duo_set_name(text,text,text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_set_name(p_code text, p_token text, p_name text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_code text := upper(trim(p_code));
+  v_name text := left(coalesce(nullif(trim(coalesce(p_name, '')), ''), 'PLAYER'), 16);
+  v_pl duo_players;
+begin
+  v_pl := duo_require_player(v_code, p_token);
+
+  update duo_players
+    set name = v_name, last_seen_at = now()
+    where room_code = v_code and slot = v_pl.slot;
+
+  return jsonb_build_object('ok', true, 'name', v_name);
+end;
+$function$
+
+
+
+########## duo_award_progress(text,integer) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_award_progress(p_client_id text, p_xp integer)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_row duo_progression;
+  v_gain int := greatest(0, least(coalesce(p_xp, 0), 500));
+  v_new_xp int;
+  v_profile jsonb;
+begin
+  if p_client_id is null or length(trim(p_client_id)) = 0 then
+    raise exception 'invalid_client' using errcode = 'P0001';
+  end if;
+
+  insert into duo_progression (client_id, xp)
+  values (p_client_id, v_gain)
+  on conflict (client_id) do update
+    set xp = duo_progression.xp + v_gain,
+        updated_at = now()
+  returning * into v_row;
+
+  v_new_xp := v_row.xp;
+  v_profile := duo_profile_for_xp(v_new_xp);
+
+  update duo_progression
+    set level = (v_profile->>'level')::int,
+        title = v_profile->>'title',
+        unlocks = v_profile->'unlocks',
+        updated_at = now()
+    where client_id = p_client_id;
+
+  return v_profile || jsonb_build_object(
+    'emote', v_row.emote,
+    'trail', v_row.trail,
+    'avatar', v_row.avatar
+  );
+end;
+$function$
+
+
+
+########## duo_get_progress(text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_get_progress(p_client_id text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_row duo_progression;
+begin
+  if p_client_id is null or length(trim(p_client_id)) = 0 then
+    raise exception 'invalid_client' using errcode = 'P0001';
+  end if;
+
+  select * into v_row from duo_progression where client_id = p_client_id;
+  if not found then
+    insert into duo_progression (client_id) values (p_client_id)
+    returning * into v_row;
+  end if;
+
+  return duo_profile_for_xp(v_row.xp)
+    || jsonb_build_object(
+      'emote', v_row.emote,
+      'trail', v_row.trail,
+      'avatar', v_row.avatar
+    );
+end;
+$function$
+
+
+
+########## duo_set_cosmetics(text,text,text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_set_cosmetics(p_client_id text, p_emote text, p_trail text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_row duo_progression;
+  v_profile jsonb;
+  v_unlocks jsonb;
+  v_emote text := coalesce(p_emote, '');
+  v_trail text := coalesce(p_trail, '');
+begin
+  if p_client_id is null or length(trim(p_client_id)) = 0 then
+    raise exception 'invalid_client' using errcode = 'P0001';
+  end if;
+
+  insert into duo_progression (client_id)
+  values (p_client_id)
+  on conflict (client_id) do nothing;
+
+  select * into v_row from duo_progression where client_id = p_client_id;
+  v_profile := duo_profile_for_xp(v_row.xp);
+  v_unlocks := v_profile->'unlocks';
+
+  if v_emote <> '' and not (v_unlocks ? v_emote) then
+    raise exception 'locked_cosmetic' using errcode = 'P0001';
+  end if;
+  if v_trail <> '' and not (v_unlocks ? v_trail) then
+    raise exception 'locked_cosmetic' using errcode = 'P0001';
+  end if;
+
+  update duo_progression
+    set emote = v_emote, trail = v_trail, updated_at = now()
+    where client_id = p_client_id;
+
+  return jsonb_build_object('ok', true, 'emote', v_emote, 'trail', v_trail);
+end;
+$function$
+
+
+
+########## duo_set_cosmetics(text,text,text,text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_set_cosmetics(p_client_id text, p_emote text, p_trail text, p_avatar text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_row duo_progression;
+  v_profile jsonb;
+  v_unlocks jsonb;
+  v_emote text := coalesce(p_emote, '');
+  v_trail text := coalesce(p_trail, '');
+  v_avatar text := coalesce(p_avatar, '');
+  v_level int;
+begin
+  if p_client_id is null or length(trim(p_client_id)) = 0 then
+    raise exception 'invalid_client' using errcode = 'P0001';
+  end if;
+
+  insert into duo_progression (client_id)
+  values (p_client_id)
+  on conflict (client_id) do nothing;
+
+  select * into v_row from duo_progression where client_id = p_client_id;
+  v_profile := duo_profile_for_xp(v_row.xp);
+  v_unlocks := v_profile->'unlocks';
+  v_level := coalesce((v_profile->>'level')::int, 1);
+
+  -- Empty means "none" and is always allowed.
+  if v_emote <> '' and not (v_unlocks ? v_emote) then
+    raise exception 'locked_cosmetic' using errcode = 'P0001';
+  end if;
+  if v_trail <> '' and not (v_unlocks ? v_trail) then
+    raise exception 'locked_cosmetic' using errcode = 'P0001';
+  end if;
+
+  -- Avatar: geçerli bir id olmalı VE seviye kilidi açık olmalı.
+  if v_avatar <> '' then
+    if not (v_avatar = any (duo_avatar_ids())) then
+      raise exception 'invalid_avatar' using errcode = 'P0001';
+    end if;
+    if v_level < duo_avatar_min_level(v_avatar) then
+      raise exception 'locked_cosmetic' using errcode = 'P0001';
+    end if;
+  end if;
+
+  update duo_progression
+    set emote = v_emote,
+        trail = v_trail,
+        avatar = v_avatar,
+        updated_at = now()
+    where client_id = p_client_id;
+
+  return jsonb_build_object(
+    'ok', true,
+    'emote', v_emote,
+    'trail', v_trail,
+    'avatar', v_avatar
+  );
+end;
+$function$
+
+
+
+########## duo_apply_cosmetics(text,text,text,text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_apply_cosmetics(p_code text, p_token text, p_emote text, p_trail text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_code text := upper(trim(p_code));
+  v_pl duo_players;
+begin
+  v_pl := duo_require_player(v_code, p_token);
+
+  update duo_players
+    set emote = coalesce(p_emote, ''),
+        trail = coalesce(p_trail, '')
+    where room_code = v_code and slot = v_pl.slot;
+
+  return jsonb_build_object('ok', true);
+end;
+$function$
+
+
+
+########## duo_apply_cosmetics(text,text,text,text,text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_apply_cosmetics(p_code text, p_token text, p_emote text, p_trail text, p_avatar text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_code text := upper(trim(p_code));
+  v_pl duo_players;
+begin
+  v_pl := duo_require_player(v_code, p_token);
+
+  update duo_players
+    set emote = coalesce(p_emote, ''),
+        trail = coalesce(p_trail, ''),
+        avatar = coalesce(p_avatar, '')
+    where room_code = v_code and slot = v_pl.slot;
+
+  return jsonb_build_object('ok', true);
+end;
+$function$
+
+
+
+########## duo_clamp_pos(numeric,numeric) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_clamp_pos(p_x numeric, p_y numeric)
+ RETURNS jsonb
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+  select jsonb_build_object(
+    'x', greatest(5, least(95, p_x)),
+    'y', greatest(7, least(93, p_y))
+  );
+$function$
+
+
+
+########## duo_objective_pair(text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_objective_pair(seed text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ IMMUTABLE
+AS $function$
+declare
+  pool jsonb := duo_objective_pool();
+  ordered jsonb;
+  first_obj jsonb;
+  second_obj jsonb;
+begin
+  -- Order the pool by hash(seed:id) so both clients agree without randomness.
+  select jsonb_agg(elem order by duo_fnv1a(seed || ':' || (elem->>'id')))
+    into ordered
+    from jsonb_array_elements(pool) as elem;
+
+  first_obj := ordered->0;
+  select elem into second_obj
+    from jsonb_array_elements(ordered) as elem
+    where elem->>'id' <> (first_obj->>'id')
+    limit 1;
+
+  if second_obj is null then second_obj := first_obj; end if;
+
+  return jsonb_build_object('p1', first_obj, 'p2', second_obj);
+end;
+$function$
+
+
+
+########## duo_random_objective(text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_random_objective(p_exclude text DEFAULT NULL::text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+AS $function$
+declare
+  pool jsonb := duo_objective_pool();
+  candidates jsonb;
+  picked jsonb;
+begin
+  select jsonb_agg(elem) into candidates
+    from jsonb_array_elements(pool) as elem
+    where p_exclude is null or (elem->>'id') <> p_exclude;
+
+  if candidates is null or jsonb_array_length(candidates) = 0 then
+    candidates := pool;
+  end if;
+
+  select elem into picked
+    from jsonb_array_elements(candidates) as elem
+    order by random()
+    limit 1;
+
+  return coalesce(picked, pool->0);
+end;
+$function$
+
+
+
+########## duo_chaos_for_round(text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_chaos_for_round(p_seed text)
+ RETURNS duo_chaos_event
+ LANGUAGE plpgsql
+ IMMUTABLE
+AS $function$
+declare
+  events duo_chaos_event[] := array[
+    'gold-rush',
+    'blackout',
+    'magnet',
+    'swap',
+    'jackpot',
+    'double-score',
+    'red-alert'
+  ]::duo_chaos_event[];
+  total int := 0;
+  i int;
+begin
+  for i in 1..char_length(p_seed) loop
+    total := total + ascii(substr(p_seed, i, 1));
+  end loop;
+  return events[(total % array_length(events, 1)) + 1];
+end;
+$function$
+
+
+
+########## duo_profile_for_xp(integer) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_profile_for_xp(p_xp integer)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ IMMUTABLE
+AS $function$
+declare
+  lvl int := greatest(1, floor(p_xp / 250.0)::int + 1);
+  ttl text;
+  unlocks jsonb;
+begin
+  ttl := case
+    when p_xp >= 1500 then 'Chaos Master'
+    when p_xp >= 1000 then 'Risk Taker'
+    when p_xp >= 650  then 'Coin Thief'
+    when p_xp >= 300  then 'Chaos Rookie'
+    else 'Rookie'
+  end;
+
+  -- Machine-readable cosmetic ids, gated by level. These MUST stay in sync
+  -- with EMOTES/TRAILS `minLevel` in lib/config.ts.
+  unlocks := jsonb_build_array('wave', 'none', 'spark');
+  if lvl >= 2 then unlocks := unlocks || '["taunt","frost"]'::jsonb; end if;
+  if lvl >= 3 then unlocks := unlocks || '["shock","ember"]'::jsonb; end if;
+  if lvl >= 4 then unlocks := unlocks || '["gg","shadow"]'::jsonb; end if;
+  if lvl >= 5 then unlocks := unlocks || '["fire"]'::jsonb; end if;
+
+  return jsonb_build_object('xp', p_xp, 'level', lvl, 'title', ttl, 'unlocks', unlocks);
+end;
+$function$
+
+
+
+########## duo_reroll_objective(text,integer) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_reroll_objective(p_room text, p_slot integer)
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_pl duo_players;
+  v_done int;
+  v_bonus int;
+  v_next jsonb;
+begin
+  select * into v_pl from duo_players where room_code = p_room and slot = p_slot for update;
+  if not found then return; end if;
+
+  v_done := coalesce(v_pl.objectives_done, 0) + 1;
+
+  -- Görev ödülü: görevin `points` alanı. Eksikse güvenli bir varsayılan (50).
+  v_bonus := coalesce((v_pl.objective->>'points')::int, 50);
+
+  v_next := duo_random_objective(v_pl.objective->>'id');
+
+  update duo_players
+    set objectives_done = v_done,
+        -- PUAN TABANLI SKOR: mevcut puanı KORU ve görev ödülünü EKLE.
+        score = coalesce(score, 0) + v_bonus,
+        round_score = coalesce(round_score, 0) + v_bonus,
+        objective = v_next,
+        coins = 0,
+        stolen = 0,
+        collected_types = '{}'::jsonb,
+        -- KALICI İLERLEME (0031): yeni görev sıfırdan başlar.
+        objective_progress = 0,
+        mission_done = false
+    where room_code = p_room and slot = p_slot;
+end;
+$function$
+
+
+
+########## duo_reset_objective_progress_on_change() ##########
+
+CREATE OR REPLACE FUNCTION public.duo_reset_objective_progress_on_change()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+begin
+  if new.objective is distinct from old.objective then
+    new.objective_progress := 0;
+  end if;
+  return new;
+end;
+$function$
+
+
+
+########## duo_fnv1a(text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_fnv1a(value text)
+ RETURNS bigint
+ LANGUAGE plpgsql
+ IMMUTABLE
+AS $function$
+declare
+  result bigint := 2166136261;
+  i int;
+  c int;
+begin
+  if value is null then return 0; end if;
+  for i in 1..char_length(value) loop
+    c := ascii(substr(value, i, 1));
+    result := result # c;
+    result := (result * 16777619) % 4294967296;
+  end loop;
+  return result;
+end;
+$function$
+
+
+
+########## duo_objective_pool() ##########
+
+CREATE OR REPLACE FUNCTION public.duo_objective_pool()
+ RETURNS jsonb
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+  select '[
+    {"id":"gold-rush","kind":"collect","label":"Collect 3 Gold","shortLabel":"3 Gold","target":3,"coinType":"gold"},
+    {"id":"blue-raid","kind":"collect","label":"Collect 2 Blue + 2 Red","shortLabel":"2 Blue + 2 Red","target":4,"coinType":"mixed","requirements":{"blue":2,"red":2}},
+    {"id":"emerald-hunt","kind":"collect","label":"Collect 3 Emerald","shortLabel":"3 Emerald","target":3,"coinType":"emerald"},
+    {"id":"resource-control","kind":"steal","label":"Steal 3 from your rival","shortLabel":"3 stolen","target":3,"coinType":"mixed"},
+    {"id":"jackpot-run","kind":"collect","label":"Collect 1 Gold + 2 Blue","shortLabel":"1 Gold + 2 Blue","target":3,"coinType":"mixed","requirements":{"gold":1,"blue":2}},
+    {"id":"red-burn","kind":"collect","label":"Collect 2 Red + 1 Emerald","shortLabel":"2 Red + 1 Emerald","target":3,"coinType":"mixed","requirements":{"red":2,"emerald":1}},
+    {"id":"blue-pressure","kind":"collect","label":"Collect 4 Blue","shortLabel":"4 Blue","target":4,"coinType":"blue"},
+    {"id":"gold-robbery","kind":"steal","label":"Steal 2 and secure 1 Gold","shortLabel":"2 stolen + 1 Gold","target":3,"coinType":"mixed","requirements":{"gold":1},"stealTarget":2}
+  ]'::jsonb;
+$function$
+
+
+
+########## duo_avatar_ids() ##########
+
+CREATE OR REPLACE FUNCTION public.duo_avatar_ids()
+ RETURNS text[]
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+  select array[
+    'rabbit', 'bear', 'fox', 'panda', 'cat', 'dog',
+    'frog', 'penguin', 'koala', 'tiger', 'unicorn', 'dragon'
+  ]::text[];
+$function$
+
+
+
+########## duo_avatar_min_level(text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_avatar_min_level(p_id text)
+ RETURNS integer
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+  select case p_id
+    when 'rabbit'  then 1
+    when 'bear'    then 1
+    when 'fox'     then 1
+    when 'panda'   then 1
+    when 'cat'     then 1
+    when 'dog'     then 1
+    when 'frog'    then 2
+    when 'penguin' then 2
+    when 'koala'   then 3
+    when 'tiger'   then 3
+    when 'unicorn' then 4
+    when 'dragon'  then 5
+    else 99
+  end;
+$function$
+

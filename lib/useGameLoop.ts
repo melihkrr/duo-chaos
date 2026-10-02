@@ -604,10 +604,6 @@ export const useGameLoop = (deps: LoopDeps) => {
     ) {
       lastSteal.current = now
       stealing = true
-      playSound('steal')
-      // EKRAN SARSINTISI: çalma anında arena'ya kısa bir "vuruş" sarsıntısı
-      // uygularız. `Battle` bu zaman damgasını izleyip CSS sınıfını tetikler.
-      shakeRef.current = { at: now, kind: 'steal' }
     }
 
     // --- Tek `setState`: hareket + rakip + toplama + çalma + yeniden doğma. ---
@@ -920,6 +916,8 @@ export const useGameLoop = (deps: LoopDeps) => {
           return
         }
         applyServerState(response, state.round)
+        playSound('steal')
+        shakeRef.current = { at: performance.now(), kind: 'steal' }
         const result = response as { state?: unknown }
         broadcast('steal', {
           by: playerId,

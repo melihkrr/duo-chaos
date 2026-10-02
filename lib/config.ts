@@ -72,7 +72,6 @@ export const MATCH_PRESENCE_GRACE_MS = 6_000
 // 52 çok hızlıydı, hedefe kilitlenmek ve topları takip etmek zorlaşıyordu.
 export const MOVE_SPEED = 38
 export const COLLECT_RADIUS = 9
-export const STEAL_RADIUS = 10
 /**
  * Oyuncu çarpışma yarıçapı (arena % birimi). GÖRSEL avatar yarıçapıyla
  * BİREBİR eşleşmelidir; aksi halde oyuncu engelin GÖRÜNEN kenarına
@@ -84,6 +83,7 @@ export const STEAL_RADIUS = 10
  * "havada" bir noktasında bloklanıyordu.
  */
 export const PLAYER_HIT_R = 2.6
+export const STEAL_RADIUS = PLAYER_HIT_R * 2
 /**
  * Rakip pozisyonu için ÜSTEL yumuşatma oranı (1/saniye). Kare hızından
  * bağımsız çalışır: her karede `alpha = 1 - exp(-k * dt)` kadar hedefe

@@ -161,12 +161,21 @@ const ARENA_Y = 50
 
 // Move the host to the centre, reset ALL coins, then stack exactly TWO Red coins
 // on the host (in range). Returns the two Red coin ids.
+//
+// IMPORTANT: the server now validates reachability from its OWN stored position
+// using a dedicated movement clock (migration 0047/0048). Writing x/y with raw
+// SQL bypasses `duo_move`, so `last_move_at` would be stale and the subsequent
+// `duo_collect` would be rejected. We therefore drive the position through the
+// REAL `duo_move` RPC (the same path the client uses) and only then stack the
+// coins on the resulting server position.
 const prepareTwoRed = async (client, code) => {
-  await client.query(`update duo_players set x = $2, y = $3 where room_code = $1 and slot = 1`, [
-    code,
-    ARENA_X,
-    ARENA_Y,
-  ])
+  await rpc(client, 'duo_move', { p_code: code, p_token: 'host-token-race', p_x: ARENA_X, p_y: ARENA_Y })
+  const { rows: posRows } = await client.query(
+    `select x, y from duo_players where room_code = $1 and slot = 1`,
+    [code],
+  )
+  const px = Number(posRows[0]?.x ?? ARENA_X)
+  const py = Number(posRows[0]?.y ?? ARENA_Y)
   // Reset every coin so no stale collected_by leaks between iterations.
   await client.query(
     `update duo_coins set collected_by = null, collected_at = 0, respawn_at = 0 where room_code = $1`,
@@ -181,7 +190,7 @@ const prepareTwoRed = async (client, code) => {
   const ids = rows.map((r) => r.coin_id)
   await client.query(
     `update duo_coins set x = $2, y = $3 where room_code = $1 and coin_id = any($4::int[])`,
-    [code, ARENA_X, ARENA_Y, ids],
+    [code, px, py, ids],
   )
   return ids
 }
@@ -299,9 +308,11 @@ const run = async () => {
     await forceRedObjective(client, code2)
     const [coinA, coinB] = await prepareTwoRed(client, code2)
     // Move the SERVER position FAR away (stale) — the client has NOT yet sent
-    // the fresh `duo_move`. This is the exact race window.
+    // the fresh `duo_move`. This is the exact race window. We also age the
+    // movement clock so the subsequent recovery `duo_move` is time-legal.
     await client.query(
-      `update duo_players set x = 0, y = 0 where room_code = $1 and slot = 1`,
+      `update duo_players set x = 0, y = 0, last_move_at = now() - interval '5 seconds'
+         where room_code = $1 and slot = 1`,
       [code2],
     )
 

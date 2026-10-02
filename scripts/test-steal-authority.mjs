@@ -1,5 +1,5 @@
 // ============================================================================
-// DUO CHAOS — steal mechanic authority + contact-guard test (migration 0042).
+// DUO CHAOS — steal mechanic authority + directional-contact test (migration 0049).
 //
 // Reproduces the reported steal problems:
 //   1. WRONG VALUE: a steal awarded +20/-20 instead of +25/-25.
@@ -10,20 +10,22 @@
 //      `stealing` frame, and the monotonic `mergeProgress` locked the
 //      over-count in.
 //
-// FIX (0042):
+// FIX (0042 + 0049):
 //   * `v_steal_score := 25` (matches single-player `STEAL_SCORE`).
-//   * Per-contact guard: `duo_players.last_steal_at` (epoch ms). A steal is
-//     rejected if the STEALER stole within `STEAL_CONTACT_GUARD_MS` (700ms).
-//     This makes a single contact produce AT MOST ONE steal and prevents
-//     mutual steals (the second caller is guarded).
+//   * Per-contact guard: `duo_players.last_stolen_at` (epoch ms). A steal is
+//     rejected if either participant was stolen from within 700ms.
+//   * A recent server-recorded approach is required, and an ambiguous head-on
+//     contact cannot be won by whichever client's request arrives first.
 //   * Victim must have `coins > 0` (else `no_coins`).
 //   * Client no longer optimistically increments `stolen`/`roundStolen`.
 //
 // This test mirrors the EXACT server guard + score rules and the client merge,
-// then drives the 6 required scenarios. No DB required.
+// then drives the 7 required scenarios. No DB required.
 //
 // Run: node scripts/test-steal-authority.mjs
 // ============================================================================
+
+import { readFile } from 'node:fs/promises'
 
 let passed = 0
 let failed = 0
@@ -40,7 +42,13 @@ const check = (label, ok, detail = '') => {
 // --- Constants mirrored from migration 0042 / lib/config.ts -----------------
 const STEAL_SCORE = 25
 const STEAL_CONTACT_GUARD_MS = 700
-const STEAL_RADIUS = 10
+const STEAL_RADIUS = 5.2
+const STEAL_MOVEMENT_FRESH_MS = 1_000
+const STEAL_APPROACH_EPSILON = 0.5
+const migration = await readFile(
+  new URL('../supabase/migrations/0049_directional_steal.sql', import.meta.url),
+  'utf8',
+)
 
 // --- Mirror of duo_steal_versioned (0042) -----------------------------------
 // Returns { ok, reason?, stealer, victim } where stealer/victim are the
@@ -73,6 +81,38 @@ const duoStealVersioned = (state, stealerSlot, now, expectedRound = null) => {
   if ((victim.coins ?? 0) <= 0) return { ok: false, reason: 'no_coins' }
   const dist = Math.hypot(victim.x - stealer.x, victim.y - stealer.y)
   if (dist > STEAL_RADIUS) return { ok: false, reason: 'too_far' }
+  if (
+    stealer.previousX === null ||
+    stealer.previousY === null ||
+    stealer.previousMovedAt === null ||
+    stealer.previousPositionAt === null ||
+    now - stealer.previousMovedAt > STEAL_MOVEMENT_FRESH_MS ||
+    now - stealer.previousPositionAt > STEAL_MOVEMENT_FRESH_MS ||
+    stealer.previousMovedAt <= stealer.previousPositionAt
+  ) {
+    return { ok: false, reason: 'not_chasing' }
+  }
+  const playerElapsed = (stealer.previousMovedAt - stealer.previousPositionAt) / 1_000
+  const approach =
+    (Math.hypot(victim.x - stealer.previousX, victim.y - stealer.previousY) - dist) /
+    playerElapsed
+  const opponentApproach =
+    victim.previousX !== null &&
+    victim.previousY !== null &&
+    victim.previousMovedAt !== null &&
+    victim.previousPositionAt !== null &&
+    now - victim.previousMovedAt <= STEAL_MOVEMENT_FRESH_MS &&
+    now - victim.previousPositionAt <= STEAL_MOVEMENT_FRESH_MS &&
+    victim.previousMovedAt > victim.previousPositionAt
+      ? (Math.hypot(stealer.x - victim.previousX, stealer.y - victim.previousY) - dist) /
+        ((victim.previousMovedAt - victim.previousPositionAt) / 1_000)
+      : 0
+  if (
+    approach <= STEAL_APPROACH_EPSILON ||
+    approach <= opponentApproach + STEAL_APPROACH_EPSILON
+  ) {
+    return { ok: false, reason: 'not_chasing' }
+  }
 
   // Apply atomically (mirrors the two UPDATEs).
   stealer.stolen = (stealer.stolen ?? 0) + 1
@@ -86,6 +126,14 @@ const duoStealVersioned = (state, stealerSlot, now, expectedRound = null) => {
   victim.roundScore = Math.max(0, (victim.roundScore ?? 0) - STEAL_SCORE)
   victim.slowedUntil = now + 400
   victim.lastStolenAt = now
+  stealer.previousX = stealer.x
+  stealer.previousY = stealer.y
+  stealer.previousMovedAt = null
+  stealer.previousPositionAt = null
+  victim.previousX = victim.x
+  victim.previousY = victim.y
+  victim.previousMovedAt = null
+  victim.previousPositionAt = null
 
   return { ok: true, stealer, victim }
 }
@@ -105,6 +153,10 @@ const makeState = (overrides = {}) => ({
       roundScore: 100,
       lastStolenAt: 0,
       slowedUntil: 0,
+      previousX: 45,
+      previousY: 50,
+      previousMovedAt: 1_000,
+      previousPositionAt: 850,
     },
     p2: {
       id: 'p2',
@@ -117,10 +169,22 @@ const makeState = (overrides = {}) => ({
       roundScore: 100,
       lastStolenAt: 0,
       slowedUntil: 0,
+      previousX: 52,
+      previousY: 50,
+      previousMovedAt: null,
+      previousPositionAt: null,
     },
   },
   ...overrides,
 })
+
+const recordApproach = (state, slot, now, previousX, previousAt = now - 100) => {
+  const player = state.players[slot]
+  player.previousX = previousX
+  player.previousY = player.y
+  player.previousMovedAt = now
+  player.previousPositionAt = previousAt
+}
 
 // --- Mirror of lib/useDuoChaos.ts mergeProgress (monotonic) -----------------
 const mergeProgress = (local, server, objectiveChanged) => {
@@ -168,45 +232,59 @@ console.log('SCENARIO 2 — Repeat the same contact: no accidental second +25')
   check('A stolen counter still 1', state.players.p1.stolen === 1)
   // After the guard window elapses, a NEW contact may steal again.
   const third = duoStealVersioned(state, 'p1', 1_800)
-  check('steal allowed after guard window', third.ok === true, third.reason)
+  check('stationary contact cannot be farmed after guard window', third.ok === false, third.reason)
+  recordApproach(state, 'p1', 1_800, 45)
+  const fourth = duoStealVersioned(state, 'p1', 1_800)
+  check('a fresh approach allows a new steal', fourth.ok === true, fourth.reason)
   check('A stolen counter now 2', state.players.p1.stolen === 2)
 }
 
-console.log('SCENARIO 3 — Both players touch simultaneously: exactly one stealer')
+console.log('SCENARIO 3 — Two clients touch simultaneously: the chaser wins regardless of request order')
 {
-  const state = makeState()
-  // Both clients fire at the same server instant (same `now`).
-  const a = duoStealVersioned(state, 'p1', 2_000)
-  const b = duoStealVersioned(state, 'p2', 2_000)
-  const successes = [a, b].filter((r) => r.ok).length
-  check('exactly one steal succeeds', successes === 1, `successes=${successes}`)
-  check('the other is rejected', [a, b].some((r) => r.ok === false))
-  // Net score must NOT be zero-sum-neutral (i.e. not both stealing).
-  const netA = state.players.p1.score
-  const netB = state.players.p2.score
-  check('scores are not mutually neutralized', netA !== netB, `A=${netA} B=${netB}`)
-  check('exactly one player has stolen=1', [state.players.p1.stolen, state.players.p2.stolen].filter((s) => s === 1).length === 1)
+  for (const requestOrder of [['p1', 'p2'], ['p2', 'p1']]) {
+    const state = makeState()
+    state.players.p1.x = 50
+    state.players.p2.x = 54.5
+    recordApproach(state, 'p1', 2_000, 45, 1_900)
+    recordApproach(state, 'p2', 2_000, 54, 1_900)
+    const results = {}
+    for (const slot of requestOrder) results[slot] = duoStealVersioned(state, slot, 2_000)
+    check(`only the pursuer steals (${requestOrder.join(' then ')})`, results.p1.ok === true && results.p2.ok === false)
+    check('pursuer gains exactly +25', state.players.p1.score === 125)
+    check('fleeing rival loses exactly -25', state.players.p2.score === 75)
+  }
+
+  for (const requestOrder of [['p1', 'p2'], ['p2', 'p1']]) {
+    const state = makeState()
+    recordApproach(state, 'p1', 2_000, 49, 1_900)
+    recordApproach(state, 'p2', 2_000, 53, 1_900)
+    const results = {}
+    for (const slot of requestOrder) results[slot] = duoStealVersioned(state, slot, 2_000)
+    check(`ambiguous head-on contact has no network-order winner (${requestOrder.join(' then ')})`, results.p1.ok === false && results.p2.ok === false)
+    check('ambiguous contact leaves both scores unchanged', state.players.p1.score === 100 && state.players.p2.score === 100)
+  }
 }
 
-console.log('SCENARIO 4 — Repeated collisions: no rapid duplicate steal farming')
+console.log('SCENARIO 4 — Repeated collisions: new steals require a fresh approach')
 {
   const state = makeState()
   let successes = 0
   // Simulate 60 frames over 1 second (16ms apart) while in contact.
   for (let frame = 0; frame < 60; frame += 1) {
     const now = 3_000 + frame * 16
+    if (frame === 0) recordApproach(state, 'p1', now, 45, now - 100)
+    if (frame === 44) recordApproach(state, 'p1', now, 49.9, now - 16)
     const res = duoStealVersioned(state, 'p1', now)
     if (res.ok) successes += 1
   }
-  // 1000ms / 700ms guard → at most 2 steals (at t=0 and t=700).
-  check('at most 2 steals in 1s of contact', successes <= 2, `successes=${successes}`)
-  check('at least 1 steal in 1s of contact', successes >= 1, `successes=${successes}`)
+  check('one fresh approach permits at most one additional steal', successes === 2, `successes=${successes}`)
   check('stolen counter matches successes', state.players.p1.stolen === successes)
 }
 
 console.log('SCENARIO 5 — Both clients converge to the same final scores')
 {
   const state = makeState()
+  recordApproach(state, 'p1', 4_000, 45)
   duoStealVersioned(state, 'p1', 4_000)
   // Server authoritative rows.
   const serverP1 = { ...state.players.p1 }
@@ -229,6 +307,7 @@ console.log('SCENARIO 6 — Steal does not interfere with movement or coin colle
   const ay = state.players.p1.y
   const bx = state.players.p2.x
   const by = state.players.p2.y
+  recordApproach(state, 'p1', 5_000, 45)
   duoStealVersioned(state, 'p1', 5_000)
   check('stealer position unchanged', state.players.p1.x === ax && state.players.p1.y === ay)
   check('victim position unchanged', state.players.p2.x === bx && state.players.p2.y === by)
@@ -240,6 +319,7 @@ console.log('SCENARIO 6 — Steal does not interfere with movement or coin colle
   const drained = makeState()
   drained.players.p2.score = 10
   drained.players.p2.coins = 1
+  recordApproach(drained, 'p1', 6_000, 45)
   duoStealVersioned(drained, 'p1', 6_000)
   check('victim score floors at 0 (never negative)', drained.players.p2.score === 0, `score=${drained.players.p2.score}`)
 }
@@ -253,6 +333,28 @@ console.log('SCENARIO 7 — Empty victim cannot be stolen from')
   check('rejected with no_coins', res.reason === 'no_coins', res.reason)
   check('stealer score unchanged', state.players.p1.score === 100)
   check('victim score unchanged', state.players.p2.score === 100)
+}
+
+console.log('SCENARIO 8 — Being nearby is not enough: steal requires avatar contact')
+{
+  const state = makeState()
+  state.players.p2.x = 57
+  recordApproach(state, 'p1', 8_000, 45)
+  const result = duoStealVersioned(state, 'p1', 8_000)
+  check('steal rejected outside the 5.2-unit contact radius', result.ok === false && result.reason === 'too_far', result.reason)
+  check('no score is transferred without contact', state.players.p1.score === 100 && state.players.p2.score === 100)
+}
+
+console.log('SCENARIO 9 — SQL migration enforces server-recorded directional contact')
+{
+  const config = await readFile(new URL('../lib/config.ts', import.meta.url), 'utf8')
+  check('client radius tracks both avatar collision radii', config.includes('STEAL_RADIUS = PLAYER_HIT_R * 2'))
+  check('server radius matches the avatar contact boundary', migration.includes('if v_dist > 5.2 then'))
+  check('previous positions are captured by a database trigger', migration.includes('duo_players_track_previous_position'))
+  check('both players are locked before contact validation', /order by slot\s+for update/.test(migration))
+  check('stale approach snapshots are rejected', migration.includes("previous_position_at < v_now - interval '1 second'"))
+  check('head-on contact cannot be awarded by RPC arrival order', migration.includes('v_player_approach <= v_opponent_approach + 0.5'))
+  check('only public steal RPC remains executable', migration.includes('grant execute on function public.duo_steal_versioned'))
 }
 
 console.log(`\n${failed === 0 ? '\u2714 ALL CHECKS PASSED' : '\u2718 SOME CHECKS FAILED'} \u2014 ${passed} passed, ${failed} failed`)

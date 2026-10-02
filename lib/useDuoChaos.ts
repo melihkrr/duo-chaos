@@ -558,7 +558,7 @@ export const useDuoChaos = () => {
     return serverTs - serverOffsetRef.current
   }, [])
 
-  const { state, setState, setPhase, resetRound, resetMatch, updatePlayer } = game
+  const { state, setState, setPhase, resetRound, resetMatch, updatePlayer, moveLocal } = game
 
   // En güncel `state`'e interval/effect içinden erişmek için. Skor heartbeat'i
   // gibi periyodik işler, effect'i her skor değişiminde yeniden kurmadan güncel
@@ -743,6 +743,21 @@ export const useDuoChaos = () => {
                 p_y: y,
               })
               if (!isRpcSuccess(response)) {
+                // ANTI-CHEAT UZLAŞMASI: sunucu konumu erişilemez bulduysa
+                // (`too_fast`) yerel oyuncuyu sunucunun YETKİLİ konumuna
+                // oturturuz. Aksi halde istemci reddedilen konumu göndermeye
+                // devam eder ve sunucunun depoladığı konumdan giderek uzaklaşır
+                // → kalıcı desenkron. `too_fast` kalıcı bir reddir (retry.ts),
+                // bu yüzden burada yeniden denemeyiz.
+                const reason = (response as { reason?: unknown }).reason
+                if (reason === 'too_fast') {
+                  const ax = (response as { x?: unknown }).x
+                  const ay = (response as { y?: unknown }).y
+                  if (typeof ax === 'number' && typeof ay === 'number') {
+                    moveLocal(ax, ay)
+                  }
+                  return
+                }
                 // Mantıksal red (ör. `not_ready`): yeniden denemek anlamsızsa
                 // fırlatmayız; `isTransientRpcFailure` ile ayırt ederiz.
                 if (!isTransientRpcFailure(response)) return
@@ -755,7 +770,7 @@ export const useDuoChaos = () => {
         (error) => console.warn('Failed to sync player position', error),
       )
     },
-    [room],
+    [room, moveLocal],
   )
 
   const runPositionedActions = useCallback(
@@ -775,6 +790,20 @@ export const useDuoChaos = () => {
                 p_y: y,
               })
               if (!isRpcSuccess(response)) {
+                // ANTI-CHEAT UZLAŞMASI: `too_fast` reddinde yerel oyuncuyu
+                // sunucunun yetkili konumuna oturturuz ve aksiyonu YİNE DE
+                // çalıştırırız. Toplama/çalma mesafesi sunucuda SUNUCU-DEPOLU
+                // konuma göre ölçüldüğü için (0047) bu güvenlidir; aksiyonu
+                // iptal etmek geçerli bir toplamayı kaybettirebilirdi.
+                const reason = (response as { reason?: unknown }).reason
+                if (reason === 'too_fast') {
+                  const ax = (response as { x?: unknown }).x
+                  const ay = (response as { y?: unknown }).y
+                  if (typeof ax === 'number' && typeof ay === 'number') {
+                    moveLocal(ax, ay)
+                  }
+                  return
+                }
                 throw new Error(`duo_move rejected before gameplay action: ${JSON.stringify(response)}`)
               }
             },
@@ -783,7 +812,7 @@ export const useDuoChaos = () => {
           ),
         positionIncludedInAction,
       ),
-    [room],
+    [room, moveLocal],
   )
 
   const advancePhase = useCallback(

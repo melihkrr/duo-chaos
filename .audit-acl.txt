@@ -1,0 +1,64 @@
+connected via aws-0-us-east-1.pooler.supabase.com:6543
+
+===== FUNCTION_ACL =====
+{"proname":"duo_advance_phase","args":"p_code text, p_token text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_apply_cosmetics","args":"p_code text, p_token text, p_emote text, p_trail text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_apply_cosmetics","args":"p_code text, p_token text, p_emote text, p_trail text, p_avatar text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_avatar_ids","args":"","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_avatar_min_level","args":"p_id text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_award_progress","args":"p_client_id text, p_xp integer","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_chaos_for_round","args":"p_seed text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_clamp_pos","args":"p_x numeric, p_y numeric","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_cleanup","args":"","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_coin_value","args":"p_type duo_coin_type, p_chaos duo_chaos_event, p_objective jsonb","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_collect","args":"p_code text, p_token text, p_coin_id integer","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_collect_batch","args":"p_code text, p_token text, p_coin_ids integer[], p_x numeric, p_y numeric, p_expected_objectives_done integer, p_expected_round integer","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_create_room","args":"p_code text, p_token text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_create_room","args":"p_code text, p_token text, p_name text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_fnv1a","args":"value text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_get_progress","args":"p_client_id text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_join_room","args":"p_code text, p_token text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_join_room","args":"p_code text, p_token text, p_name text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_leave","args":"p_code text, p_token text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_mission_progress","args":"p_objective jsonb, p_collected jsonb, p_stolen integer, p_coins integer","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_mission_satisfied","args":"p_objective jsonb, p_collected jsonb, p_stolen integer, p_coins integer","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_move","args":"p_code text, p_token text, p_x numeric, p_y numeric","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_next_round","args":"p_code text, p_token text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_objective_pair","args":"seed text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_objective_pool","args":"","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_profile_for_xp","args":"p_xp integer","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_public_state","args":"p_code text, p_token text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_random_objective","args":"p_exclude text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_rematch","args":"p_code text, p_token text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_require_player","args":"p_code text, p_token text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_reroll_objective","args":"p_room text, p_slot integer","acl":"=X/postgres | postgres=X/postgres | service_role=X/postgres"}
+{"proname":"duo_reroll_objective_carry","args":"p_room text, p_slot integer, p_collected jsonb, p_stolen integer, p_coins integer","acl":"=X/postgres | postgres=X/postgres | service_role=X/postgres"}
+{"proname":"duo_reset_objective_progress_on_change","args":"","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_respawn_coins","args":"p_room text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_scout","args":"p_code text, p_token text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_set_cosmetics","args":"p_client_id text, p_emote text, p_trail text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_set_cosmetics","args":"p_client_id text, p_emote text, p_trail text, p_avatar text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_set_name","args":"p_code text, p_token text, p_name text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_spawn_coins","args":"p_room text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_spawn_wave","args":"p_room text, p_round integer, p_wave integer","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_start_round","args":"p_code text, p_token text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_steal","args":"p_code text, p_token text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_steal_versioned","args":"p_code text, p_token text, p_expected_objectives_done integer, p_expected_round integer","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_sync_coins","args":"p_code text, p_token text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+{"proname":"duo_tick","args":"p_code text, p_token text","acl":"=X/postgres | postgres=X/postgres | anon=X/postgres | authenticated=X/postgres | service_role=X/postgres"}
+
+===== TABLE_ACL =====
+{"table_name":"duo_coins","acl":"postgres=arwdDxtm/postgres | service_role=arwdDxtm/postgres"}
+{"table_name":"duo_events","acl":"postgres=arwdDxtm/postgres | service_role=arwdDxtm/postgres"}
+{"table_name":"duo_players","acl":"postgres=arwdDxtm/postgres | service_role=arwdDxtm/postgres"}
+{"table_name":"duo_progression","acl":"postgres=arwdDxtm/postgres | service_role=arwdDxtm/postgres"}
+{"table_name":"duo_rooms","acl":"postgres=arwdDxtm/postgres | service_role=arwdDxtm/postgres"}
+
+===== POLICIES =====
+
+===== PUBLICATION_TABLES =====
+
+===== TRIGGERS =====
+{"table_name":"duo_players","trigger_name":"duo_reset_objective_progress_on_change","action_timing":"BEFORE","event_manipulation":"UPDATE"}
+
+✔ acl audit complete

@@ -55,7 +55,7 @@ supabase db push
 ### Option C — SQL editor
 
 Paste each file into the Supabase SQL editor in filename order, through the
-latest migration (`0045`).
+latest migration (`0049`).
 
 > **Important:** the migrations must actually be applied to the project the
 > client points at. If they are not, every RPC call fails with
@@ -165,5 +165,14 @@ The client reads these variables (see [`.env.example`](../.env.example)):
 `pg_cron` if available:
 
 ```sql
-select cron.schedule('duo-cleanup', '*/15 * * * *', $$select duo_cleanup()$$);
+create extension if not exists pg_cron with schema pg_catalog;
+select cron.schedule(
+  'duo-cleanup',
+  '*/15 * * * *',
+  'select public.duo_cleanup();'
+);
 ```
+
+The configured Supabase project has this job enabled: it runs every 15 minutes
+and removes rooms whose `updated_at` is older than 2 hours. Scheduling by job
+name updates the existing `duo-cleanup` job instead of creating duplicates.

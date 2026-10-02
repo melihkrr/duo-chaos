@@ -1,0 +1,270 @@
+✔ connected via pooler aws-0-us-east-1 (aws-0-us-east-1.pooler.supabase.com:6543)
+
+===== TABLES =====
+{"table_name":"duo_coins"}
+{"table_name":"duo_events"}
+{"table_name":"duo_players"}
+{"table_name":"duo_progression"}
+{"table_name":"duo_rooms"}
+
+===== COLUMNS =====
+{"table_name":"duo_coins","column_name":"room_code","data_type":"text","is_nullable":"NO","column_default":null}
+{"table_name":"duo_coins","column_name":"coin_id","data_type":"integer","is_nullable":"NO","column_default":null}
+{"table_name":"duo_coins","column_name":"x","data_type":"numeric","is_nullable":"NO","column_default":null}
+{"table_name":"duo_coins","column_name":"y","data_type":"numeric","is_nullable":"NO","column_default":null}
+{"table_name":"duo_coins","column_name":"type","data_type":"USER-DEFINED","is_nullable":"NO","column_default":null}
+{"table_name":"duo_coins","column_name":"collected_by","data_type":"text","is_nullable":"YES","column_default":null}
+{"table_name":"duo_coins","column_name":"collected_at","data_type":"bigint","is_nullable":"NO","column_default":"0"}
+{"table_name":"duo_coins","column_name":"respawn_at","data_type":"bigint","is_nullable":"NO","column_default":"0"}
+{"table_name":"duo_events","column_name":"id","data_type":"bigint","is_nullable":"NO","column_default":"nextval('duo_events_id_seq'::regclass)"}
+{"table_name":"duo_events","column_name":"room_code","data_type":"text","is_nullable":"NO","column_default":null}
+{"table_name":"duo_events","column_name":"round","data_type":"integer","is_nullable":"NO","column_default":null}
+{"table_name":"duo_events","column_name":"event","data_type":"USER-DEFINED","is_nullable":"NO","column_default":null}
+{"table_name":"duo_events","column_name":"started_at","data_type":"bigint","is_nullable":"NO","column_default":null}
+{"table_name":"duo_events","column_name":"ends_at","data_type":"bigint","is_nullable":"NO","column_default":null}
+{"table_name":"duo_events","column_name":"created_at","data_type":"timestamp with time zone","is_nullable":"NO","column_default":"now()"}
+{"table_name":"duo_players","column_name":"room_code","data_type":"text","is_nullable":"NO","column_default":null}
+{"table_name":"duo_players","column_name":"slot","data_type":"integer","is_nullable":"NO","column_default":null}
+{"table_name":"duo_players","column_name":"player_id","data_type":"text","is_nullable":"NO","column_default":null}
+{"table_name":"duo_players","column_name":"token","data_type":"text","is_nullable":"NO","column_default":null}
+{"table_name":"duo_players","column_name":"name","data_type":"text","is_nullable":"NO","column_default":"''::text"}
+{"table_name":"duo_players","column_name":"x","data_type":"numeric","is_nullable":"NO","column_default":"50"}
+{"table_name":"duo_players","column_name":"y","data_type":"numeric","is_nullable":"NO","column_default":"50"}
+{"table_name":"duo_players","column_name":"coins","data_type":"integer","is_nullable":"NO","column_default":"0"}
+{"table_name":"duo_players","column_name":"stolen","data_type":"integer","is_nullable":"NO","column_default":"0"}
+{"table_name":"duo_players","column_name":"collected_types","data_type":"jsonb","is_nullable":"NO","column_default":"'{}'::jsonb"}
+{"table_name":"duo_players","column_name":"score","data_type":"integer","is_nullable":"NO","column_default":"0"}
+{"table_name":"duo_players","column_name":"round_score","data_type":"integer","is_nullable":"NO","column_default":"0"}
+{"table_name":"duo_players","column_name":"total_score","data_type":"integer","is_nullable":"NO","column_default":"0"}
+{"table_name":"duo_players","column_name":"objective","data_type":"jsonb","is_nullable":"YES","column_default":null}
+{"table_name":"duo_players","column_name":"mission_done","data_type":"boolean","is_nullable":"NO","column_default":"false"}
+{"table_name":"duo_players","column_name":"rematch","data_type":"boolean","is_nullable":"NO","column_default":"false"}
+{"table_name":"duo_players","column_name":"scout_charges","data_type":"integer","is_nullable":"NO","column_default":"2"}
+{"table_name":"duo_players","column_name":"scout_used_at","data_type":"bigint","is_nullable":"NO","column_default":"0"}
+{"table_name":"duo_players","column_name":"revealed_hint","data_type":"jsonb","is_nullable":"YES","column_default":null}
+{"table_name":"duo_players","column_name":"emote","data_type":"text","is_nullable":"NO","column_default":"''::text"}
+{"table_name":"duo_players","column_name":"trail","data_type":"text","is_nullable":"NO","column_default":"''::text"}
+{"table_name":"duo_players","column_name":"slowed_until","data_type":"bigint","is_nullable":"NO","column_default":"0"}
+{"table_name":"duo_players","column_name":"last_seen_at","data_type":"timestamp with time zone","is_nullable":"NO","column_default":"now()"}
+{"table_name":"duo_players","column_name":"created_at","data_type":"timestamp with time zone","is_nullable":"NO","column_default":"now()"}
+{"table_name":"duo_players","column_name":"objectives_done","data_type":"integer","is_nullable":"NO","column_default":"0"}
+{"table_name":"duo_players","column_name":"round_coins","data_type":"integer","is_nullable":"NO","column_default":"0"}
+{"table_name":"duo_players","column_name":"round_stolen","data_type":"integer","is_nullable":"NO","column_default":"0"}
+{"table_name":"duo_players","column_name":"avatar","data_type":"text","is_nullable":"NO","column_default":"''::text"}
+{"table_name":"duo_players","column_name":"objective_progress","data_type":"integer","is_nullable":"NO","column_default":"0"}
+{"table_name":"duo_players","column_name":"last_stolen_at","data_type":"bigint","is_nullable":"NO","column_default":"0"}
+{"table_name":"duo_progression","column_name":"client_id","data_type":"text","is_nullable":"NO","column_default":null}
+{"table_name":"duo_progression","column_name":"xp","data_type":"integer","is_nullable":"NO","column_default":"0"}
+{"table_name":"duo_progression","column_name":"level","data_type":"integer","is_nullable":"NO","column_default":"1"}
+{"table_name":"duo_progression","column_name":"title","data_type":"text","is_nullable":"NO","column_default":"'Rookie'::text"}
+{"table_name":"duo_progression","column_name":"unlocks","data_type":"jsonb","is_nullable":"NO","column_default":"'[]'::jsonb"}
+{"table_name":"duo_progression","column_name":"emote","data_type":"text","is_nullable":"NO","column_default":"''::text"}
+{"table_name":"duo_progression","column_name":"trail","data_type":"text","is_nullable":"NO","column_default":"''::text"}
+{"table_name":"duo_progression","column_name":"updated_at","data_type":"timestamp with time zone","is_nullable":"NO","column_default":"now()"}
+{"table_name":"duo_progression","column_name":"avatar","data_type":"text","is_nullable":"NO","column_default":"''::text"}
+{"table_name":"duo_rooms","column_name":"code","data_type":"text","is_nullable":"NO","column_default":null}
+{"table_name":"duo_rooms","column_name":"phase","data_type":"USER-DEFINED","is_nullable":"NO","column_default":"'lobby'::duo_phase"}
+{"table_name":"duo_rooms","column_name":"round","data_type":"integer","is_nullable":"NO","column_default":"1"}
+{"table_name":"duo_rooms","column_name":"countdown_ends_at","data_type":"bigint","is_nullable":"NO","column_default":"0"}
+{"table_name":"duo_rooms","column_name":"ends_at","data_type":"bigint","is_nullable":"NO","column_default":"0"}
+{"table_name":"duo_rooms","column_name":"chaos_event","data_type":"USER-DEFINED","is_nullable":"YES","column_default":null}
+{"table_name":"duo_rooms","column_name":"chaos_ends_at","data_type":"bigint","is_nullable":"NO","column_default":"0"}
+{"table_name":"duo_rooms","column_name":"winner","data_type":"text","is_nullable":"YES","column_default":null}
+{"table_name":"duo_rooms","column_name":"round_scores","data_type":"jsonb","is_nullable":"NO","column_default":"'{}'::jsonb"}
+{"table_name":"duo_rooms","column_name":"match_scores","data_type":"jsonb","is_nullable":"NO","column_default":"'{}'::jsonb"}
+{"table_name":"duo_rooms","column_name":"round_seed","data_type":"text","is_nullable":"NO","column_default":"''::text"}
+{"table_name":"duo_rooms","column_name":"updated_at","data_type":"timestamp with time zone","is_nullable":"NO","column_default":"now()"}
+{"table_name":"duo_rooms","column_name":"created_at","data_type":"timestamp with time zone","is_nullable":"NO","column_default":"now()"}
+
+===== CONSTRAINTS =====
+{"table_name":"duo_coins","constraint_name":"2200_17910_1_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_coins","constraint_name":"2200_17910_2_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_coins","constraint_name":"2200_17910_3_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_coins","constraint_name":"2200_17910_4_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_coins","constraint_name":"2200_17910_5_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_coins","constraint_name":"2200_17910_7_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_coins","constraint_name":"2200_17910_8_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_coins","constraint_name":"duo_coins_room_code_fkey","constraint_type":"FOREIGN KEY","column_name":"room_code","foreign_table":"duo_rooms","foreign_column":"code"}
+{"table_name":"duo_coins","constraint_name":"duo_coins_pkey","constraint_type":"PRIMARY KEY","column_name":"room_code","foreign_table":"duo_coins","foreign_column":"coin_id"}
+{"table_name":"duo_coins","constraint_name":"duo_coins_pkey","constraint_type":"PRIMARY KEY","column_name":"room_code","foreign_table":"duo_coins","foreign_column":"room_code"}
+{"table_name":"duo_coins","constraint_name":"duo_coins_pkey","constraint_type":"PRIMARY KEY","column_name":"coin_id","foreign_table":"duo_coins","foreign_column":"coin_id"}
+{"table_name":"duo_coins","constraint_name":"duo_coins_pkey","constraint_type":"PRIMARY KEY","column_name":"coin_id","foreign_table":"duo_coins","foreign_column":"room_code"}
+{"table_name":"duo_events","constraint_name":"2200_17924_1_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_events","constraint_name":"2200_17924_2_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_events","constraint_name":"2200_17924_3_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_events","constraint_name":"2200_17924_4_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_events","constraint_name":"2200_17924_5_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_events","constraint_name":"2200_17924_6_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_events","constraint_name":"2200_17924_7_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_events","constraint_name":"duo_events_room_code_fkey","constraint_type":"FOREIGN KEY","column_name":"room_code","foreign_table":"duo_rooms","foreign_column":"code"}
+{"table_name":"duo_events","constraint_name":"duo_events_pkey","constraint_type":"PRIMARY KEY","column_name":"id","foreign_table":"duo_events","foreign_column":"id"}
+{"table_name":"duo_players","constraint_name":"2200_17874_10_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"2200_17874_11_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"2200_17874_12_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"2200_17874_13_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"2200_17874_15_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"2200_17874_16_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"2200_17874_17_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"2200_17874_18_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"2200_17874_1_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"2200_17874_20_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"2200_17874_21_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"2200_17874_22_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"2200_17874_23_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"2200_17874_24_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"2200_17874_25_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"2200_17874_26_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"2200_17874_27_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"2200_17874_28_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"2200_17874_29_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"2200_17874_2_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"2200_17874_30_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"2200_17874_3_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"2200_17874_4_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"2200_17874_5_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"2200_17874_6_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"2200_17874_7_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"2200_17874_8_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"2200_17874_9_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_players","constraint_name":"duo_players_slot_check","constraint_type":"CHECK","column_name":null,"foreign_table":"duo_players","foreign_column":"slot"}
+{"table_name":"duo_players","constraint_name":"duo_players_room_code_fkey","constraint_type":"FOREIGN KEY","column_name":"room_code","foreign_table":"duo_rooms","foreign_column":"code"}
+{"table_name":"duo_players","constraint_name":"duo_players_pkey","constraint_type":"PRIMARY KEY","column_name":"room_code","foreign_table":"duo_players","foreign_column":"slot"}
+{"table_name":"duo_players","constraint_name":"duo_players_pkey","constraint_type":"PRIMARY KEY","column_name":"room_code","foreign_table":"duo_players","foreign_column":"room_code"}
+{"table_name":"duo_players","constraint_name":"duo_players_pkey","constraint_type":"PRIMARY KEY","column_name":"slot","foreign_table":"duo_players","foreign_column":"room_code"}
+{"table_name":"duo_players","constraint_name":"duo_players_pkey","constraint_type":"PRIMARY KEY","column_name":"slot","foreign_table":"duo_players","foreign_column":"slot"}
+{"table_name":"duo_players","constraint_name":"duo_players_room_code_player_id_key","constraint_type":"UNIQUE","column_name":"player_id","foreign_table":"duo_players","foreign_column":"room_code"}
+{"table_name":"duo_players","constraint_name":"duo_players_room_code_player_id_key","constraint_type":"UNIQUE","column_name":"room_code","foreign_table":"duo_players","foreign_column":"player_id"}
+{"table_name":"duo_players","constraint_name":"duo_players_room_code_player_id_key","constraint_type":"UNIQUE","column_name":"room_code","foreign_table":"duo_players","foreign_column":"room_code"}
+{"table_name":"duo_players","constraint_name":"duo_players_room_code_player_id_key","constraint_type":"UNIQUE","column_name":"player_id","foreign_table":"duo_players","foreign_column":"player_id"}
+{"table_name":"duo_players","constraint_name":"duo_players_room_code_token_key","constraint_type":"UNIQUE","column_name":"token","foreign_table":"duo_players","foreign_column":"room_code"}
+{"table_name":"duo_players","constraint_name":"duo_players_room_code_token_key","constraint_type":"UNIQUE","column_name":"room_code","foreign_table":"duo_players","foreign_column":"room_code"}
+{"table_name":"duo_players","constraint_name":"duo_players_room_code_token_key","constraint_type":"UNIQUE","column_name":"room_code","foreign_table":"duo_players","foreign_column":"token"}
+{"table_name":"duo_players","constraint_name":"duo_players_room_code_token_key","constraint_type":"UNIQUE","column_name":"token","foreign_table":"duo_players","foreign_column":"token"}
+{"table_name":"duo_progression","constraint_name":"2200_17939_1_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_progression","constraint_name":"2200_17939_2_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_progression","constraint_name":"2200_17939_3_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_progression","constraint_name":"2200_17939_4_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_progression","constraint_name":"2200_17939_5_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_progression","constraint_name":"2200_17939_6_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_progression","constraint_name":"2200_17939_7_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_progression","constraint_name":"2200_17939_8_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_progression","constraint_name":"2200_17939_9_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_progression","constraint_name":"duo_progression_pkey","constraint_type":"PRIMARY KEY","column_name":"client_id","foreign_table":"duo_progression","foreign_column":"client_id"}
+{"table_name":"duo_rooms","constraint_name":"2200_17857_10_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_rooms","constraint_name":"2200_17857_11_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_rooms","constraint_name":"2200_17857_12_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_rooms","constraint_name":"2200_17857_13_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_rooms","constraint_name":"2200_17857_1_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_rooms","constraint_name":"2200_17857_2_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_rooms","constraint_name":"2200_17857_3_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_rooms","constraint_name":"2200_17857_4_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_rooms","constraint_name":"2200_17857_5_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_rooms","constraint_name":"2200_17857_7_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_rooms","constraint_name":"2200_17857_9_not_null","constraint_type":"CHECK","column_name":null,"foreign_table":null,"foreign_column":null}
+{"table_name":"duo_rooms","constraint_name":"duo_rooms_pkey","constraint_type":"PRIMARY KEY","column_name":"code","foreign_table":"duo_rooms","foreign_column":"code"}
+
+===== INDEXES =====
+{"tablename":"duo_coins","indexname":"duo_coins_pkey","indexdef":"CREATE UNIQUE INDEX duo_coins_pkey ON public.duo_coins USING btree (room_code, coin_id)"}
+{"tablename":"duo_events","indexname":"duo_events_pkey","indexdef":"CREATE UNIQUE INDEX duo_events_pkey ON public.duo_events USING btree (id)"}
+{"tablename":"duo_events","indexname":"duo_events_room_idx","indexdef":"CREATE INDEX duo_events_room_idx ON public.duo_events USING btree (room_code, round)"}
+{"tablename":"duo_players","indexname":"duo_players_pkey","indexdef":"CREATE UNIQUE INDEX duo_players_pkey ON public.duo_players USING btree (room_code, slot)"}
+{"tablename":"duo_players","indexname":"duo_players_room_code_player_id_key","indexdef":"CREATE UNIQUE INDEX duo_players_room_code_player_id_key ON public.duo_players USING btree (room_code, player_id)"}
+{"tablename":"duo_players","indexname":"duo_players_room_code_token_key","indexdef":"CREATE UNIQUE INDEX duo_players_room_code_token_key ON public.duo_players USING btree (room_code, token)"}
+{"tablename":"duo_players","indexname":"duo_players_token_idx","indexdef":"CREATE INDEX duo_players_token_idx ON public.duo_players USING btree (token)"}
+{"tablename":"duo_progression","indexname":"duo_progression_pkey","indexdef":"CREATE UNIQUE INDEX duo_progression_pkey ON public.duo_progression USING btree (client_id)"}
+{"tablename":"duo_rooms","indexname":"duo_rooms_pkey","indexdef":"CREATE UNIQUE INDEX duo_rooms_pkey ON public.duo_rooms USING btree (code)"}
+
+===== FUNCTIONS =====
+{"proname":"duo_advance_phase","args":"p_code text, p_token text","returns":"jsonb","security_definer":true}
+{"proname":"duo_apply_cosmetics","args":"p_code text, p_token text, p_emote text, p_trail text","returns":"jsonb","security_definer":true}
+{"proname":"duo_apply_cosmetics","args":"p_code text, p_token text, p_emote text, p_trail text, p_avatar text","returns":"jsonb","security_definer":true}
+{"proname":"duo_avatar_ids","args":"","returns":"text[]","security_definer":false}
+{"proname":"duo_avatar_min_level","args":"p_id text","returns":"integer","security_definer":false}
+{"proname":"duo_award_progress","args":"p_client_id text, p_xp integer","returns":"jsonb","security_definer":true}
+{"proname":"duo_chaos_for_round","args":"p_seed text","returns":"duo_chaos_event","security_definer":false}
+{"proname":"duo_clamp_pos","args":"p_x numeric, p_y numeric","returns":"jsonb","security_definer":false}
+{"proname":"duo_cleanup","args":"","returns":"integer","security_definer":true}
+{"proname":"duo_coin_value","args":"p_type duo_coin_type, p_chaos duo_chaos_event, p_objective jsonb","returns":"integer","security_definer":false}
+{"proname":"duo_collect","args":"p_code text, p_token text, p_coin_id integer","returns":"jsonb","security_definer":true}
+{"proname":"duo_collect_batch","args":"p_code text, p_token text, p_coin_ids integer[], p_x numeric, p_y numeric, p_expected_objectives_done integer, p_expected_round integer","returns":"jsonb","security_definer":true}
+{"proname":"duo_create_room","args":"p_code text, p_token text, p_name text","returns":"jsonb","security_definer":true}
+{"proname":"duo_create_room","args":"p_code text, p_token text","returns":"jsonb","security_definer":true}
+{"proname":"duo_fnv1a","args":"value text","returns":"bigint","security_definer":false}
+{"proname":"duo_get_progress","args":"p_client_id text","returns":"jsonb","security_definer":true}
+{"proname":"duo_join_room","args":"p_code text, p_token text","returns":"jsonb","security_definer":true}
+{"proname":"duo_join_room","args":"p_code text, p_token text, p_name text","returns":"jsonb","security_definer":true}
+{"proname":"duo_leave","args":"p_code text, p_token text","returns":"jsonb","security_definer":true}
+{"proname":"duo_mission_progress","args":"p_objective jsonb, p_collected jsonb, p_stolen integer, p_coins integer","returns":"integer","security_definer":false}
+{"proname":"duo_mission_satisfied","args":"p_objective jsonb, p_collected jsonb, p_stolen integer, p_coins integer","returns":"boolean","security_definer":false}
+{"proname":"duo_move","args":"p_code text, p_token text, p_x numeric, p_y numeric","returns":"jsonb","security_definer":true}
+{"proname":"duo_next_round","args":"p_code text, p_token text","returns":"jsonb","security_definer":true}
+{"proname":"duo_objective_pair","args":"seed text","returns":"jsonb","security_definer":false}
+{"proname":"duo_objective_pool","args":"","returns":"jsonb","security_definer":false}
+{"proname":"duo_profile_for_xp","args":"p_xp integer","returns":"jsonb","security_definer":false}
+{"proname":"duo_public_state","args":"p_code text, p_token text","returns":"jsonb","security_definer":true}
+{"proname":"duo_random_objective","args":"p_exclude text","returns":"jsonb","security_definer":false}
+{"proname":"duo_rematch","args":"p_code text, p_token text","returns":"jsonb","security_definer":true}
+{"proname":"duo_require_player","args":"p_code text, p_token text","returns":"duo_players","security_definer":true}
+{"proname":"duo_reroll_objective","args":"p_room text, p_slot integer","returns":"void","security_definer":true}
+{"proname":"duo_reroll_objective_carry","args":"p_room text, p_slot integer, p_collected jsonb, p_stolen integer, p_coins integer","returns":"jsonb","security_definer":true}
+{"proname":"duo_reset_objective_progress_on_change","args":"","returns":"trigger","security_definer":false}
+{"proname":"duo_respawn_coins","args":"p_room text","returns":"integer","security_definer":false}
+{"proname":"duo_scout","args":"p_code text, p_token text","returns":"jsonb","security_definer":true}
+{"proname":"duo_set_cosmetics","args":"p_client_id text, p_emote text, p_trail text, p_avatar text","returns":"jsonb","security_definer":true}
+{"proname":"duo_set_cosmetics","args":"p_client_id text, p_emote text, p_trail text","returns":"jsonb","security_definer":true}
+{"proname":"duo_set_name","args":"p_code text, p_token text, p_name text","returns":"jsonb","security_definer":true}
+{"proname":"duo_spawn_coins","args":"p_room text","returns":"void","security_definer":false}
+{"proname":"duo_spawn_wave","args":"p_room text, p_round integer, p_wave integer","returns":"void","security_definer":false}
+{"proname":"duo_start_round","args":"p_code text, p_token text","returns":"jsonb","security_definer":true}
+{"proname":"duo_steal","args":"p_code text, p_token text","returns":"jsonb","security_definer":true}
+{"proname":"duo_steal_versioned","args":"p_code text, p_token text, p_expected_objectives_done integer, p_expected_round integer","returns":"jsonb","security_definer":true}
+{"proname":"duo_sync_coins","args":"p_code text, p_token text","returns":"jsonb","security_definer":true}
+{"proname":"duo_tick","args":"p_code text, p_token text","returns":"jsonb","security_definer":true}
+
+===== RLS_ENABLED =====
+{"relname":"duo_coins","relrowsecurity":true}
+{"relname":"duo_events","relrowsecurity":true}
+{"relname":"duo_players","relrowsecurity":true}
+{"relname":"duo_progression","relrowsecurity":true}
+{"relname":"duo_rooms","relrowsecurity":true}
+
+===== POLICIES =====
+
+===== GRANTS =====
+{"table_name":"duo_coins","grantee":"service_role","privilege_type":"DELETE"}
+{"table_name":"duo_coins","grantee":"service_role","privilege_type":"INSERT"}
+{"table_name":"duo_coins","grantee":"service_role","privilege_type":"REFERENCES"}
+{"table_name":"duo_coins","grantee":"service_role","privilege_type":"SELECT"}
+{"table_name":"duo_coins","grantee":"service_role","privilege_type":"TRIGGER"}
+{"table_name":"duo_coins","grantee":"service_role","privilege_type":"TRUNCATE"}
+{"table_name":"duo_coins","grantee":"service_role","privilege_type":"UPDATE"}
+{"table_name":"duo_events","grantee":"service_role","privilege_type":"DELETE"}
+{"table_name":"duo_events","grantee":"service_role","privilege_type":"INSERT"}
+{"table_name":"duo_events","grantee":"service_role","privilege_type":"REFERENCES"}
+{"table_name":"duo_events","grantee":"service_role","privilege_type":"SELECT"}
+{"table_name":"duo_events","grantee":"service_role","privilege_type":"TRIGGER"}
+{"table_name":"duo_events","grantee":"service_role","privilege_type":"TRUNCATE"}
+{"table_name":"duo_events","grantee":"service_role","privilege_type":"UPDATE"}
+{"table_name":"duo_players","grantee":"service_role","privilege_type":"DELETE"}
+{"table_name":"duo_players","grantee":"service_role","privilege_type":"INSERT"}
+{"table_name":"duo_players","grantee":"service_role","privilege_type":"REFERENCES"}
+{"table_name":"duo_players","grantee":"service_role","privilege_type":"SELECT"}
+{"table_name":"duo_players","grantee":"service_role","privilege_type":"TRIGGER"}
+{"table_name":"duo_players","grantee":"service_role","privilege_type":"TRUNCATE"}
+{"table_name":"duo_players","grantee":"service_role","privilege_type":"UPDATE"}
+{"table_name":"duo_progression","grantee":"service_role","privilege_type":"DELETE"}
+{"table_name":"duo_progression","grantee":"service_role","privilege_type":"INSERT"}
+{"table_name":"duo_progression","grantee":"service_role","privilege_type":"REFERENCES"}
+{"table_name":"duo_progression","grantee":"service_role","privilege_type":"SELECT"}
+{"table_name":"duo_progression","grantee":"service_role","privilege_type":"TRIGGER"}
+{"table_name":"duo_progression","grantee":"service_role","privilege_type":"TRUNCATE"}
+{"table_name":"duo_progression","grantee":"service_role","privilege_type":"UPDATE"}
+{"table_name":"duo_rooms","grantee":"service_role","privilege_type":"DELETE"}
+{"table_name":"duo_rooms","grantee":"service_role","privilege_type":"INSERT"}
+{"table_name":"duo_rooms","grantee":"service_role","privilege_type":"REFERENCES"}
+{"table_name":"duo_rooms","grantee":"service_role","privilege_type":"SELECT"}
+{"table_name":"duo_rooms","grantee":"service_role","privilege_type":"TRIGGER"}
+{"table_name":"duo_rooms","grantee":"service_role","privilege_type":"TRUNCATE"}
+{"table_name":"duo_rooms","grantee":"service_role","privilege_type":"UPDATE"}
+
+✔ audit dump complete

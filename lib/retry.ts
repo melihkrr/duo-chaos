@@ -155,6 +155,9 @@ export const isRetryableError = (error: unknown): boolean => {
     'unauthorized',
     'permission denied',
     'duplicate',
+    // Anti-cheat: sunucu konumu erişilemez buldu (ışınlanma). Tekrar denemek
+    // aynı reddi verir; istemci yetkili konuma uzlaşmalıdır.
+    'too_fast',
   ]
   if (permanent.some((token) => lower.includes(token))) return false
 
@@ -219,6 +222,9 @@ export const isTransientRpcFailure = (response: unknown): boolean => {
     'duplicate',
     'conflict',
     'not_ready',
+    // Anti-cheat: konum erişilemez (ışınlanma). Kalıcı red; istemci yetkili
+    // konuma uzlaşmalıdır, yeniden denemek sonsuz döngü yaratır.
+    'too_fast',
   ]
   return !permanent.some((token) => reason.includes(token))
 }

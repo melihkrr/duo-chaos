@@ -1,0 +1,618 @@
+
+
+########## duo_collect_batch(text,text,integer[],numeric,numeric,integer,integer) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_collect_batch(p_code text, p_token text, p_coin_ids integer[], p_x numeric, p_y numeric, p_expected_objectives_done integer, p_expected_round integer)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_code text := upper(trim(p_code));
+  v_pl duo_players;
+  v_room duo_rooms;
+  v_coin duo_coins;
+  v_pos jsonb;
+  v_coin_id int;
+  v_dist numeric;
+  v_now bigint := (extract(epoch from now()) * 1000)::bigint;
+  v_value int;
+  v_total_value int := 0;
+  v_objective_coins int;
+  v_round_coins int := 0;
+  v_collected jsonb;
+  v_progress int;
+  v_completed_progress int;
+  v_satisfied boolean := false;
+  v_counts_for_objective boolean;
+  v_accepted_ids int[] := '{}';
+  v_after duo_players;
+  v_reroll jsonb;
+begin
+  v_pl := duo_require_player(v_code, p_token);
+
+  select * into v_pl
+    from duo_players
+    where room_code = v_code and slot = v_pl.slot
+    for update;
+  if not found then
+    return jsonb_build_object('ok', false, 'reason', 'not_a_player');
+  end if;
+
+  select * into v_room from duo_rooms where code = v_code;
+  if v_room.phase <> 'battle' then
+    return jsonb_build_object('ok', false, 'reason', 'not_battle');
+  end if;
+  if p_expected_round is not null and p_expected_round <> v_room.round then
+    return jsonb_build_object('ok', false, 'reason', 'stale_round');
+  end if;
+
+  v_pos := duo_clamp_pos(p_x, p_y);
+  v_pl.x := (v_pos->>'x')::numeric;
+  v_pl.y := (v_pos->>'y')::numeric;
+  update duo_players
+    set x = v_pl.x, y = v_pl.y, last_seen_at = now()
+    where room_code = v_code and slot = v_pl.slot;
+
+  v_counts_for_objective :=
+    p_expected_objectives_done is null
+    or p_expected_objectives_done = coalesce(v_pl.objectives_done, 0);
+  v_objective_coins := coalesce(v_pl.coins, 0);
+  v_collected := coalesce(v_pl.collected_types, '{}'::jsonb);
+
+  -- Stable lock ordering avoids deadlocks if both clients overlap multiple coins.
+  for v_coin_id in
+    select distinct requested_id
+      from unnest(coalesce(p_coin_ids, '{}'::int[])) as requested(requested_id)
+      where requested_id is not null
+      order by requested_id
+  loop
+    select * into v_coin
+      from duo_coins
+      where room_code = v_code and coin_id = v_coin_id
+      for update;
+    if not found or v_coin.collected_by is not null then
+      continue;
+    end if;
+
+    v_dist := sqrt(power(v_coin.x - v_pl.x, 2) + power(v_coin.y - v_pl.y, 2));
+    if v_dist > 9 then
+      continue;
+    end if;
+
+    v_value := duo_coin_value(
+      v_coin.type,
+      case when v_room.chaos_ends_at > v_now then v_room.chaos_event else null end,
+      v_pl.objective
+    );
+    update duo_coins
+      set collected_by = v_pl.player_id,
+          collected_at = v_now,
+          respawn_at = case when v_coin.type = 'diamond' then 0 else v_now + 3000 end
+      where room_code = v_code and coin_id = v_coin_id;
+
+    v_accepted_ids := array_append(v_accepted_ids, v_coin_id);
+    v_round_coins := v_round_coins + 1;
+    v_total_value := v_total_value + v_value;
+
+    if v_counts_for_objective then
+      v_objective_coins := v_objective_coins + 1;
+      v_collected := jsonb_set(
+        v_collected,
+        array[v_coin.type::text],
+        to_jsonb(coalesce((v_collected->>v_coin.type::text)::int, 0) + 1),
+        true
+      );
+    end if;
+  end loop;
+
+  if cardinality(v_accepted_ids) = 0 then
+    select * into v_after
+      from duo_players
+      where room_code = v_code and slot = v_pl.slot;
+    return jsonb_build_object(
+      'ok', true,
+      'acceptedCoinIds', '[]'::jsonb,
+      'objectiveDone', false,
+      'completedProgress', null,
+      'state', jsonb_build_object(
+        'objective', v_after.objective,
+        'objectiveProgress', coalesce(v_after.objective_progress, 0),
+        'collectedTypes', coalesce(v_after.collected_types, '{}'::jsonb),
+        'coins', v_after.coins,
+        'stolen', v_after.stolen,
+        'roundCoins', coalesce(v_after.round_coins, 0),
+        'roundStolen', coalesce(v_after.round_stolen, 0),
+        'missionDone', v_after.mission_done,
+        'objectivesDone', coalesce(v_after.objectives_done, 0),
+        'score', coalesce(v_after.score, 0),
+        'roundScore', coalesce(v_after.round_score, 0)
+      )
+    );
+  end if;
+
+  if v_counts_for_objective then
+    v_progress := duo_mission_progress(
+      v_pl.objective, v_collected, v_pl.stolen, v_objective_coins
+    );
+    v_satisfied := duo_mission_satisfied(
+      v_pl.objective, v_collected, v_pl.stolen, v_objective_coins
+    );
+    update duo_players
+      set coins = v_objective_coins,
+          collected_types = v_collected,
+          objective_progress = greatest(coalesce(v_pl.objective_progress, 0), v_progress),
+          mission_done = v_satisfied,
+          round_coins = coalesce(round_coins, 0) + v_round_coins,
+          score = coalesce(score, 0) + v_total_value,
+          round_score = coalesce(round_score, 0) + v_total_value
+      where room_code = v_code and slot = v_pl.slot;
+  else
+    update duo_players
+      set round_coins = coalesce(round_coins, 0) + v_round_coins,
+          score = coalesce(score, 0) + v_total_value,
+          round_score = coalesce(round_score, 0) + v_total_value
+      where room_code = v_code and slot = v_pl.slot;
+    v_progress := coalesce(v_pl.objective_progress, 0);
+  end if;
+
+  v_completed_progress := v_progress;
+  if v_satisfied then
+    v_reroll := duo_reroll_objective_carry(
+      v_code, v_pl.slot, v_collected, v_pl.stolen, v_objective_coins
+    );
+  end if;
+
+  select * into v_after
+    from duo_players
+    where room_code = v_code and slot = v_pl.slot;
+
+  return jsonb_build_object(
+    'ok', true,
+    'acceptedCoinIds', to_jsonb(v_accepted_ids),
+    'objectiveDone', v_satisfied,
+    'completedProgress', case when v_satisfied then v_completed_progress else null end,
+    'state', jsonb_build_object(
+      'objective', v_after.objective,
+      'objectiveProgress', coalesce(v_after.objective_progress, 0),
+      'collectedTypes', coalesce(v_after.collected_types, '{}'::jsonb),
+      'coins', v_after.coins,
+      'stolen', v_after.stolen,
+      'roundCoins', coalesce(v_after.round_coins, 0),
+      'roundStolen', coalesce(v_after.round_stolen, 0),
+      'missionDone', v_after.mission_done,
+      'objectivesDone', coalesce(v_after.objectives_done, 0),
+      'score', coalesce(v_after.score, 0),
+      'roundScore', coalesce(v_after.round_score, 0)
+    )
+  );
+end;
+$function$
+
+
+
+########## duo_steal_versioned(text,text,integer,integer) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_steal_versioned(p_code text, p_token text, p_expected_objectives_done integer, p_expected_round integer)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_code text := upper(trim(p_code));
+  v_pl duo_players;
+  v_opp duo_players;
+  v_room duo_rooms;
+  v_dist numeric;
+  -- PUAN (0042): +25/-25 (tek oyunculu `STEAL_SCORE` ile birebir).
+  v_steal_score int := 25;
+  -- TEMAS KORUMASI (0042): aynı oyuncu bu süre içinde tekrar çalamaz.
+  v_contact_guard_ms int := 700;
+  v_now_ms bigint := (extract(epoch from now()) * 1000)::bigint;
+  v_new_stolen int;
+  v_progress int;
+  v_completed_progress int;
+  v_satisfied boolean := false;
+  v_counts_for_objective boolean;
+  v_after duo_players;
+  v_reroll jsonb;
+begin
+  v_pl := duo_require_player(v_code, p_token);
+
+  -- Lock both player rows in a stable order so opposite-direction steals do
+  -- not acquire the same rows in reverse order.
+  perform 1
+    from duo_players
+    where room_code = v_code
+    order by slot
+    for update;
+
+  select * into v_pl
+    from duo_players
+    where room_code = v_code and slot = v_pl.slot;
+
+  select * into v_room from duo_rooms where code = v_code;
+  if v_room.phase <> 'battle' then
+    return jsonb_build_object('ok', false, 'reason', 'not_battle');
+  end if;
+  if p_expected_round is not null and p_expected_round <> v_room.round then
+    return jsonb_build_object('ok', false, 'reason', 'stale_round');
+  end if;
+
+  select * into v_opp
+    from duo_players
+    where room_code = v_code and slot <> v_pl.slot;
+  if not found then
+    return jsonb_build_object('ok', false, 'reason', 'no_opponent');
+  end if;
+
+  -- TEMAS KORUMASI (0042): TEK temasta EN FAZLA BİR çalma.
+  --   * KURBAN son 700ms içinde çalındıysa reddet → aynı temasta mükerrer
+  --     çalma (farming) engellenir.
+  --   * ÇAĞIRAN (çalan) son 700ms içinde ÇALINDIYSA da reddet → karşılıklı
+  --     temasta "hem çalan hem çalınan olma" (iki taraf da çalma) engellenir.
+  -- Her iki satır da yukarıda `for update` ile kilitli olduğu için bu kontrol
+  -- atomiktir; eşzamanlı iki çağrı SERİLEŞİR ve yalnızca ilki geçer.
+  if coalesce(v_opp.last_stolen_at, 0) > 0
+     and v_now_ms - coalesce(v_opp.last_stolen_at, 0) < v_contact_guard_ms then
+    return jsonb_build_object('ok', false, 'reason', 'victim_guarded');
+  end if;
+  if coalesce(v_pl.last_stolen_at, 0) > 0
+     and v_now_ms - coalesce(v_pl.last_stolen_at, 0) < v_contact_guard_ms then
+    return jsonb_build_object('ok', false, 'reason', 'steal_cooldown');
+  end if;
+
+  -- KURBAN COIN KONTROLÜ (0042): çalınacak bir coin yoksa reddet.
+  if coalesce(v_opp.coins, 0) <= 0 then
+    return jsonb_build_object('ok', false, 'reason', 'no_coins');
+  end if;
+
+  v_dist := sqrt(power(v_opp.x - v_pl.x, 2) + power(v_opp.y - v_pl.y, 2));
+  if v_dist > 10 then
+    return jsonb_build_object('ok', false, 'reason', 'too_far');
+  end if;
+
+  v_counts_for_objective :=
+    p_expected_objectives_done is null
+    or p_expected_objectives_done = coalesce(v_pl.objectives_done, 0);
+  v_new_stolen := coalesce(v_pl.stolen, 0);
+  if v_counts_for_objective then
+    v_new_stolen := v_new_stolen + 1;
+    v_progress := duo_mission_progress(
+      v_pl.objective, v_pl.collected_types, v_new_stolen, v_pl.coins
+    );
+    v_satisfied := duo_mission_satisfied(
+      v_pl.objective, v_pl.collected_types, v_new_stolen, v_pl.coins
+    );
+  else
+    v_progress := coalesce(v_pl.objective_progress, 0);
+  end if;
+
+  update duo_players
+    set stolen = v_new_stolen,
+        round_stolen = coalesce(round_stolen, 0) + 1,
+        objective_progress = case when v_counts_for_objective
+          then greatest(coalesce(objective_progress, 0), v_progress)
+          else objective_progress end,
+        mission_done = case when v_counts_for_objective then v_satisfied else mission_done end,
+        score = coalesce(score, 0) + v_steal_score,
+        round_score = coalesce(round_score, 0) + v_steal_score
+    where room_code = v_code and slot = v_pl.slot;
+
+  update duo_players
+    set coins = greatest(0, coins - 1),
+        round_coins = greatest(0, coalesce(round_coins, 0) - 1),
+        score = greatest(0, coalesce(score, 0) - v_steal_score),
+        round_score = greatest(0, coalesce(round_score, 0) - v_steal_score),
+        slowed_until = v_now_ms + 400,
+        -- TEMAS KORUMASI: KURBANIN çalınma anını damgala.
+        last_stolen_at = v_now_ms
+    where room_code = v_code and slot = v_opp.slot;
+
+  v_completed_progress := v_progress;
+  if v_satisfied then
+    v_reroll := duo_reroll_objective_carry(
+      v_code, v_pl.slot, v_pl.collected_types, v_new_stolen, v_pl.coins
+    );
+  end if;
+
+  select * into v_after
+    from duo_players
+    where room_code = v_code and slot = v_pl.slot;
+
+  return jsonb_build_object(
+    'ok', true,
+    'stolen', v_new_stolen,
+    'score', v_steal_score,
+    'objectiveDone', v_satisfied,
+    'completedProgress', case when v_satisfied then v_completed_progress else null end,
+    'state', jsonb_build_object(
+      'objective', v_after.objective,
+      'objectiveProgress', coalesce(v_after.objective_progress, 0),
+      'collectedTypes', coalesce(v_after.collected_types, '{}'::jsonb),
+      'coins', v_after.coins,
+      'stolen', v_after.stolen,
+      'roundCoins', coalesce(v_after.round_coins, 0),
+      'roundStolen', coalesce(v_after.round_stolen, 0),
+      'missionDone', v_after.mission_done,
+      'objectivesDone', coalesce(v_after.objectives_done, 0),
+      'score', coalesce(v_after.score, 0),
+      'roundScore', coalesce(v_after.round_score, 0)
+    )
+  );
+end;
+$function$
+
+
+
+########## duo_steal(text,text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_steal(p_code text, p_token text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_code text := upper(trim(p_code));
+  v_pl duo_players;
+begin
+  v_pl := duo_require_player(v_code, p_token);
+  select * into v_pl
+    from duo_players
+    where room_code = v_code and slot = v_pl.slot;
+
+  return duo_steal_versioned(v_code, p_token, v_pl.objectives_done, null);
+end;
+$function$
+
+
+
+########## duo_move(text,text,numeric,numeric) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_move(p_code text, p_token text, p_x numeric, p_y numeric)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_code text := upper(trim(p_code));
+  v_pl duo_players;
+  v_room duo_rooms;
+  v_pos jsonb;
+begin
+  v_pl := duo_require_player(v_code, p_token);
+
+  select * into v_room from duo_rooms where code = v_code;
+  if v_room.phase not in ('countdown', 'battle') then
+    return jsonb_build_object('ok', false, 'reason', 'not_live');
+  end if;
+
+  v_pos := duo_clamp_pos(p_x, p_y);
+
+  update duo_players
+    set x = (v_pos->>'x')::numeric,
+        y = (v_pos->>'y')::numeric,
+        last_seen_at = now()
+    where room_code = v_code and slot = v_pl.slot;
+
+  return jsonb_build_object('ok', true, 'x', v_pos->'x', 'y', v_pos->'y');
+end;
+$function$
+
+
+
+########## duo_tick(text,text) ##########
+
+CREATE OR REPLACE FUNCTION public.duo_tick(p_code text, p_token text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_code text := upper(trim(p_code));
+  v_pl duo_players;
+  v_room duo_rooms;
+  v_now bigint := (extract(epoch from now()) * 1000)::bigint;
+  v_battle_start bigint;
+  v_half bigint;
+  v_wave int;
+  v_event duo_chaos_event;
+  v_has_diamond boolean;
+  v_already_fired boolean;
+  v_changed boolean := false;
+  v_respawned int;
+  v_round_scores jsonb;
+  v_match_scores jsonb;
+  v_next_phase duo_phase;
+  v_winner text;
+  v_p1_obj jsonb;
+  v_p2_obj jsonb;
+begin
+  v_pl := duo_require_player(v_code, p_token);
+
+  select * into v_room from duo_rooms where code = v_code for update;
+  if not found then
+    raise exception 'room_not_found' using errcode = 'P0001';
+  end if;
+
+  -- 1. countdown -> battle
+  if v_room.phase = 'countdown' and v_now >= v_room.countdown_ends_at then
+    update duo_rooms
+      set phase = 'battle',
+          countdown_ends_at = 0,
+          ends_at = v_now + 90000,
+          updated_at = now()
+      where code = v_code;
+    v_room.phase := 'battle';
+    v_room.ends_at := v_now + 90000;
+    v_changed := true;
+  end if;
+
+  -- 2. battle -> results/matchover (SUNUCU OTORİTESİ).
+  if v_room.phase = 'battle' and v_now >= v_room.ends_at then
+    v_round_scores := '{}'::jsonb;
+    v_match_scores := coalesce(v_room.match_scores, '{}'::jsonb);
+
+    update duo_players
+      set round_score = score,
+          total_score = coalesce((v_match_scores->>player_id)::int, 0) + score
+      where room_code = v_code;
+
+    select jsonb_object_agg(player_id, score) into v_round_scores
+      from duo_players where room_code = v_code;
+
+    select jsonb_object_agg(player_id, total_score) into v_match_scores
+      from duo_players where room_code = v_code;
+
+    v_next_phase := case when v_room.round >= 3 then 'matchover' else 'results' end;
+
+    if v_next_phase = 'matchover' then
+      select player_id into v_winner
+        from duo_players
+        where room_code = v_code
+        order by total_score desc, slot asc
+        limit 1;
+    end if;
+
+    update duo_rooms
+      set phase = v_next_phase,
+          round_scores = v_round_scores,
+          match_scores = v_match_scores,
+          winner = v_winner,
+          chaos_event = null,
+          chaos_ends_at = 0,
+          updated_at = now()
+      where code = v_code;
+
+    return jsonb_build_object(
+      'ok', true,
+      'phase', v_next_phase,
+      'winner', v_winner,
+      'roundScores', v_round_scores,
+      'matchScores', v_match_scores,
+      'changed', true
+    );
+  end if;
+
+  if v_room.phase <> 'battle' then
+    return jsonb_build_object('ok', true, 'phase', v_room.phase, 'changed', v_changed);
+  end if;
+
+  v_battle_start := v_room.ends_at - 90000;
+  v_half := v_battle_start + 45000;
+
+  -- 3. trigger chaos event at the halfway point — TUR BAŞINA TAM BİR KEZ.
+  --
+  -- DÜZELTME (0030): eskiden koşul yalnızca `chaos_event is null` idi. Olay
+  -- 15 sn sonra expire olup `chaos_event = null` yapınca, `v_now >= v_half`
+  -- hâlâ doğru olduğu için olay AYNI TURDA tekrar tetikleniyordu. Artık
+  -- `duo_events`'te bu tur için bir kayıt olup olmadığına da bakarız; varsa
+  -- olayı yeniden tetiklemeyiz.
+  if v_room.chaos_event is null and v_now >= v_half then
+    select exists(
+      select 1 from duo_events
+      where room_code = v_code and round = v_room.round
+    ) into v_already_fired;
+
+    if not v_already_fired then
+      v_event := duo_chaos_for_round(v_room.round_seed);
+
+      insert into duo_events (room_code, round, event, started_at, ends_at)
+      values (v_code, v_room.round, v_event, v_now, v_now + 15000);
+
+      -- Diamond appears ONLY for the jackpot event.
+      --
+      -- DÜZELTME (0025): elmasın o turda DAHA ÖNCE hiç eklenip eklenmediğine
+      -- bak (`coin_id = 900 + round`), `collected_by` durumundan BAĞIMSIZ.
+      -- Böylece elmas tur başına tam olarak BİR KEZ doğar.
+      if v_event = 'jackpot' then
+        select exists(
+          select 1 from duo_coins
+          where room_code = v_code and coin_id = 900 + v_room.round
+        ) into v_has_diamond;
+
+        if not v_has_diamond then
+          insert into duo_coins (room_code, coin_id, x, y, type)
+          values (v_code, 900 + v_room.round, 50, 50, 'diamond')
+          on conflict (room_code, coin_id) do nothing;
+        end if;
+      end if;
+
+      -- CHAOS SWAP — GERÇEK KARŞILIKLI TAKAS.
+      if v_event = 'swap' then
+        select objective into v_p1_obj
+          from duo_players where room_code = v_code and slot = 1;
+        select objective into v_p2_obj
+          from duo_players where room_code = v_code and slot = 2;
+
+        if v_p1_obj is not null and v_p2_obj is not null then
+          update duo_players
+            set objective = case when slot = 1 then v_p2_obj else v_p1_obj end,
+                coins = 0,
+                stolen = 0,
+                collected_types = '{}'::jsonb,
+                mission_done = false
+            where room_code = v_code and slot in (1, 2);
+        end if;
+      end if;
+
+      update duo_rooms
+        set chaos_event = v_event,
+            chaos_ends_at = v_now + 15000,
+            updated_at = now()
+        where code = v_code;
+
+      v_room.chaos_event := v_event;
+      v_room.chaos_ends_at := v_now + 15000;
+      v_changed := true;
+    end if;
+  end if;
+
+  -- 4. expire the chaos event
+  if v_room.chaos_event is not null and v_now >= v_room.chaos_ends_at then
+    update duo_rooms
+      set chaos_event = null, chaos_ends_at = 0, updated_at = now()
+      where code = v_code;
+    v_room.chaos_event := null;
+    v_room.chaos_ends_at := 0;
+    v_changed := true;
+  end if;
+
+  -- 5. resource wave every 12s of battle
+  v_wave := floor((v_now - v_battle_start) / 12000.0)::int;
+  if v_wave > 0 then
+    perform duo_spawn_wave(v_code, v_room.round, v_wave);
+  end if;
+
+  -- 6. magnet drift toward the centre
+  if v_room.chaos_event = 'magnet' and v_now < v_room.chaos_ends_at then
+    update duo_coins
+      set x = x + (50 - x) * 0.018,
+          y = y + (50 - y) * 0.018
+      where room_code = v_code
+        and collected_by is null
+        and type <> 'diamond';
+    v_changed := true;
+  end if;
+
+  -- 7. respawn collected coins whose timer elapsed — SAME spot, SAME colour.
+  v_respawned := duo_respawn_coins(v_code);
+  if v_respawned > 0 then
+    v_changed := true;
+  end if;
+
+  return jsonb_build_object(
+    'ok', true,
+    'phase', v_room.phase,
+    'chaosEvent', v_room.chaos_event,
+    'chaosEndsAt', v_room.chaos_ends_at,
+    'changed', v_changed
+  );
+end;
+$function$
+

@@ -164,13 +164,36 @@ await new Promise((r) => setTimeout(r, 3200))
 //    IMPORTANT: `duo_public_state` returns `respawnAt` as an ABSOLUTE epoch-ms
 //    value, and `serverNow` from the SAME snapshot. We compare against
 //    `serverNow` (not the local clock) to avoid client/server clock skew.
+//
+//    The server validates reachability from its OWN stored position
+//    (migration 0047/0048), so we walk in small, time-legal steps rather than
+//    teleporting onto the coin.
 {
+  const stepTo = async (tx, ty) => {
+    const snap = await rpc('duo_public_state', { p_code: code, p_token: hostToken })
+    const me = snap.body?.players?.find((p) => p.id === 'p1')
+    let x = me?.x ?? 18
+    let y = me?.y ?? 50
+    const MAX_STEP = 12
+    for (let guard = 0; guard < 200; guard += 1) {
+      const dx = tx - x
+      const dy = ty - y
+      const dist = Math.hypot(dx, dy)
+      if (dist <= 1) return
+      const scale = Math.min(1, MAX_STEP / dist)
+      x += dx * scale
+      y += dy * scale
+      await rpc('duo_move', { p_code: code, p_token: hostToken, p_x: x, p_y: y })
+      await new Promise((r) => setTimeout(r, 20))
+    }
+  }
+
   // Move the host onto the first truly-uncollected coin, then collect it.
   const state = await rpc('duo_public_state', { p_code: code, p_token: hostToken })
   const coins = state.body?.coins ?? []
   const target = coins.find((c) => !c.collectedBy && c.type !== 'diamond')
   if (target) {
-    await rpc('duo_move', { p_code: code, p_token: hostToken, p_x: target.x, p_y: target.y })
+    await stepTo(target.x, target.y)
     const { status, body } = await rpc('duo_collect', {
       p_code: code,
       p_token: hostToken,

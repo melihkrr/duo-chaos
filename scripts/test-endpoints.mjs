@@ -54,6 +54,28 @@ const code = `T${Math.random().toString(36).slice(2, 7).toUpperCase()}`.slice(0,
 const hostToken = `t-${code}-host`
 const guestToken = `t-${code}-guest`
 
+// Walk a player to (tx, ty) in small, time-legal increments. The server
+// validates each move against its own stored position + elapsed time
+// (migration 0047/0048), so a single teleport is rejected as `too_fast`.
+const stepTo = async (roomCode, token, tx, ty) => {
+  const { body } = await rpc('duo_public_state', { p_code: roomCode, p_token: token })
+  const me = body?.players?.find((p) => p.token === token) ?? body?.players?.[0]
+  let x = me?.x ?? 18
+  let y = me?.y ?? 50
+  const MAX_STEP = 12 // well under the server's per-frame allowance
+  for (let guard = 0; guard < 200; guard += 1) {
+    const dx = tx - x
+    const dy = ty - y
+    const dist = Math.hypot(dx, dy)
+    if (dist <= 1) return
+    const scale = Math.min(1, MAX_STEP / dist)
+    x += dx * scale
+    y += dy * scale
+    await rpc('duo_move', { p_code: roomCode, p_token: token, p_x: x, p_y: y })
+    await sleep(20)
+  }
+}
+
 console.log(`\nDUO CHAOS endpoint test \u2014 room ${code}\n`)
 
 // 1. create
@@ -154,12 +176,14 @@ await sleep(3400)
   check('duo_move', status === 200 && body?.ok === true, `${status} ${JSON.stringify(body)}`)
 }
 
-// 9. collect the first coin (move next to it first)
+// 9. collect the first coin. The server now validates reachability from its
+//    OWN stored position (migration 0047/0048), so we must move in small,
+//    time-legal steps instead of teleporting onto the coin.
 {
   const { body: snap } = await rpc('duo_public_state', { p_code: code, p_token: hostToken })
-  const coin = snap?.coins?.[0]
+  const coin = snap?.coins?.find((c) => !c.collectedBy && c.type !== 'diamond')
   if (coin) {
-    await rpc('duo_move', { p_code: code, p_token: hostToken, p_x: coin.x, p_y: coin.y })
+    await stepTo(code, hostToken, coin.x, coin.y)
     const { status, body } = await rpc('duo_collect', {
       p_code: code,
       p_token: hostToken,
@@ -171,12 +195,20 @@ await sleep(3400)
   }
 }
 
-// 10. steal (move onto the opponent first)
+// 10. steal. The victim must actually HOLD coins for a steal to transfer
+//     anything, so first walk the guest onto a coin and collect it, then walk
+//     the host onto the guest and steal.
 {
   const { body: snap } = await rpc('duo_public_state', { p_code: code, p_token: hostToken })
-  const opp = snap?.players?.find((p) => p.id === 'p2')
+  const guestCoin = snap?.coins?.find((c) => !c.collectedBy && c.type !== 'diamond')
+  if (guestCoin) {
+    await stepTo(code, guestToken, guestCoin.x, guestCoin.y)
+    await rpc('duo_collect', { p_code: code, p_token: guestToken, p_coin_id: guestCoin.id })
+  }
+  const { body: after } = await rpc('duo_public_state', { p_code: code, p_token: hostToken })
+  const opp = after?.players?.find((p) => p.id === 'p2')
   if (opp) {
-    await rpc('duo_move', { p_code: code, p_token: hostToken, p_x: opp.x, p_y: opp.y })
+    await stepTo(code, hostToken, opp.x, opp.y)
     const { status, body } = await rpc('duo_steal', { p_code: code, p_token: hostToken })
     check('duo_steal', status === 200 && body?.ok === true, `${status} ${JSON.stringify(body)}`)
   } else {
@@ -210,6 +242,7 @@ await sleep(3400)
     p_client_id: `test-${code}`,
     p_emote: 'wave',
     p_trail: 'sparkle',
+    p_avatar: null,
   })
   check(
     'duo_set_cosmetics rejects locked cosmetic',
@@ -224,6 +257,7 @@ await sleep(3400)
     p_client_id: `test-${code}`,
     p_emote: null,
     p_trail: null,
+    p_avatar: null,
   })
   check(
     'duo_set_cosmetics (defaults)',
