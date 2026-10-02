@@ -1,5 +1,5 @@
 // ============================================================================
-// DUO CHAOS — steal mechanic authority + directional-contact test (migration 0049).
+// DUO CHAOS — steal authority and directional-contact regression test.
 //
 // Reproduces the reported steal problems:
 //   1. WRONG VALUE: a steal awarded +20/-20 instead of +25/-25.
@@ -10,7 +10,7 @@
 //      `stealing` frame, and the monotonic `mergeProgress` locked the
 //      over-count in.
 //
-// FIX (0042 + 0049):
+// FIX (0042, 0049 + 0050):
 //   * `v_steal_score := 25` (matches single-player `STEAL_SCORE`).
 //   * Per-contact guard: `duo_players.last_stolen_at` (epoch ms). A steal is
 //     rejected if either participant was stolen from within 700ms.
@@ -20,7 +20,7 @@
 //   * Client no longer optimistically increments `stolen`/`roundStolen`.
 //
 // This test mirrors the EXACT server guard + score rules and the client merge,
-// then drives the 7 required scenarios. No DB required.
+// then drives the 10 required scenarios. No DB required.
 //
 // Run: node scripts/test-steal-authority.mjs
 // ============================================================================
@@ -43,10 +43,14 @@ const check = (label, ok, detail = '') => {
 const STEAL_SCORE = 25
 const STEAL_CONTACT_GUARD_MS = 700
 const STEAL_RADIUS = 5.2
-const STEAL_MOVEMENT_FRESH_MS = 1_000
+const STEAL_MOVEMENT_FRESH_MS = 300
 const STEAL_APPROACH_EPSILON = 0.5
-const migration = await readFile(
+const directionMigration = await readFile(
   new URL('../supabase/migrations/0049_directional_steal.sql', import.meta.url),
+  'utf8',
+)
+const staleDirectionMigration = await readFile(
+  new URL('../supabase/migrations/0050_expire_stale_steal_direction.sql', import.meta.url),
   'utf8',
 )
 
@@ -345,16 +349,51 @@ console.log('SCENARIO 8 — Being nearby is not enough: steal requires avatar co
   check('no score is transferred without contact', state.players.p1.score === 100 && state.players.p2.score === 100)
 }
 
-console.log('SCENARIO 9 — SQL migration enforces server-recorded directional contact')
+console.log('SCENARIO 9 — SQL migrations enforce server-recorded directional contact')
 {
   const config = await readFile(new URL('../lib/config.ts', import.meta.url), 'utf8')
   check('client radius tracks both avatar collision radii', config.includes('STEAL_RADIUS = PLAYER_HIT_R * 2'))
-  check('server radius matches the avatar contact boundary', migration.includes('if v_dist > 5.2 then'))
-  check('previous positions are captured by a database trigger', migration.includes('duo_players_track_previous_position'))
-  check('both players are locked before contact validation', /order by slot\s+for update/.test(migration))
-  check('stale approach snapshots are rejected', migration.includes("previous_position_at < v_now - interval '1 second'"))
-  check('head-on contact cannot be awarded by RPC arrival order', migration.includes('v_player_approach <= v_opponent_approach + 0.5'))
-  check('only public steal RPC remains executable', migration.includes('grant execute on function public.duo_steal_versioned'))
+  check('server radius matches the avatar contact boundary', directionMigration.includes('if v_dist > 5.2 then'))
+  check('previous positions are captured by a database trigger', directionMigration.includes('duo_players_track_previous_position'))
+  check('both players are locked before contact validation', /order by slot\s+for update/.test(staleDirectionMigration))
+  check('stale approach snapshots expire after 300ms', staleDirectionMigration.includes("v_direction_fresh interval := interval '300 milliseconds'"))
+  check('head-on contact cannot be awarded by RPC arrival order', staleDirectionMigration.includes('v_player_approach <= v_opponent_approach + 0.5'))
+  check('only public steal RPC remains executable', staleDirectionMigration.includes('grant execute on function public.duo_steal_versioned'))
+}
+
+console.log('SCENARIO 10 — A stopped player cannot steal using their stale approach')
+{
+  const state = makeState()
+  state.players.p1.x = 50
+  state.players.p2.x = 54.5
+  recordApproach(state, 'p1', 1_600, 49.5, 1_500)
+  recordApproach(state, 'p2', 2_000, 56, 1_900)
+  const p1Steal = duoStealVersioned(state, 'p1', 2_000)
+  check('stationary player rejected after movement sample expires', p1Steal.ok === false && p1Steal.reason === 'not_chasing')
+  const p2Steal = duoStealVersioned(state, 'p2', 2_000)
+  check('currently closing player receives the steal', p2Steal.ok === true, p2Steal.reason)
+  check('scores follow the actual chase direction', state.players.p1.score === 75 && state.players.p2.score === 125)
+}
+
+console.log('SCENARIO 11 — A player who has never moved cannot steal from the player who approaches')
+{
+  const state = makeState()
+  state.players.p1.x = 50
+  state.players.p2.x = 54.5
+  state.players.p1.previousX = 50
+  state.players.p1.previousY = 50
+  state.players.p1.previousMovedAt = null
+  state.players.p1.previousPositionAt = null
+  recordApproach(state, 'p2', 2_000, 56, 1_900)
+
+  const stationaryPlayerRequest = duoStealVersioned(state, 'p1', 2_000)
+  check(
+    'never-moved player has no valid direction and cannot steal',
+    stationaryPlayerRequest.ok === false && stationaryPlayerRequest.reason === 'not_chasing',
+  )
+  const approachingPlayerRequest = duoStealVersioned(state, 'p2', 2_000)
+  check('moving player can steal from the stationary opponent', approachingPlayerRequest.ok === true)
+  check('stationary player loses points, not the pursuer', state.players.p1.score === 75 && state.players.p2.score === 125)
 }
 
 console.log(`\n${failed === 0 ? '\u2714 ALL CHECKS PASSED' : '\u2718 SOME CHECKS FAILED'} \u2014 ${passed} passed, ${failed} failed`)
