@@ -1574,12 +1574,18 @@ h3 {
 
 .avatar {
   position: absolute;
+  /* Konum GPU'da birleştirilen `transform` ile verilir (left/top DEĞİL).
+     Mobilde left/top animasyonu her karede layout tetikleyip hareketi
+     "laglı" gösteriyordu; transform ise compositor'da çalışır ve akıcıdır.
+     `left/top` 0'da sabit tutulur; gerçek konum `translate3d` ile yazılır. */
+  left: 0;
+  top: 0;
   width: 36px;
   height: 36px;
   margin: -18px 0 0 -18px;
   display: grid;
   place-items: center;
-  transition: left 0.06s linear, top 0.06s linear;
+  will-change: transform;
   /* Kendi yığın bağlamını oluştur: iz (trail) negatif z-index ile arena
      arka planının ARKASINA düşmesin. Aksi halde iz hiç görünmüyordu. */
   z-index: 2;

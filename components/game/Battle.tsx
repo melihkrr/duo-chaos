@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ChaosBanner } from './ChaosBanner'
 import { CosmeticsPicker } from './CosmeticsPicker'
 import { VirtualJoystick } from './VirtualJoystick'
@@ -166,6 +166,9 @@ export function Battle({
   const [shake, setShake] = useState<{ at: number; kind: 'bump' } | null>(null)
   // Tam ekrana alınacak sarmalayıcı düğüm (`.battle-wrap`).
   const wrapRef = useRef<HTMLElement | null>(null)
+  // Arena düğümü. Avatar konumlarını yüzde yerine PİKSEL `transform` ile
+  // yazmak için boyutunu okuruz (mobilde left/top layout'u yerine GPU).
+  const arenaRef = useRef<HTMLDivElement | null>(null)
   // Yerel avatarın DOM düğümü. Konumu her karede doğrudan buna yazarız.
   const meRef = useRef<HTMLDivElement | null>(null)
   // Rakip avatarın DOM düğümü. Aynı şekilde doğrudan yazarız.
@@ -214,134 +217,134 @@ export function Battle({
     }
   }
 
-  // Görev tamamlanma sinyalini izle. `celebrateRef` her tamamlanmada yeni bir
-  // zaman damgası alır; değer değiştiğinde kutlamayı ~1.4 sn gösteririz.
+  // TEK RAF DÖNGÜSÜ: Önceden 6 ayrı `requestAnimationFrame` döngüsü vardı
+  // (celebrate, diamondPop, combo, scorePops, shake, position). Her biri kendi
+  // karesinde `setState` çağırdığından mobilde her karede 6 kez React
+  // uzlaştırması (reconciliation) tetikleniyor ve hareket "laglı" görünüyordu.
+  // Artık hepsi TEK bir döngüde, yalnızca GERÇEKTEN değişen değerler için
+  // `setState` çağrılarak işlenir. Konum ise hiç render tetiklemeden doğrudan
+  // DOM'a (`transform: translate3d`) yazılır.
   //
-  // SAĞLAMLIK: Önceden gizleme `setTimeout` ile yapılıyordu ve zaman aşımı
-  // closure'ı `value`'ya bağlıydı. StrictMode/çift mount veya hızlı ardışık
-  // tamamlanmalarda zaman aşımı düşürülüp kutlama EKRANDA KALABİLİYORDU
-  // ("Mission complete! yazısı gitmedi"). Artık gizleme kararını RAF
-  // döngüsünde, `celebrateRef` zaman damgasına göre veriyoruz: damga
-  // `CELEBRATE_MS`'ten eskiyse katman kapanır. Böylece hiçbir zaman aşımı
-  // sızıntısı kutlamayı kalıcı yapamaz.
+  // SAĞLAMLIK (celebrate): Gizleme kararı `celebrateRef` zaman damgasına göre
+  // verilir; damga `CELEBRATE_MS`'ten eskiyse katman kapanır. Böylece hiçbir
+  // zaman aşımı sızıntısı kutlamayı kalıcı yapamaz ("Mission complete! yazısı
+  // gitmedi" hatası).
   useEffect(() => {
     let raf = 0
-    const watch = () => {
-      const value = celebrateRef.current
-      const fresh = value > 0 && Date.now() - value < CELEBRATE_MS
-      setCelebrate((current) => (current === value && !fresh ? 0 : fresh ? value : current))
-      raf = window.requestAnimationFrame(watch)
+    // Arena piksel boyutu. Her karede `getBoundingClientRect()` çağırmak
+    // mobilde layout thrash yaratır; bu yüzden yalnızca boyut değişince
+    // (resize/fullscreen) yeniden ölçeriz.
+    let arenaW = 0
+    let arenaH = 0
+    const measure = () => {
+      const arena = arenaRef.current
+      if (!arena) return
+      const rect = arena.getBoundingClientRect()
+      arenaW = rect.width
+      arenaH = rect.height
     }
-    raf = window.requestAnimationFrame(watch)
-    return () => window.cancelAnimationFrame(raf)
-  }, [celebrateRef])
+    measure()
+    window.addEventListener('resize', measure)
 
-  // Elmas "+50" rozetini izle. `diamondPopRef` yeni bir toplama anı taşıdığında
-  // rozeti gösteririz; `DIAMOND_POP_MS` sonra otomatik gizlenir.
-  useEffect(() => {
-    let raf = 0
-    let shownAt = 0
-    const watch = () => {
-      const pop = diamondPopRef.current
-      if (pop && pop.at !== shownAt) {
-        shownAt = pop.at
-        setDiamondPop(pop)
-      }
-      raf = window.requestAnimationFrame(watch)
-    }
-    raf = window.requestAnimationFrame(watch)
-    return () => window.cancelAnimationFrame(raf)
-  }, [diamondPopRef])
+    // Watcher'ların son gördüğü değerler (gereksiz `setState`'i önlemek için).
+    let lastDiamondAt = 0
+    let lastShakeAt = 0
 
-  // Rozet göründükten sonra kısa süre sonra gizle.
-  useEffect(() => {
-    if (!diamondPop) return
-    const id = window.setTimeout(() => setDiamondPop(null), DIAMOND_POP_MS)
-    return () => window.clearTimeout(id)
-  }, [diamondPop])
-
-  // COMBO rozetini izle. `comboRef.count` 2+ olduğunda gösteririz; seri
-  // penceresi (COMBO_WINDOW_MS) dolunca gizleriz. `comboRef.at` her toplamada
-  // güncellendiğinden, son toplamadan bu yana pencere geçtiyse rozeti kapatırız.
-  useEffect(() => {
-    let raf = 0
-    const watch = () => {
-      const value = comboRef.current
-      const fresh = Date.now() - value.at <= COMBO_WINDOW_MS
-      setCombo(fresh && value.count >= 2 ? value.count : 0)
-      raf = window.requestAnimationFrame(watch)
-    }
-    raf = window.requestAnimationFrame(watch)
-    return () => window.cancelAnimationFrame(raf)
-  }, [comboRef])
-
-  // Uçan puan rozetlerini izle. `scorePopRef` yeni rozetlerle büyür; süresi
-  // dolanları (SCORE_POP_MS) temizleriz. Böylece ekran kalabalıklaşmaz.
-  useEffect(() => {
-    let raf = 0
-    const watch = () => {
-      const list = scorePopRef.current
-      const cutoff = Date.now() - SCORE_POP_MS
-      const alive = list.filter((pop) => pop.at >= cutoff)
-      setScorePops((prev) => {
-        // Yalnızca gerçekten değiştiyse yeni referans döndür (gereksiz render yok).
-        if (prev.length === alive.length && prev.every((pop, index) => pop.id === alive[index]?.id)) {
-          return prev
-        }
-        return alive
-      })
-      raf = window.requestAnimationFrame(watch)
-    }
-    raf = window.requestAnimationFrame(watch)
-    return () => window.cancelAnimationFrame(raf)
-  }, [scorePopRef])
-
-  // Ekran sarsıntısını izle. `shakeRef` yeni bir zaman damgası taşıdığında
-  // kısa süreliğine shake durumunu açarız; animasyon bitince temizleriz.
-  useEffect(() => {
-    let raf = 0
-    let last = 0
-    const watch = () => {
-      const value = shakeRef.current
-      if (value && value.at !== last) {
-        last = value.at
-        setShake(value)
-        window.setTimeout(() => {
-          setShake((current) => (current && current.at === value.at ? null : current))
-        }, SHAKE_MS)
-      }
-      raf = window.requestAnimationFrame(watch)
-    }
-    raf = window.requestAnimationFrame(watch)
-    return () => window.cancelAnimationFrame(raf)
-  }, [shakeRef])
-
-  // Yerel oyuncunun konumunu doğrudan DOM'a uygula (React render'ı olmadan).
-  // Bu, hareketin 60Hz'de akıcı kalmasını sağlar; `state` yalnızca skor/coin
-  // gibi anlamlı değişimlerde güncellenir.
-  useEffect(() => {
-    let raf = 0
     const tick = () => {
+      const now = Date.now()
+
+      // --- Konum (render YOK; doğrudan DOM) ---
+      // Boyut henüz ölçülmediyse (ilk kare) bir kez ölç.
+      if (arenaW === 0 || arenaH === 0) measure()
       const meNode = meRef.current
       const mePos = livePos.current
       // `null` iken yazmayız: döngü henüz spawn konumunu tohumlamadı. Aksi
       // halde ilk karede avatar (0,0) köşesine ışınlanıp sonra spawn'a
       // zıplıyordu ("ilk girdiğimizde garip hareket" şikâyeti).
-      if (meNode && mePos) {
-        meNode.style.left = `${mePos.x}%`
-        meNode.style.top = `${mePos.y}%`
+      if (meNode && mePos && arenaW > 0 && arenaH > 0) {
+        const px = (mePos.x / 100) * arenaW
+        const py = (mePos.y / 100) * arenaH
+        meNode.style.transform = `translate3d(${px}px, ${py}px, 0)`
       }
       const rivalNode = rivalRef.current
       const rivalPos = liveRivalPos.current
-      if (rivalNode && rivalPos) {
-        rivalNode.style.left = `${rivalPos.x}%`
-        rivalNode.style.top = `${rivalPos.y}%`
+      if (rivalNode && rivalPos && arenaW > 0 && arenaH > 0) {
+        const px = (rivalPos.x / 100) * arenaW
+        const py = (rivalPos.y / 100) * arenaH
+        rivalNode.style.transform = `translate3d(${px}px, ${py}px, 0)`
       }
+
+      // --- Kutlama katmanı ---
+      const celebrateAt = celebrateRef.current
+      const celebrateFresh = celebrateAt > 0 && now - celebrateAt < CELEBRATE_MS
+      setCelebrate((current) =>
+        current === celebrateAt && !celebrateFresh ? 0 : celebrateFresh ? celebrateAt : current,
+      )
+
+      // --- Elmas "+50" rozeti ---
+      const pop = diamondPopRef.current
+      if (pop && pop.at !== lastDiamondAt) {
+        lastDiamondAt = pop.at
+        setDiamondPop(pop)
+      }
+      // Süresi dolan rozeti gizle (zaman aşımı yerine döngü içinde karar).
+      setDiamondPop((current) => (current && now - current.at >= DIAMOND_POP_MS ? null : current))
+
+      // --- COMBO rozeti ---
+      const comboValue = comboRef.current
+      const comboFresh = now - comboValue.at <= COMBO_WINDOW_MS
+      setCombo((current) => {
+        const next = comboFresh && comboValue.count >= 2 ? comboValue.count : 0
+        return current === next ? current : next
+      })
+
+      // --- Uçan puan rozetleri ---
+      const list = scorePopRef.current
+      const cutoff = now - SCORE_POP_MS
+      const alive = list.filter((item) => item.at >= cutoff)
+      setScorePops((prev) => {
+        // Yalnızca gerçekten değiştiyse yeni referans döndür (gereksiz render yok).
+        if (prev.length === alive.length && prev.every((item, index) => item.id === alive[index]?.id)) {
+          return prev
+        }
+        return alive
+      })
+
+      // --- Ekran sarsıntısı ---
+      const shakeValue = shakeRef.current
+      if (shakeValue && shakeValue.at !== lastShakeAt) {
+        lastShakeAt = shakeValue.at
+        setShake(shakeValue)
+      }
+      setShake((current) => (current && now - current.at >= SHAKE_MS ? null : current))
+
       raf = window.requestAnimationFrame(tick)
     }
     raf = window.requestAnimationFrame(tick)
-    return () => window.cancelAnimationFrame(raf)
-  }, [livePos, liveRivalPos])
+    return () => {
+      window.cancelAnimationFrame(raf)
+      window.removeEventListener('resize', measure)
+    }
+  }, [celebrateRef, diamondPopRef, comboRef, scorePopRef, shakeRef, livePos, liveRivalPos])
+
+  // İLK KONUM TOHUMU: Avatar düğümleri ilk kez DOM'a girdiğinde konumlarını
+  // bir kez (paint'ten ÖNCE) yazarız. Böylece avatar bir kare bile (0,0)
+  // köşesinde görünmez. Sonraki tüm güncellemeleri RAF döngüsü yapar; React
+  // inline `transform` vermediği için döngünün yazdığı değer EZİLMEZ.
+  useLayoutEffect(() => {
+    const arena = arenaRef.current
+    if (!arena) return
+    const rect = arena.getBoundingClientRect()
+    if (rect.width === 0 || rect.height === 0) return
+    const seed = (node: HTMLDivElement | null, pos: { x: number; y: number } | null | undefined) => {
+      if (!node || !pos) return
+      const px = (pos.x / 100) * rect.width
+      const py = (pos.y / 100) * rect.height
+      node.style.transform = `translate3d(${px}px, ${py}px, 0)`
+    }
+    seed(meRef.current, livePos.current ?? { x: state.players[0]?.x ?? 0, y: state.players[0]?.y ?? 0 })
+    seed(rivalRef.current, liveRivalPos.current ?? { x: state.players[1]?.x ?? 0, y: state.players[1]?.y ?? 0 })
+  }, [livePos, liveRivalPos, state.players])
 
   // YEREL STATE SIRASI: index 0 = "ben", index 1 = "rakip" (iki istemcide de).
   const me = state.players[0]
@@ -452,6 +455,7 @@ export function Battle({
       </header>
 
       <div
+        ref={arenaRef}
         className={[
           'arena',
           shake ? `shake-${shake.kind}` : '',
@@ -574,7 +578,14 @@ export function Battle({
               key={player.id}
               ref={isMe ? meRef : rivalRef}
               className={['avatar', isMe ? 'me' : 'rival', (player.slowedUntil ?? 0) > now ? 'slowed' : ''].join(' ')}
-              style={{ left: `${player.x}%`, top: `${player.y}%` }}
+              // KONUM BURADA VERİLMEZ. Konum, RAF döngüsünde doğrudan DOM'a
+              // `transform: translate3d()` ile yazılır (mobilde left/top
+              // layout'undan çok daha akıcı). Inline `transform` verilseydi,
+              // React her render'da (skor/coin değişimi) döngünün yazdığı
+              // piksel transform'unu yüzde değeriyle EZER ve avatar bir kare
+              // geriye zıplardı. İlk boyamadaki konum `useLayoutEffect` ile
+              // (aşağıda) bir kez tohumlanır.
+              data-avatar={isMe ? 'me' : 'rival'}
             >
               {trail.id !== 'none' && (
                 <span className="avatar-trail" style={{ background: trail.color }} aria-hidden />
