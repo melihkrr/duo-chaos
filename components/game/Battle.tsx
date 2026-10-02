@@ -24,7 +24,7 @@ type Props = {
    * Yerel oyuncunun ANLIK konumu (arena %). Oyun döngüsü her karede buraya
    * yazar; `Battle` bunu doğrudan DOM'a uygular. Böylece 60Hz hareket React
    * render'ı tetiklemez ve hareket akıcı kalır. `null` iken (döngü henüz
-   * tohumlamadı) DOM'a YAZILMAZ — ilk karede (0,0) ışınlanmasını engeller.
+   * tohumlamadı) DOM'a YAZILMAZ — ilk karede (0,0) ışınlanmasını engeller
    */
   livePos: React.RefObject<{ x: number; y: number } | null>
   /**
