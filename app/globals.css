@@ -1724,11 +1724,10 @@ h3 {
   order: 1;
 }
 
-/* Joystick artık arena içinde yüzer; footer'daki sabit sarmalayıcı kaldırıldı. */
+/* Joystick arena içindeki dokunma konumunda belirir. */
 
 /* --- Tam ekran modu ---
-   Arena tüm ekranı kaplar; HUD üstte sabit kalır, diğer kontroller gizlenir.
-   Joystick artık arena içinde yüzer (dokunulan yerde oluşur). */
+   Arena tüm ekranı kaplar; HUD üstte sabit kalır, diğer kontroller gizlenir. */
 .battle-wrap.is-fullscreen {
   position: fixed;
   inset: 0;
@@ -1774,9 +1773,7 @@ h3 {
   display: none;
 }
 
-/* Tam ekranda joystick zaten arena içinde yüzer; ek konumlandırma gerekmez.
-   Yakalama katmanı arena'yı kapladığı için tam ekranda da tüm oyun alanı
-   dokunmaya açıktır. */
+/* Tam ekranda joystick dokunulan yerde belirir; yakalama alanı tam ekran arena'dır. */
 
 /* Tam ekran düğmesi (HUD ortasında). */
 .fs-toggle {
@@ -1833,12 +1830,12 @@ h3 {
   background: transparent;
 }
 
-/* Joystick tabanı: dokunma noktasına yerleştirilir. Kalıcı konumu YOKTUR;
-   `left`/`top` JS ile dokunma anında ayarlanır. Varsayılan olarak gizlidir
-   (opacity 0) ve dokunma başlayınca görünür. */
+/* Joystick yalnızca basılıyken görünür; JS dokunma konumuna yerleştirir ve
+   kenarlardaki dairenin tamamını arena içinde tutar. */
 .joystick {
   position: absolute;
-  /* Merkez, `left`/`top` noktasına denk gelsin diye yarıçap kadar geri kay. */
+  left: 0;
+  top: 0;
   transform: translate(-50%, -50%);
   border: 3px solid var(--ink);
   border-radius: 50%;
@@ -1848,8 +1845,7 @@ h3 {
   user-select: none;
   -webkit-user-select: none;
   pointer-events: none;
-  opacity: 0.8;
-  transition: opacity 0.12s var(--ease-soft);
+  opacity: 0;
   will-change: opacity;
 }
 

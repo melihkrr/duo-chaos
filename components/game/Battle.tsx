@@ -137,7 +137,7 @@ export function Battle({
   const { language, t } = useI18n()
   const [now, setNow] = useState(0)
   // Tam ekran modu. `true` iken arena tüm ekranı kaplar; HUD üstte kalır,
-  // joystick sağ altta yarı şeffaf olur ve diğer kontroller gizlenir.
+  // joystick dokunulan yerde yarı şeffaf görünür ve diğer kontroller gizlenir.
   //
   // İki kaynak birleşir:
   //   - `nativeFs`: tarayıcının gerçek Fullscreen API'si (masaüstü/Android).
@@ -622,19 +622,15 @@ export function Battle({
           </span>
         )}
 
-        {/* DİNAMİK (YÜZEN) JOYSTICK: Arena'nın TAMAMINI kaplayan şeffaf bir
-            yakalama katmanı. Oyuncu oyun alanında herhangi bir yere
-            dokunduğunda joystick TAM O NOKTADA oluşur; parmak kaldırılınca
-            kaybolur. Arena'nın son çocuğu olduğu için diğer arena içi
-            katmanların (coin, avatar, banner) üstünde kalır. Butonlar/HUD/
-            menüler arena DIŞINDA olduğundan bu katman onları etkilemez. */}
+        {/* Gizli joystick arena'nın dokunulan yerinde belirir; HUD ve arena
+            dışındaki kontroller bu giriş katmanından etkilenmez. */}
         <VirtualJoystick onChange={onJoystick} />
       </div>
 
       {/* Düzen:
           - Masaüstü: kozmetik (emote + trail) paneli SOLDA.
           - Mobil: panel altta.
-          - Tam ekran: panel gizlenir; joystick arena içinde yüzer. */}
+          - Tam ekran: panel gizlenir; joystick dokunulan yerde görünür. */}
       <footer className="battle-foot">
         <div className="battle-side">
           <CosmeticsPicker cosmetics={cosmetics} level={level} />

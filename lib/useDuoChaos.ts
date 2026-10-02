@@ -33,7 +33,8 @@ import { useCosmetics } from './useCosmetics'
 import { useGameLoop } from './useGameLoop'
 import { blankPlayer, useGameState } from './useGameState'
 import { useProgress } from './useProgress'
-import { useRoom, readToken, saveToken } from './useRoom'
+import { useRoom, readName, readToken, saveToken } from './useRoom'
+import { resolvePlayerName } from './playerName'
 import { useToast } from './useToast'
 import type { AvatarId, Coin, CoinType, EmoteId, Phase, Player, State, TrailId } from './types'
 
@@ -2182,7 +2183,7 @@ export const useDuoChaos = () => {
       unlockAudio()
       try {
         const code = makeCode()
-        const displayName = (name ?? room.name ?? '').trim()
+        const displayName = resolvePlayerName(name, readName(), room.name)
         // Her oyuncu BENZERSİZ bir token kullanmalı. Aksi halde iki taraf da
         // `t-${code}` gönderir ve `duo_join_room` token eşleşmesinden dolayı
         // ikinci oyuncuyu "yeniden bağlanan host" sanıp slot 1'e oturtur.
@@ -2219,7 +2220,7 @@ export const useDuoChaos = () => {
       unlockAudio()
       const normalized = code.trim().toUpperCase()
       try {
-        const displayName = (name ?? room.name ?? '').trim()
+        const displayName = resolvePlayerName(name, readName(), room.name)
         // ÖNEMLİ: Bu odaya daha önce katıldıysak KAYITLI token'ı kullanırız.
         // Aksi halde her yeniden girişte yeni bir token üretilir; oyuncunun
         // eski satırı hâlâ duruyorsa `duo_join_room` "room_full" fırlatır
@@ -2271,10 +2272,10 @@ export const useDuoChaos = () => {
       // oturumdan kalan BAYAT ad) yerel adı EZİYORDU. Ayrıca sunucuya hiç
       // `p_name` göndermediğimiz için satır da güncellenmiyordu.
       //
-      // ÇÖZÜM: Kullanıcının AÇIKÇA girdiği güncel adı (`room.name`, Home
-      // input'u ile canlı senkron) sunucuya `p_name` olarak göndeririz ve
-      // bağlantıda da bu adı kullanırız. Yerel ad boşsa sunucu adına düşeriz.
-      const localName = (room.name ?? '').trim()
+      // ÇÖZÜM: Güncel adı doğrudan localStorage'dan da okuruz. URL effect'i
+      // isim hidrasyonundan önce çalışabileceği için `room.name` henüz boş
+      // veya eski olabilir; persisted değer önce gelir.
+      const localName = resolvePlayerName(readName(), room.name)
       try {
         // Sunucudan hangi slotta olduğumuzu öğren (p1 mi p2 mi?). Güncel adı
         // da göndeririz; sunucu satırı tazeler ve yanıtta güncel adı döner.

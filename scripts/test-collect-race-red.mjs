@@ -168,8 +168,8 @@ const ARENA_Y = 50
 // `duo_collect` would be rejected. We therefore drive the position through the
 // REAL `duo_move` RPC (the same path the client uses) and only then stack the
 // coins on the resulting server position.
-const prepareTwoRed = async (client, code) => {
-  await rpc(client, 'duo_move', { p_code: code, p_token: 'host-token-race', p_x: ARENA_X, p_y: ARENA_Y })
+const prepareTwoRed = async (client, code, hostToken) => {
+  await rpc(client, 'duo_move', { p_code: code, p_token: hostToken, p_x: ARENA_X, p_y: ARENA_Y })
   const { rows: posRows } = await client.query(
     `select x, y from duo_players where room_code = $1 and slot = 1`,
     [code],
@@ -230,7 +230,7 @@ const run = async () => {
 
   for (let i = 1; i <= ITERATIONS; i += 1) {
     await forceRedObjective(client, code)
-    const [coinA, coinB] = await prepareTwoRed(client, code)
+    const [coinA, coinB] = await prepareTwoRed(client, code, hostToken)
 
     // Fire BOTH valid Red pickups ALMOST SIMULTANEOUSLY, each on its own
     // dedicated connection/transaction — exactly like two overlapping requests.
@@ -306,12 +306,17 @@ const run = async () => {
   let staleFailures = 0
   for (let i = 1; i <= ITERATIONS; i += 1) {
     await forceRedObjective(client, code2)
-    const [coinA, coinB] = await prepareTwoRed(client, code2)
+    const [coinA, coinB] = await prepareTwoRed(client, code2, host2)
     // Move the SERVER position FAR away (stale) — the client has NOT yet sent
-    // the fresh `duo_move`. This is the exact race window. We also age the
-    // movement clock so the subsequent recovery `duo_move` is time-legal.
+    // the fresh `duo_move`. This is the exact race window.
+    //
+    // The movement clock is left RECENT (now()) so the client's claimed
+    // position (50,50) is NOT reachable from the server-stored (0,0) within the
+    // elapsed time → `duo_step_ok` is false → the server keeps (0,0) and the
+    // distance check rejects the coins with `too_far`. This is precisely the
+    // anti-cheat guarantee: a lying/stale client cannot collect a remote coin.
     await client.query(
-      `update duo_players set x = 0, y = 0, last_move_at = now() - interval '5 seconds'
+      `update duo_players set x = 0, y = 0, last_move_at = now()
          where room_code = $1 and slot = 1`,
       [code2],
     )
@@ -328,12 +333,26 @@ const run = async () => {
     } finally {
       await Promise.all([connA.end().catch(() => {}), connB.end().catch(() => {})])
     }
-    const rejected = [resA, resB].filter((r) => r && r.ok === false && r.reason === 'too_far').length
+    // The server's anti-cheat contract: a stale/lying position must collect
+    // NOTHING. `duo_collect_batch` reports this as `ok:true` with an EMPTY
+    // `acceptedCoinIds` (the coin is out of range from the SERVER-STORED
+    // position), so we assert "zero coins accepted" rather than a specific
+    // reason string.
+    const staleAccepted = [resA, resB].reduce(
+      (n, r) => n + (Array.isArray(r?.acceptedCoinIds) ? r.acceptedCoinIds.length : 0),
+      0,
+    )
     const afterStale = await readPlayer(client, code2)
 
     // (b) Now refresh position (await duo_move) THEN collect → must be accepted.
     //     Use the SAME in-range arena point as the coins so the clamped position
     //     lands exactly on them (duo_clamp_pos clamps to x∈[5,95], y∈[7,93]).
+    //     Age the movement clock first so the recovery move is time-legal.
+    await client.query(
+      `update duo_players set last_move_at = now() - interval '5 seconds'
+         where room_code = $1 and slot = 1`,
+      [code2],
+    )
     await rpc(client, 'duo_move', { p_code: code2, p_token: host2, p_x: ARENA_X, p_y: ARENA_Y })
     const [connC, connD] = await Promise.all([connectOne(), connectOne()])
     let resC
@@ -351,7 +370,7 @@ const run = async () => {
     const redCollected = await countCollectedRed(client, code2)
 
     const ok =
-      rejected === 2 &&
+      staleAccepted === 0 &&
       Number(afterStale.round_coins) === 0 &&
       accepted === 2 &&
       Number(afterFresh.round_coins) === 2 &&
@@ -361,11 +380,11 @@ const run = async () => {
     if (!ok) {
       staleFailures += 1
       console.log(
-        `  \u2718 iter ${i}: rejected=${rejected} staleRoundCoins=${afterStale.round_coins} accepted=${accepted} freshRoundCoins=${afterFresh.round_coins} redCollected=${redCollected} objectivesDone=${afterFresh.objectives_done}`,
+        `  \u2718 iter ${i}: staleAccepted=${staleAccepted} staleRoundCoins=${afterStale.round_coins} accepted=${accepted} freshRoundCoins=${afterFresh.round_coins} redCollected=${redCollected} objectivesDone=${afterFresh.objectives_done}`,
       )
     } else if (i % 10 === 0 || i === 1) {
       console.log(
-        `  \u2714 iter ${i}: stale → 2×too_far (0/2), after await move → 2/2 (roundCoins=2, objectivesDone=1)`,
+        `  \u2714 iter ${i}: stale → 0/2 accepted (out of range), after await move → 2/2 (roundCoins=2, objectivesDone=1)`,
       )
     }
   }
