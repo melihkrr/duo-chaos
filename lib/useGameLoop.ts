@@ -936,17 +936,10 @@ export const useGameLoop = (deps: LoopDeps) => {
         applyServerState(response, state.round)
         playSound('steal')
         shakeRef.current = { at: performance.now(), kind: 'steal' }
-        // ÇALINANIN DURUMU (0052): sunucu artık kurbanın sonuç durumunu da
-        // döndürür. Yayında iletiriz; ÇALINAN istemci kendi -25'ini ANINDA ve
-        // OTORİTER uygular (bayat `duo_public_state` yoklamasına bağımlı
-        // kalmaz). Bu, "çalan benim ama benden puan gidiyor" hatasının kök
-        // çözümüdür: savaş yoklamasındaki yerel skor birleştirmesi artık
-        // MONOTONİK olabilir (bayat snapshot çalanın +25'ini ezemez).
-        const result = response as { state?: unknown; victimState?: unknown }
+        const result = response as { state?: unknown }
         broadcast('steal', {
           by: playerId,
           objectiveState: result.state,
-          victimState: result.victimState,
           round: state.round,
         })
       })

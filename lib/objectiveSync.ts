@@ -256,43 +256,6 @@ export const applyAuthoritativeActionState = (
   return { ...previous, players }
 }
 
-/**
- * ÇALINANIN OTORİTER DURUMU (0052).
- *
- * Çalma başarılı olduğunda sunucu, ÇALINANIN sonuç durumunu (`victimState`)
- * döndürür. ÇALINAN istemci bu durumu KENDİ yerel oyuncusuna (index 0)
- * uygular. Bu yol, diğer otorite uygulayıcılarından FARKLI olarak skoru
- * MONOTONİK DEĞİL, AYNEN uygular: çalınan oyuncunun puanı MEŞRU olarak
- * DÜŞER (-25). `Math.max` kullanırsak kayıp hiç görünmez.
- *
- * Yalnızca puan/coin alanları uygulanır; görev alanları çalınana ait
- * olmadığından (çalma çalınanın görevini etkilemez) dokunulmaz.
- */
-export const applyAuthoritativeVictimState = (
-  previous: State,
-  server: AuthoritativeActionState,
-  actionRound: number,
-): State => {
-  if (previous.round !== actionRound) return previous
-
-  const local = previous.players[0]
-  if (!local) return previous
-
-  const players = previous.players.map((player, index) => {
-    if (index !== 0) return player
-    return {
-      ...player,
-      coins: server.coins ?? player.coins,
-      roundCoins: server.roundCoins ?? player.roundCoins,
-      // ÇALINAN: puan MEŞRU olarak düşer → `Math.max` DEĞİL, AYNEN uygula.
-      score: server.score ?? player.score,
-      roundScore: server.roundScore ?? player.roundScore,
-    }
-  })
-
-  return { ...previous, players }
-}
-
 export const applyAuthoritativeRivalState = (
   previous: State,
   server: AuthoritativeActionState,
