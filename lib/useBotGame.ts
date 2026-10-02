@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   BATTLE_MS,
+  BUMP_COOLDOWN_MS,
   CHAOS_EVENTS,
   COIN_RESPAWN_MS,
   COLLECT_RADIUS,
@@ -21,7 +22,7 @@ import {
 } from './config'
 import { objectiveSatisfied, progressOf } from './display'
 import { installInputResetListeners, resetAllInput } from './inputReset'
-import { resolveMove } from './movement'
+import { computeBump, resolveMove } from './movement'
 import { playSound } from './sound'
 import { useChaos } from './useChaos'
 import { useCosmetics } from './useCosmetics'
@@ -155,6 +156,10 @@ export const useBotGame = (): BotGameApi => {
   const comboRef = useRef<{ count: number; at: number }>({ count: 0, at: 0 })
   const scorePopRef = useRef<Array<{ id: number; x: number; y: number; value: number; at: number }>>([])
   const shakeRef = useRef<{ at: number; kind: 'bump' } | null>(null)
+  // PLAYER BUMP / KNOCKBACK — yerel bekleme (cooldown). Tek oyunculu modda
+  // sunucu YOKTUR; bump tamamen yerel olarak `computeBump` ile çözülür. Aynı
+  // çift için sürekli temasın her karede itmesini engeller.
+  const bumpCooldownRef = useRef(0)
 
   const joystick = useRef({ x: 0, y: 0 })
   const keys = useRef({ up: false, down: false, left: false, right: false })
@@ -523,6 +528,32 @@ export const useBotGame = (): BotGameApi => {
     botMemory.current.x = botNextX
     botMemory.current.y = botNextY
     liveRivalPos.current = { x: botNextX, y: botNextY }
+
+    // --- PLAYER BUMP / KNOCKBACK (yerel, deterministik). ---
+    //
+    // Tek oyunculu modda sunucu yoktur; bump `computeBump` ile YEREL olarak
+    // çözülür. Çok oyunculu `duo_bump` ile AYNI matematiği kullanır (yön =
+    // merkezler arası normalize vektör, belirsizde +x yedeği, her iki oyuncu
+    // `BUMP_KNOCKBACK` kadar itilir, arena sınırına kırpılır). Skor/coin/görev/
+    // tur DEĞİŞMEZ. `BUMP_COOLDOWN_MS` sürekli temasın her karede itmesini
+    // engeller.
+    if (now - bumpCooldownRef.current >= BUMP_COOLDOWN_MS) {
+      const contact = computeBump(nextX, nextY, botNextX, botNextY)
+      if (contact.bumped) {
+        bumpCooldownRef.current = now
+        nextX = contact.me.x
+        nextY = contact.me.y
+        botNextX = contact.rival.x
+        botNextY = contact.rival.y
+        localPos.current = { x: nextX, y: nextY }
+        livePos.current = { x: nextX, y: nextY }
+        botMemory.current.x = botNextX
+        botMemory.current.y = botNextY
+        liveRivalPos.current = { x: botNextX, y: botNextY }
+        shakeRef.current = { at: now, kind: 'bump' }
+        playSound('bump')
+      }
+    }
 
     // --- Toplama: yerel oyuncu ---
     const meCandidates = prev.coins

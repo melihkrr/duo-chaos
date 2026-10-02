@@ -1,4 +1,10 @@
-import { ARENA, OBSTACLES, PLAYER_HIT_R } from './config'
+import {
+  ARENA,
+  BUMP_CONTACT_R,
+  BUMP_KNOCKBACK,
+  OBSTACLES,
+  PLAYER_HIT_R,
+} from './config'
 
 /**
  * Engel çarpışma sistemi — "solid" ve görselle birebir hizalı.
@@ -213,4 +219,65 @@ export function resolveMove(fromX: number, fromY: number, toX: number, toY: numb
   // Son bir güvenlik: asla engel içinde bitirme.
   const final = pushOut(curX, curY, PLAYER_HIT_R)
   return clampPos(final.x, final.y)
+}
+
+/**
+ * PLAYER BUMP / KNOCKBACK — saf (pure) çözümleyici.
+ *
+ * İki oyuncu temas menzilindeyse İKİSİNİ de birbirinden uzaklaştıracak yeni
+ * konumları döndürür. Sunucudaki `duo_bump` ile AYNI matematiği kullanır:
+ *   * yön = rakibinden bana doğru normalize vektör,
+ *   * merkezler çakışıksa (belirsiz) deterministik +x yedeği,
+ *   * her oyuncu `BUMP_KNOCKBACK` kadar itilir,
+ *   * sonuç arena sınırlarına kırpılır ve engel dışına itilir.
+ *
+ * Skor/coin/görev/tur DEĞİŞTİRMEZ; yalnızca konum döndürür. NaN/Infinity asla
+ * üretilmez (mesafe 0 iken yedek yön kullanılır).
+ *
+ * @returns `bumped: false` ve mevcut konumlar (temas yoksa); aksi halde yeni
+ *          konumlar.
+ */
+export function computeBump(
+  meX: number,
+  meY: number,
+  rivalX: number,
+  rivalY: number,
+  contactR = BUMP_CONTACT_R,
+  knockback = BUMP_KNOCKBACK,
+): {
+  bumped: boolean
+  me: { x: number; y: number }
+  rival: { x: number; y: number }
+} {
+  const dx = meX - rivalX
+  const dy = meY - rivalY
+  const dist = Math.hypot(dx, dy)
+
+  if (dist > contactR) {
+    return { bumped: false, me: { x: meX, y: meY }, rival: { x: rivalX, y: rivalY } }
+  }
+
+  // Yön: rakibinden bana doğru. Merkezler çakışıksa deterministik +x yedeği.
+  let nx: number
+  let ny: number
+  if (dist < 1e-6) {
+    nx = 1
+    ny = 0
+  } else {
+    nx = dx / dist
+    ny = dy / dist
+  }
+
+  const meTarget = clampPos(meX + nx * knockback, meY + ny * knockback)
+  const rivalTarget = clampPos(rivalX - nx * knockback, rivalY - ny * knockback)
+
+  // Engel içinde kalmasın: `resolveMove` ile aynı push-out güvencesi.
+  const meSafe = pushOut(meTarget.x, meTarget.y, PLAYER_HIT_R)
+  const rivalSafe = pushOut(rivalTarget.x, rivalTarget.y, PLAYER_HIT_R)
+
+  return {
+    bumped: true,
+    me: clampPos(meSafe.x, meSafe.y),
+    rival: clampPos(rivalSafe.x, rivalSafe.y),
+  }
 }
