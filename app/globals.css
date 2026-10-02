@@ -1692,16 +1692,11 @@ h3 {
   order: 1;
 }
 
-/* Joystick sarmalayıcısı: masaüstünde sağda. */
-.battle-joystick {
-  display: flex;
-  flex: none;
-  order: 2;
-}
+/* Joystick artık arena içinde yüzer; footer'daki sabit sarmalayıcı kaldırıldı. */
 
 /* --- Tam ekran modu ---
-   Arena tüm ekranı kaplar; HUD üstte sabit kalır, joystick sağ altta yarı
-   şeffaf olarak arena'nın üzerine biner, diğer kontroller gizlenir. */
+   Arena tüm ekranı kaplar; HUD üstte sabit kalır, diğer kontroller gizlenir.
+   Joystick artık arena içinde yüzer (dokunulan yerde oluşur). */
 .battle-wrap.is-fullscreen {
   position: fixed;
   inset: 0;
@@ -1747,48 +1742,9 @@ h3 {
   display: none;
 }
 
-/* Joystick sarmalayıcısı tam ekranda konumlanmayı devreder. */
-.battle-wrap.is-fullscreen .battle-joystick {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  /* Sarmalayıcı da HUD'un üstünde kalsın (içerideki joystick z-index'i bu
-     bağlam içinde değerlendirilir). */
-  z-index: 1;
-}
-
-/* Joystick sağ altta, yarı şeffaf. */
-.battle-wrap.is-fullscreen .joystick {
-  position: absolute;
-  right: 22px;
-  bottom: 22px;
-  /* GÖREV/HUD ve chaos banner katmanlarının ÜZERİNDE olmalı: tam ekranda
-     joystick, görev kartlarının (HUD) ve "Gold Rush" gibi chaos banner'ların
-     altında kalıp dokunulamaz hale geliyordu. `z-index` ile joystick'i
-     hepsinin üstüne çıkarırız. */
-  z-index: 60;
-  /* KENDİ KOMPOZİT KATMANI: `transform`/`will-change` ile joystick'i ayrı bir
-     GPU katmanına alırız. Böylece tarayıcı, joystick'i (z-index'i daha yüksek
-     olsa bile) başka bir kompozit katmanın arkasına çizemez. */
-  transform: translateZ(0);
-  will-change: transform;
-  opacity: 0.85;
-  background: rgba(255, 255, 255, 0.28);
-  border-color: rgba(43, 36, 64, 0.45);
-  box-shadow: 0 4px 0 rgba(43, 36, 64, 0.12);
-  pointer-events: auto;
-  transition: opacity 0.2s var(--ease-soft);
-}
-
-.battle-wrap.is-fullscreen .joystick:active,
-.battle-wrap.is-fullscreen .joystick:focus-within {
-  opacity: 0.85;
-}
-
-.battle-wrap.is-fullscreen .joystick-knob {
-  border-color: rgba(43, 36, 64, 0.6);
-  box-shadow: 0 3px 0 rgba(43, 36, 64, 0.16);
-}
+/* Tam ekranda joystick zaten arena içinde yüzer; ek konumlandırma gerekmez.
+   Yakalama katmanı arena'yı kapladığı için tam ekranda da tüm oyun alanı
+   dokunmaya açıktır. */
 
 /* Tam ekran düğmesi (HUD ortasında). */
 .fs-toggle {
@@ -1827,9 +1783,31 @@ h3 {
    Joystick
    ============================================================ */
 
+/* Yakalama katmanı: arena'yı TAMAMEN kaplar ve yalnızca oyun alanındaki
+   dokunmaları yakalar. Şeffaftır; butonlar/menüler/HUD bu katmanın dışında
+   kaldığı için onlara dokunmak joystick'i tetiklemez. `touch-action: none`
+   sayfa kaydırma/zoom gibi tarayıcı hareketlerini oyun sırasında engeller. */
+.joystick-layer {
+  position: absolute;
+  inset: 0;
+  /* Dekoratif içeriğin (avatar z2, coin, combo z12) ÜSTÜNDE; ama etkileşimli
+     duraklama katmanının (`.rival-left-overlay` z30) ALTINDA olmalı ki
+     "Leave room" düğmesi tıklanabilir kalsın. Bu yüzden z-index 20. */
+  z-index: 20;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  background: transparent;
+}
+
+/* Joystick tabanı: dokunma noktasına yerleştirilir. Kalıcı konumu YOKTUR;
+   `left`/`top` JS ile dokunma anında ayarlanır. Varsayılan olarak gizlidir
+   (opacity 0) ve dokunma başlayınca görünür. */
 .joystick {
-  position: relative;
-  flex: none;
+  position: absolute;
+  /* Merkez, `left`/`top` noktasına denk gelsin diye yarıçap kadar geri kay. */
+  transform: translate(-50%, -50%);
   border: 3px solid var(--ink);
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.6);
@@ -1837,6 +1815,10 @@ h3 {
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s var(--ease-soft);
+  will-change: opacity;
 }
 
 .joystick-knob {
@@ -2509,14 +2491,6 @@ h3 {
     align-items: stretch;
   }
 
-  /* MOBİL: joystick EN ÜSTTE olsun. Sütun düzeninde `order: -1` ile joystick
-     panelin üstüne taşınır; kozmetik (emote/trail) paneli altında kalır. */
-  .battle-joystick {
-    order: -1;
-    justify-content: center;
-    margin-bottom: 4px;
-  }
-
   .battle-side {
     align-items: stretch;
     order: 1;
@@ -2529,10 +2503,6 @@ h3 {
 
   .chip-row {
     justify-content: flex-start;
-  }
-
-  .joystick {
-    align-self: center;
   }
 }
 

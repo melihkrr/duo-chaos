@@ -604,19 +604,23 @@ export function Battle({
             {cosmetics.activeGlyph}
           </span>
         )}
+
+        {/* DİNAMİK (YÜZEN) JOYSTICK: Arena'nın TAMAMINI kaplayan şeffaf bir
+            yakalama katmanı. Oyuncu oyun alanında herhangi bir yere
+            dokunduğunda joystick TAM O NOKTADA oluşur; parmak kaldırılınca
+            kaybolur. Arena'nın son çocuğu olduğu için diğer arena içi
+            katmanların (coin, avatar, banner) üstünde kalır. Butonlar/HUD/
+            menüler arena DIŞINDA olduğundan bu katman onları etkilemez. */}
+        <VirtualJoystick onChange={onJoystick} />
       </div>
 
       {/* Düzen:
-          - Masaüstü: kozmetik (emote + trail) paneli SOLDA, joystick SAĞDA.
-          - Mobil: joystick EN ÜSTTE, panel onun altında (CSS `order`).
-          - Tam ekran: panel gizlenir, joystick sağ altta yarı şeffaf olarak
-            arena'nın üzerine biner (CSS `.is-fullscreen`). */}
+          - Masaüstü: kozmetik (emote + trail) paneli SOLDA.
+          - Mobil: panel altta.
+          - Tam ekran: panel gizlenir; joystick arena içinde yüzer. */}
       <footer className="battle-foot">
         <div className="battle-side">
           <CosmeticsPicker cosmetics={cosmetics} level={level} />
-        </div>
-        <div className="battle-joystick">
-          <VirtualJoystick onChange={onJoystick} />
         </div>
       </footer>
 
