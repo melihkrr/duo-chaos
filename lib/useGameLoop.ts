@@ -923,12 +923,6 @@ export const useGameLoop = (deps: LoopDeps) => {
             p_token: token,
             p_expected_objectives_done: me.objectivesDone ?? 0,
             p_expected_round: state.round,
-            // Deterministik çalma: istemci KENDİ konumunu bildirir. Sunucu bu
-            // konumu `duo_step_ok` ile doğrular (anti-teleport) ve teması bu
-            // konuma göre ölçer. Böylece "çalan kim?" tahmin edilmez — çalmayı
-            // BAŞLATAN oyuncu çalandır.
-            p_x: nextX,
-            p_y: nextY,
           })
           if (!isRpcSuccess(result) && isTransientRpcFailure(result)) {
             throw new Error(`duo_steal_versioned transient rejection: ${JSON.stringify(result)}`)
@@ -942,13 +936,10 @@ export const useGameLoop = (deps: LoopDeps) => {
         applyServerState(response, state.round)
         playSound('steal')
         shakeRef.current = { at: performance.now(), kind: 'steal' }
-        const result = response as { state?: unknown; victimState?: unknown }
+        const result = response as { state?: unknown }
         broadcast('steal', {
           by: playerId,
           objectiveState: result.state,
-          // Kurbanın istemcisi -25'i ANINDA uygulasın diye otoriter delta da
-          // yayınlanır (bayat `duo_public_state` yoklamasını beklemeden).
-          victimState: result.victimState,
           round: state.round,
         })
       })
