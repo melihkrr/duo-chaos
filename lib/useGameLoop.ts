@@ -38,6 +38,22 @@ import type { Coin, Player, State } from './types'
 const REMOTE_SETTLE = 0.25
 
 /**
+ * ÇALMA TEMAS PAYI (arena %).
+ *
+ * `STEAL_RADIUS` (= PLAYER_HIT_R * 2 = 5.2) tam olarak çarpışma temas
+ * mesafesidir. Ağ jitter'ı ve tek karelik konum ıskalamaları yüzünden istemci
+ * rakibe FİİLEN değdiği hâlde ölçülen mesafe bir tık büyük çıkabilir ve çalma
+ * denemesi HİÇ başlamaz. Bu pay, denemenin BAŞLATILMASINI sağlar; sunucu yine
+ * KENDİ depoladığı konumlarla `too_far` doğrulaması yaptığı için otorite
+ * gevşemez — yalnızca gereksiz ıskalamalar önlenir.
+ *
+ * Değer, bir karede kat edilen mesafeden (MOVE_SPEED * 16ms ≈ 0.6) biraz
+ * büyüktür; böylece tek karelik gecikme tolere edilir ama uzaktan çalma
+ * tetiklenmez.
+ */
+const STEAL_CONTACT_SLACK = 1.2
+
+/**
  * Görev tamamlandığında gösterilen kutlama penceresinin süresi (ms).
  *
  * ÖNEMLİ: Yeni görev ARTIK bu süre beklenmeden, tamamlanma anında HEMEN
@@ -390,6 +406,10 @@ export const useGameLoop = (deps: LoopDeps) => {
         remoteTarget.current = null
         remoteSample.current = null
         remoteVel.current = { x: 0, y: 0 }
+        // Rakibin EKRANA basılan konumunu da sıfırla. Aksi halde yeni turun
+        // ilk karelerinde (taze broadcast gelmeden) eski turun son konumu
+        // kullanılır ve çalma menzili yanlış hesaplanabilir.
+        liveRivalPos.current = null
         // Yeni turda combo serisini ve uçan puan rozetlerini sıfırla.
         comboRef.current = { count: 0, at: 0 }
         scorePopRef.current = []
@@ -620,12 +640,39 @@ export const useGameLoop = (deps: LoopDeps) => {
     // oluyordu; oyuncu rakibin üstünde dururken saniyede ~1 deneme yapabiliyor
     // ve çoğu reddediliyordu → "çok nadir tetikleniyor". Artık bekleme YALNIZCA
     // sunucu çalmayı ONAYLADIĞINDA tüketilir (aşağıdaki `steal` eyleminde).
+    //
+    // KÖK SORUN 3 ("temas var ama çalma HİÇ tetiklenmiyor" — ASIL NEDEN):
+    // Menzil, `liveRivalPos.current` (RENDER için yumuşatılmış/interpolasyonlu
+    // rakip konumu) üzerinden ölçülüyordu. Bu değer rakibin GERÇEK konumunun
+    // ~83 ms (yumuşatma zaman sabiti) + broadcast gecikmesi kadar GERİSİNDE
+    // kalır. `STEAL_RADIUS = PLAYER_HIT_R * 2 = 5.2` ise tam olarak ÇARPIŞMA
+    // temas mesafesidir. MOVE_SPEED = 38 birim/s olduğundan, yumuşatma
+    // gecikmesi tek başına birkaç birimlik bir fark yaratır; oyuncu rakibe
+    // FİİLEN değdiğinde bile yumuşatılmış konum sık sık 5.2'nin DIŞINDA kalır
+    // → `stealing` hiç true olmaz → çalma RPC'si HİÇ çağrılmaz. Bot oyunu
+    // çalışır çünkü orada GERÇEK konum (`botNextX/botNextY`) kullanılır.
+    //
+    // ÇÖZÜM: Menzil kontrolünü EN TAZE HAM rakip konumuyla yap. Öncelik:
+    //   1. `remotePos` (ham broadcast; en az gecikmeli, gerçek konuma en yakın),
+    //   2. `liveRivalPos` (yumuşatılmış render konumu; broadcast yoksa),
+    //   3. `rivalTarget` (state; ilk kare / hiç broadcast gelmediyse).
+    // Ayrıca ağ jitter'ı ve tek karelik ıskalamayı tolere etmek için küçük bir
+    // `STEAL_CONTACT_SLACK` payı ekleriz. Sunucu yine de KENDİ depoladığı
+    // konumlarla `too_far` doğrulaması yapar; bu pay yalnızca istemcinin
+    // denemeyi BAŞLATMASINI sağlar, otoriteyi gevşetmez.
     let stealing = false
-    const rivalPos = liveRivalPos.current ?? rivalTarget
+    const rivalSlotForSteal = rivalTarget?.id
+    const rawRival =
+      (rivalSlotForSteal
+        ? remotePos.current?.get(rivalSlotForSteal) ??
+          remotePos.current?.get('rival') ??
+          remotePos.current?.get(rivalSlotForSteal === 'p1' ? 'p2' : 'p1')
+        : undefined) ?? null
+    const rivalPos = rawRival ?? liveRivalPos.current ?? rivalTarget
     if (
       rivalPos &&
       now - lastSteal.current >= STEAL_COOLDOWN_MS &&
-      Math.hypot(rivalPos.x - nextX, rivalPos.y - nextY) <= STEAL_RADIUS
+      Math.hypot(rivalPos.x - nextX, rivalPos.y - nextY) <= STEAL_RADIUS + STEAL_CONTACT_SLACK
     ) {
       stealing = true
     }
