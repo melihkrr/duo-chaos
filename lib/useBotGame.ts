@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   BATTLE_MS,
+  CHAOS_EVENTS,
   COIN_RESPAWN_MS,
   COLLECT_RADIUS,
   COUNTDOWN_MS,
@@ -152,6 +153,7 @@ export const useBotGame = (): BotGameApi => {
   const botMemory = useRef<BotMemory>(createBotMemory(82, 50))
   const lastStealAt = useRef(0)
   const lastRound = useRef(1)
+  const lastChaosSlot = useRef<number | null>(null)
   // stateRef updates after React commits; reserve coin IDs synchronously so
   // repeated RAF collision checks cannot enqueue the same pickup twice.
   const claimedPickupIds = useRef(new Map<number, number | null>())
@@ -247,6 +249,7 @@ export const useBotGame = (): BotGameApi => {
           objective: index === 0 ? first : second,
         })),
       }))
+      lastChaosSlot.current = null
       // Ref'leri sıfırla.
       localPos.current = null
       livePos.current = null
@@ -735,10 +738,36 @@ export const useBotGame = (): BotGameApi => {
       if (s.phase !== 'battle') return
       // Her 15 sn'de bir yeni chaos olayı (config'teki periyotla uyumlu).
       const slot = Math.floor(Date.now() / 15_000)
-      const events = ['gold-rush', 'blackout', 'magnet', 'swap', 'jackpot'] as const
-      const nextId = events[slot % events.length]
-      if (s.chaosEvent?.id !== nextId) {
-        chaosRef.current.sync({ id: nextId, endsAt: Date.now() + 12_000 })
+      const nextEvent = CHAOS_EVENTS[slot % CHAOS_EVENTS.length]
+      if (nextEvent && lastChaosSlot.current !== slot) {
+        const endsAt = Date.now() + 15_000
+        lastChaosSlot.current = slot
+        chaosRef.current.sync({ id: nextEvent.id, endsAt })
+        setState((prev) => {
+          let next = { ...prev, chaosEvent: nextEvent, chaosEventEndsAt: endsAt }
+          if (nextEvent.id === 'swap' && prev.players.length >= 2) {
+            const [first, second] = prev.players
+            next = {
+              ...next,
+              players: prev.players.map((player, index) => ({
+                ...player,
+                objective: index === 0 ? second?.objective ?? player.objective : first?.objective ?? player.objective,
+                coins: 0,
+                stolen: 0,
+                collectedTypes: {},
+                objectiveProgress: 0,
+                missionDone: false,
+              })),
+            }
+          }
+          if (nextEvent.id === 'jackpot' && !prev.coins.some((coin) => coin.id === 900 + prev.round)) {
+            next = {
+              ...next,
+              coins: [...next.coins, { id: 900 + prev.round, x: 50, y: 50, type: 'diamond' }],
+            }
+          }
+          return next
+        })
       }
     }, 3_000)
     return () => window.clearInterval(id)
@@ -750,10 +779,38 @@ export const useBotGame = (): BotGameApi => {
     if (state.phase !== 'battle') return
     const id = window.setInterval(() => {
       const c = chaosRef.current
-      if (c.event && c.endsAt > 0 && Date.now() >= c.endsAt) c.clear()
+      if (c.event && c.endsAt > 0 && Date.now() >= c.endsAt) {
+        c.clear()
+        setState((prev) =>
+          prev.chaosEvent
+            ? { ...prev, chaosEvent: undefined, chaosEventEndsAt: undefined }
+            : prev,
+        )
+      }
     }, 500)
     return () => window.clearInterval(id)
   }, [state.phase])
+
+  useEffect(() => {
+    if (state.phase !== 'battle' || state.chaosEvent?.id !== 'magnet') return
+    const id = window.setInterval(() => {
+      const now = Date.now()
+      setState((prev) => {
+        if (
+          prev.phase !== 'battle' ||
+          prev.chaosEvent?.id !== 'magnet' ||
+          (prev.chaosEventEndsAt ?? 0) <= now
+        ) return prev
+        const coins = prev.coins.map((coin) =>
+          coin.collectedBy || coin.type === 'diamond'
+            ? coin
+            : { ...coin, x: coin.x + (50 - coin.x) * 0.018, y: coin.y + (50 - coin.y) * 0.018 },
+        )
+        return { ...prev, coins }
+      })
+    }, 1_000)
+    return () => window.clearInterval(id)
+  }, [state.phase, state.chaosEvent?.id])
 
   // `objectiveIdRef` — görev değişimini izle (ileride genişletme için).
   useEffect(() => {

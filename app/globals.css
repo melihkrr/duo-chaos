@@ -2234,13 +2234,23 @@ h3 {
   background: rgba(200, 245, 224, 0.82);
 }
 
+.chaos-double-score {
+  background: rgba(255, 218, 145, 0.86);
+}
+
+.chaos-red-alert {
+  background: rgba(255, 194, 194, 0.86);
+}
+
 /* Chaos olayı sürerken arenaya olayın "ruhunu" yansıtan hafif renk tonu.
    Overlay pointer-events:none olduğu için oyunu etkilemez. */
 .arena-chaos-gold-rush::after,
 .arena-chaos-blackout::after,
 .arena-chaos-magnet::after,
 .arena-chaos-swap::after,
-.arena-chaos-jackpot::after {
+.arena-chaos-jackpot::after,
+.arena-chaos-double-score::after,
+.arena-chaos-red-alert::after {
   content: '';
   position: absolute;
   inset: 0;
@@ -2268,6 +2278,14 @@ h3 {
 
 .arena-chaos-jackpot::after {
   background: radial-gradient(circle at 50% 45%, rgba(94, 234, 190, 0.28), transparent 68%);
+}
+
+.arena-chaos-double-score::after {
+  background: radial-gradient(circle at 50% 45%, rgba(255, 190, 70, 0.28), transparent 68%);
+}
+
+.arena-chaos-red-alert::after {
+  background: radial-gradient(circle at 50% 45%, rgba(255, 70, 70, 0.24), transparent 68%);
 }
 
 @keyframes chaos-tint-in {

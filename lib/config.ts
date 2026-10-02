@@ -166,11 +166,13 @@ export const OBJECTIVE_POOL: Objective[] = [
 ]
 
 export const CHAOS_EVENTS: ChaosEvent[] = [
-  { id: 'gold-rush', name: 'Gold Rush', description: 'Gold spawns are boosted for 15s.', boost: 'Gold reward x3' },
-  { id: 'blackout', name: 'Blackout', description: 'The arena dims and nearby resources become more valuable.', boost: 'Risky visibility' },
+  { id: 'gold-rush', name: 'Gold Rush', description: 'Gold coins grant +25 points for 15s.', boost: 'Gold bonus +25' },
+  { id: 'blackout', name: 'Blackout', description: 'Arena visibility drops for 15s. Follow the glow and keep moving.', boost: 'Visibility reduced' },
   { id: 'magnet', name: 'Magnet Storm', description: 'Coins drift toward the center and pressure rises.', boost: 'Resource control' },
   { id: 'swap', name: 'Chaos Swap', description: 'One of your targets is swapped mid-round.', boost: 'Plans break' },
   { id: 'jackpot', name: 'Jackpot', description: 'A single Diamond appears. First player gets +50.', boost: 'Diamond +50' },
+  { id: 'double-score', name: 'Double Points', description: 'All standard coins are worth double for 15s.', boost: '2x coin points' },
+  { id: 'red-alert', name: 'Red Alert', description: 'Red coins grant +25 bonus points for 15s.', boost: 'Red bonus +25' },
 ]
 
 export const defaultObjectiveForPlayer = (id: string): Objective => {
@@ -223,6 +225,8 @@ export const getCoinValue = (type: CoinType, chaosEvent?: string, objective?: Ob
   const isTarget = objective?.requirements?.[type] || objective?.coinType === type
   const base = type === 'emerald' ? 25 : isTarget ? 15 : 5
   if (chaosEvent === 'gold-rush' && type === 'gold') return base + 25
+  if (chaosEvent === 'double-score') return base * 2
+  if (chaosEvent === 'red-alert' && type === 'red') return base + 25
   return base
 }
 

@@ -1,7 +1,14 @@
 export type Phase = 'home' | 'lobby' | 'countdown' | 'battle' | 'results' | 'matchover'
 
 export type CoinType = 'gold' | 'blue' | 'red' | 'emerald' | 'diamond'
-export type ChaosEventType = 'gold-rush' | 'blackout' | 'magnet' | 'swap' | 'jackpot'
+export type ChaosEventType =
+  | 'gold-rush'
+  | 'blackout'
+  | 'magnet'
+  | 'swap'
+  | 'jackpot'
+  | 'double-score'
+  | 'red-alert'
 
 export type ObjectiveKind = 'collect' | 'steal'
 

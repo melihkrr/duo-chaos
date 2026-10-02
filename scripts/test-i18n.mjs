@@ -41,10 +41,20 @@ for (const [name, actual, expected] of checks) {
 const event = localizedChaosEvent({
   id: 'gold-rush',
   name: 'Gold Rush',
-  description: 'Gold spawns are boosted for 15s.',
-  boost: 'Gold reward x3',
+  description: 'Gold coins grant +25 points for 15s.',
+  boost: 'Gold bonus +25',
 }, 'tr')
 assert.equal(event.name, 'Altına Hücum')
-assert.equal(event.description, '15 saniye boyunca daha fazla altın çıkar.')
+assert.equal(event.description, 'Altın paralar 15 saniye boyunca +25 puan kazandırır.')
 console.log('✔ translates dynamic chaos-event content')
-console.log('✔ ALL CHECKS PASSED — 6 localization checks')
+
+const doubleScore = localizedChaosEvent({
+  id: 'double-score',
+  name: 'Double Points',
+  description: 'All standard coins are worth double for 15s.',
+  boost: '2x coin points',
+}, 'tr')
+assert.equal(doubleScore.name, 'Çifte Puan')
+assert.equal(doubleScore.description, '15 saniye boyunca standart paralar iki kat puan kazandırır.')
+console.log('✔ translates new live chaos event content')
+console.log('✔ ALL CHECKS PASSED — 7 localization checks')

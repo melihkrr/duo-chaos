@@ -1,9 +1,9 @@
 // ============================================================================
 // Reset the DUO CHAOS schema and apply every migration in order.
 //
-// The live project was created from an older generation of SQL, so the tables
-// have incompatible columns. This script drops all duo_* objects and replays
-// supabase/migrations/0001..0009 so the database matches the repo exactly.
+// DESTRUCTIVE: drops all duo_* objects and their data, then replays every
+// supabase/migrations/*.sql file in filename order. Do not use for routine
+// upgrades of an existing project; apply only verified missing migrations.
 //
 // Usage:
 //   set SUPABASE_DB_PASSWORD=... && node scripts/reset-and-migrate.mjs
