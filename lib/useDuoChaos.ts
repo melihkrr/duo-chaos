@@ -5,6 +5,7 @@ import {
   BATTLE_MS,
   COIN_RESPAWN_MS,
   COUNTDOWN_MS,
+  DEFAULT_AVATAR,
   MATCH_PRESENCE_GRACE_MS,
   MATCH_ROUNDS,
   POLL_MS,
@@ -672,6 +673,30 @@ export const useDuoChaos = () => {
   useEffect(() => {
     avatarRef.current = cosmetics.avatar
   }, [cosmetics.avatar])
+
+  // YEREL AVATAR TOHUMLAMA (SONUÇ EKRANI DÜZELTMESİ).
+  //
+  // KÖK SORUN: Yerel oyuncunun (slot 0) `avatar` alanı YALNIZCA `setAvatar`
+  // çağrıldığında güncelleniyordu. Kullanıcı bu oturumda avatarını hiç
+  // değiştirmediyse (kalıcı seçim `progress.progress.avatar`'da duruyorsa)
+  // `state.players[0].avatar` `blankPlayer` varsayılanında kalıyordu. Sonuç:
+  // sonuç ekranı, kullanıcının GERÇEK seçimi yerine varsayılan hayvanı
+  // gösteriyordu. Burada kalıcı seçimi yerel oyuncu satırına tohumlarız;
+  // böylece arena/HUD/sonuç ekranı her zaman doğru avatarı gösterir.
+  useEffect(() => {
+    const persisted = progress.progress.avatar
+    if (!persisted) return
+    setState((prev) => {
+      const me = prev.players[0]
+      if (!me || me.avatar === persisted) return prev
+      return {
+        ...prev,
+        players: prev.players.map((player, index) =>
+          index === 0 ? { ...player, avatar: persisted } : player,
+        ),
+      }
+    })
+  }, [progress.progress.avatar, setState])
 
   // YENİDEN BAĞLANMA UZLAŞMASI (reconnect reconciliation).
   //
@@ -1755,6 +1780,17 @@ export const useDuoChaos = () => {
                 if (typeof server.coins === 'number') next.coins = server.coins
                 if (typeof server.stolen === 'number') next.stolen = server.stolen
                 if (server.collectedTypes) next.collectedTypes = server.collectedTypes
+                // AVATAR (SUNUCU OTORİTESİ — SONUÇ EKRANI DÜZELTMESİ):
+                // `duo_public_state` her oyuncunun `avatar` sütununu döndürür
+                // (bkz. 0045_restore_avatar_in_public_state.sql). Sonuç ekranı
+                // HER İKİ oyuncunun GERÇEK seçimini göstermelidir. Yerel
+                // oyuncunun avatarı `cosmetics`'ten, rakibinki `avatar`
+                // broadcast'inden gelir; ancak broadcast kaçabilir (kanal
+                // kopması / geç katılma) ve o zaman sonuç ekranı yanlış avatar
+                // gösterir. Sunucu değeri geldiğinde OTORİTE kabul ederiz;
+                // böylece iki istemci de aynı avatarları görür. Sunucu değeri
+                // yoksa (eski oda) yerel değeri koruruz.
+                if (server.avatar) next.avatar = server.avatar
                 // GÖREV İLERLEMESİ (SUNUCU OTORİTESİ + MONOTONİK + BAYAT KORUMASI):
                 // sonuç ekranı da doğru ilerlemeyi gösterir. Bu yoklama BAYAT
                 // olabilir; `objectivesDone` geride ise snapshot ÖNCEKİ göreve
@@ -2094,6 +2130,11 @@ export const useDuoChaos = () => {
                 level: player.level,
                 title: player.title,
                 trail: player.trail,
+                // AVATAR KORUNUR: lobiden maça geçerken oyuncular yeniden
+                // tohumlanır; seçilen avatarı taşımazsak sonuç ekranı yanlış
+                // avatar gösterir. `blankPlayer` varsayılanı tohumlar, burada
+                // gerçek seçimi koruruz.
+                avatar: player.avatar ?? DEFAULT_AVATAR[player.id as 'p1' | 'p2'],
                 objective: index === 0 ? first : second,
               }
             }),
@@ -2312,6 +2353,12 @@ export const useDuoChaos = () => {
                   typeof server.roundScore === 'number' ? server.roundScore : player.roundScore,
                 totalScore:
                   typeof server.totalScore === 'number' ? server.totalScore : player.totalScore,
+                // AVATAR (SUNUCU OTORİTESİ — YENİDEN BAĞLANMA): sayfa yenilenince
+                // yerel state `blankPlayer` varsayılanına düşer; sunucu satırı
+                // GERÇEK seçimi taşır. Uygulamazsak sonuç ekranı yanlış avatar
+                // gösterir. Sunucu boş string ('') dönerse (seçim yok) yerel
+                // değeri koruruz.
+                avatar: server.avatar ? server.avatar : player.avatar,
               }
             })
             return {

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   BATTLE_MS,
   COUNTDOWN_MS,
+  DEFAULT_AVATAR,
   MATCH_ROUNDS,
   generateObjectivePair,
   spawnCoins,
@@ -41,6 +42,11 @@ export const blankPlayer = (id: 'p1' | 'p2', spawnId: string = id): Player => ({
   revealedHint: null,
   emote: null,
   trail: 'spark',
+  // VARSAYILAN AVATAR: `avatar` alanı `undefined` kalırsa sonuç ekranı
+  // `avatarImage(undefined, ...)` ile slot bazlı yedeğe düşer ve oyuncunun
+  // GERÇEK seçimi kaybolur. Burada slot bazlı varsayılanı tohumlarız; gerçek
+  // seçim `cosmetics`/broadcast/sunucu snapshot'ından üzerine yazılır.
+  avatar: DEFAULT_AVATAR[id],
 })
 
 export const initialState = (): State => ({
@@ -170,6 +176,11 @@ export const useGameState = (serverSlot: 'p1' | 'p2' = 'p1'): GameStateApi => {
           level: player.level,
           title: player.title,
           trail: player.trail,
+          // AVATAR KORUNUR: `blankPlayer` varsayılanı tohumlar; oyuncunun
+          // GERÇEK seçimini (cosmetics/broadcast) korumak için burada üzerine
+          // yazarız. Aksi halde her tur başında seçim kaybolur ve sonuç
+          // ekranında yanlış avatar görünür.
+          avatar: player.avatar ?? DEFAULT_AVATAR[player.id as 'p1' | 'p2'],
           objective: index === 0 ? first : second,
         }
       }),
@@ -195,6 +206,9 @@ export const useGameState = (serverSlot: 'p1' | 'p2' = 'p1'): GameStateApi => {
           level: player.level,
           title: player.title,
           trail: player.trail,
+          // AVATAR KORUNUR (bkz. `resetRound`): maç sıfırlansa bile oyuncunun
+          // seçtiği avatar korunur.
+          avatar: player.avatar ?? DEFAULT_AVATAR[player.id as 'p1' | 'p2'],
         }
       }),
     }))
