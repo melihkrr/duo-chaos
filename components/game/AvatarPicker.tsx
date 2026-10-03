@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { AVATARS, avatarGlyph } from '../../lib/config'
+import { AVATARS, avatarImage } from '../../lib/config'
 import { Modal } from '../ui/Modal'
 import type { AvatarId } from '../../lib/types'
 import { useI18n } from '../../lib/i18n'
@@ -56,7 +56,7 @@ export function AvatarPicker({
 }: Props) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
-  const glyph = avatarGlyph(avatar)
+  const image = avatarImage(avatar)
 
   const choose = (id: AvatarId) => {
     onSelect(id)
@@ -74,9 +74,7 @@ export function AvatarPicker({
         aria-label={t(label)}
         title={t(label)}
       >
-        <span className="avatar-trigger-glyph" aria-hidden>
-          {glyph}
-        </span>
+        <img className="avatar-trigger-glyph" src={image} alt="" aria-hidden draggable={false} />
         <span className="avatar-trigger-badge" aria-hidden>
           ✏️
         </span>
@@ -106,9 +104,7 @@ export function AvatarPicker({
                 title={locked ? t('Unlocks at level {level}', { level: option.minLevel }) : t(option.label)}
                 onClick={() => choose(option.id)}
               >
-                <span className="avatar-glyph" aria-hidden>
-                  {option.glyph}
-                </span>
+                <img className="avatar-glyph" src={option.image} alt="" aria-hidden draggable={false} />
                 <small>{t(option.label)}</small>
                 {locked ? (
                   <span className="avatar-lock" aria-hidden>

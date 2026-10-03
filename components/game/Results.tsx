@@ -2,7 +2,7 @@
 
 import { Button } from '../ui/Button'
 import { Panel } from '../ui/Panel'
-import { avatarGlyph } from '../../lib/config'
+import { avatarImage } from '../../lib/config'
 import { resultScoreForPlayer } from '../../lib/results'
 import type { State } from '../../lib/types'
 import { useI18n } from '../../lib/i18n'
@@ -92,7 +92,13 @@ export function Results({
             <div key={player.id} className={['score-row', isWinner ? 'winner' : ''].join(' ')}>
               <div className="score-id">
                 <span className={['score-avatar', isWinner ? 'crowned' : ''].filter(Boolean).join(' ')} aria-hidden>
-                  {avatarGlyph(player.avatar, index === 0 ? 'rabbit' : 'bear')}
+                  <img
+                    className="score-avatar-img"
+                    src={avatarImage(player.avatar, index === 0 ? 'rabbit' : 'bear')}
+                    alt=""
+                    aria-hidden
+                    draggable={false}
+                  />
                   {isWinner ? <span className="score-crown">👑</span> : null}
                 </span>
                 <div>

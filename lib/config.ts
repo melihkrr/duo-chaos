@@ -374,19 +374,19 @@ export const trailById = (id?: TrailId | null) => TRAILS.find((item) => item.id 
  * Varsayılanlar: p1 → 'rabbit' (🐰), p2 → 'bear' (🐻). Böylece avatar
  * seçmeyen oyuncular eski görünümü korur.
  */
-export const AVATARS: Array<{ id: AvatarId; label: string; glyph: string; minLevel: number }> = [
-  { id: 'rabbit', label: 'Rabbit', glyph: '🐰', minLevel: 1 },
-  { id: 'bear', label: 'Bear', glyph: '🐻', minLevel: 1 },
-  { id: 'fox', label: 'Fox', glyph: '🦊', minLevel: 1 },
-  { id: 'panda', label: 'Panda', glyph: '🐼', minLevel: 1 },
-  { id: 'cat', label: 'Cat', glyph: '🐱', minLevel: 1 },
-  { id: 'dog', label: 'Dog', glyph: '🐶', minLevel: 1 },
-  { id: 'frog', label: 'Frog', glyph: '🐸', minLevel: 2 },
-  { id: 'penguin', label: 'Penguin', glyph: '🐧', minLevel: 2 },
-  { id: 'koala', label: 'Koala', glyph: '🐨', minLevel: 3 },
-  { id: 'tiger', label: 'Tiger', glyph: '🐯', minLevel: 3 },
-  { id: 'unicorn', label: 'Unicorn', glyph: '🦄', minLevel: 4 },
-  { id: 'dragon', label: 'Dragon', glyph: '🐲', minLevel: 5 },
+export const AVATARS: Array<{ id: AvatarId; label: string; glyph: string; image: string; minLevel: number }> = [
+  { id: 'rabbit', label: 'Rabbit', glyph: '🐰', image: '/avatars/rabbit.svg', minLevel: 1 },
+  { id: 'bear', label: 'Bear', glyph: '🐻', image: '/avatars/bear.svg', minLevel: 1 },
+  { id: 'fox', label: 'Fox', glyph: '🦊', image: '/avatars/fox.svg', minLevel: 1 },
+  { id: 'panda', label: 'Panda', glyph: '🐼', image: '/avatars/panda.svg', minLevel: 1 },
+  { id: 'cat', label: 'Cat', glyph: '🐱', image: '/avatars/cat.svg', minLevel: 1 },
+  { id: 'dog', label: 'Dog', glyph: '🐶', image: '/avatars/dog.svg', minLevel: 1 },
+  { id: 'frog', label: 'Frog', glyph: '🐸', image: '/avatars/frog.svg', minLevel: 2 },
+  { id: 'penguin', label: 'Penguin', glyph: '🐧', image: '/avatars/penguin.svg', minLevel: 2 },
+  { id: 'koala', label: 'Koala', glyph: '🐨', image: '/avatars/koala.svg', minLevel: 3 },
+  { id: 'tiger', label: 'Tiger', glyph: '🐯', image: '/avatars/tiger.svg', minLevel: 3 },
+  { id: 'unicorn', label: 'Unicorn', glyph: '🦄', image: '/avatars/unicorn.svg', minLevel: 4 },
+  { id: 'dragon', label: 'Dragon', glyph: '🐲', image: '/avatars/dragon.svg', minLevel: 5 },
 ]
 
 /** Slot bazlı VARSAYILAN avatar (seçim yapılmamışsa). */
@@ -403,6 +403,15 @@ export const avatarById = (id?: AvatarId | null) =>
  */
 export const avatarGlyph = (id?: AvatarId | null, fallback: AvatarId = 'rabbit'): string =>
   avatarById(id)?.glyph ?? avatarById(fallback)?.glyph ?? '🐰'
+
+/**
+ * Bir avatar id'sini güvenli biçimde bir GÖRSELE çözer: geçerliyse SVG
+ * yolunu, değilse `fallback` (slot bazlı varsayılan) görselini döndürür.
+ * Emoji glifleri cihaz/işletim sistemine göre farklı çizildiği için UI'da
+ * artık bunu kullanırız; böylece her cihazda aynı hayvan yüzü görünür.
+ */
+export const avatarImage = (id?: AvatarId | null, fallback: AvatarId = 'rabbit'): string =>
+  avatarById(id)?.image ?? avatarById(fallback)?.image ?? '/avatars/rabbit.svg'
 
 // --- İlerleme (XP) ---
 export const XP_PER_WIN = 120

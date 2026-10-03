@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Penguin">
+  <g stroke="#2b2440" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
+    <ellipse cx="32" cy="36" rx="19" ry="21" fill="#2b2440"/>
+  </g>
+  <ellipse cx="32" cy="39" rx="12" ry="15" fill="#ffffff" stroke="none"/>
+  <circle cx="25" cy="31" r="2.8" fill="#2b2440"/>
+  <circle cx="39" cy="31" r="2.8" fill="#2b2440"/>
+  <path d="M32 36l-4 4h8z" fill="#f7b731" stroke="#2b2440" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M14 40c-3 4-3 9 0 12M50 40c3 4 3 9 0 12" fill="none" stroke="#2b2440" stroke-width="3" stroke-linecap="round"/>
+  <ellipse cx="32" cy="52" rx="6" ry="3" fill="#f7b731" stroke="#2b2440" stroke-width="2"/>
+</svg>

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Panda">
+  <g stroke="#2b2440" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
+    <circle cx="16" cy="17" r="8" fill="#2b2440"/>
+    <circle cx="48" cy="17" r="8" fill="#2b2440"/>
+    <circle cx="32" cy="37" r="20" fill="#ffffff"/>
+  </g>
+  <ellipse cx="23" cy="34" rx="6" ry="7" fill="#2b2440" transform="rotate(-18 23 34)"/>
+  <ellipse cx="41" cy="34" rx="6" ry="7" fill="#2b2440" transform="rotate(18 41 34)"/>
+  <circle cx="24" cy="34" r="2.4" fill="#fff"/>
+  <circle cx="40" cy="34" r="2.4" fill="#fff"/>
+  <ellipse cx="32" cy="43" rx="3.4" ry="2.6" fill="#2b2440"/>
+  <path d="M32 46v2M32 48c-2 2-4 1-4-1M32 48c2 2 4 1 4-1" fill="none" stroke="#2b2440" stroke-width="2" stroke-linecap="round"/>
+</svg>

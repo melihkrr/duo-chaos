@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Dragon">
+  <g stroke="#2b2440" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M18 16l-8-4 4 10z" fill="#5fbf6f"/>
+    <path d="M46 16l8-4-4 10z" fill="#5fbf6f"/>
+    <path d="M32 12l4 8h-8z" fill="#5fbf6f"/>
+    <circle cx="32" cy="38" r="19" fill="#5fbf6f"/>
+  </g>
+  <path d="M20 30c3-2 6-2 9 0M35 30c3-2 6-2 9 0" fill="none" stroke="#2b2440" stroke-width="2.4" stroke-linecap="round"/>
+  <circle cx="25" cy="35" r="2.8" fill="#f7b731" stroke="#2b2440" stroke-width="1.6"/>
+  <circle cx="39" cy="35" r="2.8" fill="#f7b731" stroke="#2b2440" stroke-width="1.6"/>
+  <circle cx="25" cy="35" r="1.2" fill="#2b2440"/>
+  <circle cx="39" cy="35" r="1.2" fill="#2b2440"/>
+  <path d="M22 44c3 4 17 4 20 0" fill="none" stroke="#2b2440" stroke-width="2.6" stroke-linecap="round"/>
+  <path d="M26 44l-2 3M38 44l2 3" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
+</svg>

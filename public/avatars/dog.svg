@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Dog">
+  <g stroke="#2b2440" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
+    <ellipse cx="14" cy="30" rx="7" ry="13" fill="#a9743f"/>
+    <ellipse cx="50" cy="30" rx="7" ry="13" fill="#a9743f"/>
+    <circle cx="32" cy="36" r="19" fill="#d9a066"/>
+  </g>
+  <ellipse cx="32" cy="43" rx="9" ry="7" fill="#f3d3a8" stroke="#2b2440" stroke-width="2.5"/>
+  <circle cx="25" cy="33" r="2.6" fill="#2b2440"/>
+  <circle cx="39" cy="33" r="2.6" fill="#2b2440"/>
+  <ellipse cx="32" cy="40" rx="3.6" ry="2.8" fill="#2b2440"/>
+  <path d="M32 43v3M32 46c-2 2-4 1-4-1M32 46c2 2 4 1 4-1" fill="none" stroke="#2b2440" stroke-width="2" stroke-linecap="round"/>
+  <path d="M32 46c0 3 3 4 5 2" fill="none" stroke="#ff7aa8" stroke-width="3" stroke-linecap="round"/>
+</svg>

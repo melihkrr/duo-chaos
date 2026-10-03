@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Bear">
+  <g stroke="#2b2440" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
+    <circle cx="17" cy="18" r="8" fill="#c98a52"/>
+    <circle cx="47" cy="18" r="8" fill="#c98a52"/>
+    <circle cx="17" cy="18" r="3.4" fill="#f0b98a" stroke="none"/>
+    <circle cx="47" cy="18" r="3.4" fill="#f0b98a" stroke="none"/>
+    <circle cx="32" cy="37" r="20" fill="#c98a52"/>
+  </g>
+  <ellipse cx="32" cy="43" rx="10" ry="8" fill="#f0b98a" stroke="#2b2440" stroke-width="2.5"/>
+  <circle cx="25" cy="34" r="2.6" fill="#2b2440"/>
+  <circle cx="39" cy="34" r="2.6" fill="#2b2440"/>
+  <ellipse cx="32" cy="40" rx="3.4" ry="2.6" fill="#2b2440"/>
+  <path d="M32 43v3M32 46c-2 2-4 1-4-1M32 46c2 2 4 1 4-1" fill="none" stroke="#2b2440" stroke-width="2" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Tiger">
+  <g stroke="#2b2440" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
+    <circle cx="17" cy="19" r="8" fill="#f5a623"/>
+    <circle cx="47" cy="19" r="8" fill="#f5a623"/>
+    <circle cx="32" cy="37" r="20" fill="#f5a623"/>
+  </g>
+  <path d="M20 22l3 6M44 22l-3 6M32 18v6" stroke="#2b2440" stroke-width="2.6" stroke-linecap="round"/>
+  <path d="M14 34h6M14 40h6M50 34h-6M50 40h-6" stroke="#2b2440" stroke-width="2.6" stroke-linecap="round"/>
+  <ellipse cx="32" cy="43" rx="9" ry="7" fill="#fff3e0" stroke="#2b2440" stroke-width="2.5"/>
+  <circle cx="25" cy="34" r="2.6" fill="#2b2440"/>
+  <circle cx="39" cy="34" r="2.6" fill="#2b2440"/>
+  <ellipse cx="32" cy="40" rx="3.4" ry="2.6" fill="#2b2440"/>
+  <path d="M32 43v3M32 46c-2 2-4 1-4-1M32 46c2 2 4 1 4-1" fill="none" stroke="#2b2440" stroke-width="2" stroke-linecap="round"/>
+</svg>

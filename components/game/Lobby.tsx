@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { Button } from '../ui/Button'
 import { Panel } from '../ui/Panel'
 import { AvatarPicker } from './AvatarPicker'
-import { avatarGlyph } from '../../lib/config'
+import { avatarImage } from '../../lib/config'
 import type { AvatarId, Player } from '../../lib/types'
 import { useI18n } from '../../lib/i18n'
 
@@ -85,9 +85,17 @@ export function Lobby({
                   variant="seat"
                   label={t('Change your animal')}
                 />
+              ) : filled ? (
+                <img
+                  className="seat-avatar"
+                  src={avatarImage(player?.avatar, 'bear')}
+                  alt=""
+                  aria-hidden
+                  draggable={false}
+                />
               ) : (
-                <span className="seat-avatar" aria-hidden>
-                  {filled ? avatarGlyph(player?.avatar, 'bear') : '❓'}
+                <span className="seat-avatar seat-avatar-empty" aria-hidden>
+                  ❓
                 </span>
               )}
               <div className="seat-info">

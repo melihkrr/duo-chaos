@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Rabbit">
+  <g stroke="#2b2440" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
+    <ellipse cx="22" cy="16" rx="6" ry="13" fill="#f6f1ff"/>
+    <ellipse cx="42" cy="16" rx="6" ry="13" fill="#f6f1ff"/>
+    <ellipse cx="22" cy="17" rx="2.6" ry="8" fill="#ffb3d1" stroke="none"/>
+    <ellipse cx="42" cy="17" rx="2.6" ry="8" fill="#ffb3d1" stroke="none"/>
+    <circle cx="32" cy="38" r="19" fill="#f6f1ff"/>
+  </g>
+  <circle cx="25" cy="35" r="2.6" fill="#2b2440"/>
+  <circle cx="39" cy="35" r="2.6" fill="#2b2440"/>
+  <path d="M32 41l-3 3h6z" fill="#ff7aa8" stroke="#2b2440" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M32 44v3M32 47c-2 2-5 1-5-1M32 47c2 2 5 1 5-1" fill="none" stroke="#2b2440" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="19" cy="42" r="3" fill="#ffb3d1" opacity="0.7"/>
+  <circle cx="45" cy="42" r="3" fill="#ffb3d1" opacity="0.7"/>
+</svg>

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Unicorn">
+  <g stroke="#2b2440" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M32 4l5 14H27z" fill="#f7b731"/>
+    <path d="M16 20l-6-6 2 10z" fill="#ff9db3"/>
+    <path d="M48 20l6-6-2 10z" fill="#8ce8d6"/>
+    <circle cx="32" cy="38" r="19" fill="#ffffff"/>
+  </g>
+  <path d="M18 30c4-3 8-3 12 0M34 30c4-3 8-3 12 0" fill="none" stroke="#c9a7ff" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="25" cy="36" r="2.6" fill="#2b2440"/>
+  <circle cx="39" cy="36" r="2.6" fill="#2b2440"/>
+  <path d="M32 42l-3 3h6z" fill="#ff7aa8" stroke="#2b2440" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M32 45v3M32 48c-2 2-5 1-5-1M32 48c2 2 5 1 5-1" fill="none" stroke="#2b2440" stroke-width="2" stroke-linecap="round"/>
+</svg>

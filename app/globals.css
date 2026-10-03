@@ -2400,6 +2400,61 @@ h3 {
   filter: drop-shadow(0 2px 0 rgba(43, 36, 64, 0.2));
 }
 
+/* --- Avatar görselleri (SVG) ---
+   Emoji glifleri cihaz/işletim sistemine göre farklı çizildiği için avatar
+   yüzleri artık SVG <img> olarak gösterilir. Bu kurallar her bağlamda
+   (lobi koltuğu, HUD rozeti, arena yüzü, sonuç satırı, seçici) görselin
+   kapsayıcısına tam oturmasını ve arka plandaki renkli dairenin görünmesini
+   sağlar. `object-fit: contain` ile kırpma olmadan ölçeklenir. */
+.seat-avatar,
+.hud-badge,
+.avatar-face,
+.avatar-glyph,
+.avatar-trigger-glyph,
+.score-avatar-img {
+  object-fit: contain;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+.seat-avatar {
+  padding: 3px;
+}
+
+.hud-badge {
+  padding: 2px;
+}
+
+.avatar-face {
+  width: 100%;
+  height: 100%;
+  transform: none;
+}
+
+.avatar-glyph {
+  width: 34px;
+  height: 34px;
+}
+
+.avatar-trigger-glyph {
+  width: 38px;
+  height: 38px;
+}
+
+.avatar-trigger-seat .avatar-trigger-glyph {
+  width: 30px;
+  height: 30px;
+}
+
+.score-avatar-img {
+  width: 30px;
+  height: 30px;
+}
+
+.seat-avatar-empty {
+  font-size: 24px;
+}
+
 .score-row strong,
 .score-row small {
   display: block;
@@ -2659,10 +2714,6 @@ h3 {
   .avatar-body {
     width: 28px;
     height: 28px;
-  }
-
-  .avatar-face {
-    font-size: 17px;
   }
 
   .avatar-name {

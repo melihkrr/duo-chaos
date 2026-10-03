@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Frog">
+  <g stroke="#2b2440" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
+    <circle cx="20" cy="20" r="9" fill="#6fcf5f"/>
+    <circle cx="44" cy="20" r="9" fill="#6fcf5f"/>
+    <circle cx="32" cy="40" r="19" fill="#6fcf5f"/>
+  </g>
+  <circle cx="20" cy="20" r="4.6" fill="#fff" stroke="#2b2440" stroke-width="2"/>
+  <circle cx="44" cy="20" r="4.6" fill="#fff" stroke="#2b2440" stroke-width="2"/>
+  <circle cx="20" cy="21" r="2.2" fill="#2b2440"/>
+  <circle cx="44" cy="21" r="2.2" fill="#2b2440"/>
+  <path d="M22 42c3 4 17 4 20 0" fill="none" stroke="#2b2440" stroke-width="2.6" stroke-linecap="round"/>
+  <circle cx="22" cy="36" r="2.4" fill="#ff9db3" opacity="0.8"/>
+  <circle cx="42" cy="36" r="2.4" fill="#ff9db3" opacity="0.8"/>
+</svg>
