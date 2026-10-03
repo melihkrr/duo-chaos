@@ -698,6 +698,38 @@ export const useDuoChaos = () => {
     })
   }, [progress.progress.avatar, setState])
 
+  // AVATAR OTORİTESİNİ SUNUCUYA YAZ (SONUÇ EKRANI DÜZELTMESİ).
+  //
+  // KÖK SORUN: `duo_players.avatar` sütunu YALNIZCA `setAvatar` çağrıldığında
+  // yazılıyordu. Kullanıcı avatarını ÖNCEKİ bir oturumda seçtiyse (kalıcı
+  // seçim `duo_progression.avatar`'da durur) ve bu oturumda avatarını hiç
+  // değiştirmediyse, `duo_players.avatar` sütun varsayılanında ('') kalıyordu.
+  // `duo_public_state` bu yüzden boş avatar döndürüyordu; sonuç ekranı da
+  // yanlış (varsayılan) hayvanı gösteriyordu. Sayfa yenilenince `restore()`
+  // sunucu satırını okuduğu için düzeliyordu — bu da kök nedeni doğruluyor.
+  //
+  // ÇÖZÜM: Odaya girildiğinde (create/join/restore) kalıcı avatar seçimini
+  // sunucu oyuncu satırına YAZARIZ. Böylece sunucu tek otorite olur ve HER İKİ
+  // istemci `duo_public_state`'ten AYNI doğru avatarı okur.
+  const pushAvatarToServer = useCallback(
+    (code: string, token: string) => {
+      // `avatarRef` effect ile senkronlanır; odaya giriş anında henüz
+      // güncellenmemiş olabilir. Bu yüzden kalıcı seçime de düşeriz.
+      const avatar = avatarRef.current || progress.progress.avatar
+      if (!code || !token || !avatar) return
+      void room
+        .call('duo_apply_cosmetics', {
+          p_code: code,
+          p_token: token,
+          p_emote: cosmeticsRef.current.emote,
+          p_trail: cosmeticsRef.current.trail,
+          p_avatar: avatar,
+        })
+        .catch(() => undefined)
+    },
+    [progress.progress.avatar, room],
+  )
+
   // YENİDEN BAĞLANMA UZLAŞMASI (reconnect reconciliation).
   //
   // KÖK SORUN: Realtime kanalı düştüğünde (`CHANNEL_ERROR`/`TIMED_OUT`) istemci
@@ -1790,6 +1822,10 @@ export const useDuoChaos = () => {
                 // gösterir. Sunucu değeri geldiğinde OTORİTE kabul ederiz;
                 // böylece iki istemci de aynı avatarları görür. Sunucu değeri
                 // yoksa (eski oda) yerel değeri koruruz.
+                // Sunucu değeri BOŞ DEĞİLSE otorite kabul edilir; boşsa
+                // (`''` — seçim sunucuya hiç yazılmamış) yerel değer korunur.
+                // Yerel değer de `progress.progress.avatar` tohumlamasından
+                // gelir; böylece sonuç ekranı HER ZAMAN doğru avatarı gösterir.
                 if (server.avatar) next.avatar = server.avatar
                 // GÖREV İLERLEMESİ (SUNUCU OTORİTESİ + MONOTONİK + BAYAT KORUMASI):
                 // sonuç ekranı da doğru ilerlemeyi gösterir. Bu yoklama BAYAT
@@ -2224,6 +2260,11 @@ export const useDuoChaos = () => {
         resetMatch()
         // Kendi adımızı yerel duruma da yaz; lobide hemen görünsün.
         if (myName) updatePlayer('p1', { name: myName })
+        // AVATAR OTORİTESİ (SONUÇ EKRANI DÜZELTMESİ): Kalıcı avatar seçimini
+        // sunucu oyuncu satırına YAZ. Aksi halde `duo_players.avatar` sütun
+        // varsayılanında ('') kalır; `duo_public_state` boş döner ve sonuç
+        // ekranı yanlış avatar gösterir. Sunucu tek otorite olur.
+        void pushAvatarToServer(code, token)
         setPhase('lobby')
         // Adres çubuğunu paylaşılabilir davet linkiyle eşitle.
         syncUrl(`/play/${code}`)
@@ -2234,7 +2275,7 @@ export const useDuoChaos = () => {
         setBusy(false)
       }
     },
-    [resetMatch, room, setPhase, updatePlayer],
+    [pushAvatarToServer, resetMatch, room, setPhase, updatePlayer],
   )
 
   const joinRoom = useCallback(
@@ -2268,6 +2309,9 @@ export const useDuoChaos = () => {
         resetMatch()
         // Kendi adımızı yerel duruma da yaz; lobide hemen görünsün.
         if (myName) updatePlayer('p1', { name: myName })
+        // AVATAR OTORİTESİ (SONUÇ EKRANI DÜZELTMESİ): Kalıcı avatar seçimini
+        // sunucu oyuncu satırına YAZ (bkz. `pushAvatarToServer` açıklaması).
+        void pushAvatarToServer(normalized, token)
         setPhase('lobby')
         // Adres çubuğunu paylaşılabilir davet linkiyle eşitle.
         syncUrl(`/play/${normalized}`)
@@ -2278,7 +2322,7 @@ export const useDuoChaos = () => {
         setBusy(false)
       }
     },
-    [resetMatch, room, setPhase, updatePlayer],
+    [pushAvatarToServer, resetMatch, room, setPhase, updatePlayer],
   )
 
   /**
@@ -2379,6 +2423,10 @@ export const useDuoChaos = () => {
           setPhase('lobby')
         }
         if (resolvedName) updatePlayer('p1', { name: resolvedName })
+        // AVATAR OTORİTESİ (SONUÇ EKRANI DÜZELTMESİ): Yeniden bağlanmada da
+        // kalıcı avatar seçimini sunucu satırına yazarız. Sunucu satırı boşsa
+        // (`''`) sonuç ekranı yanlış avatar gösterirdi; böylece onarılır.
+        void pushAvatarToServer(normalized, token)
         syncUrl(`/play/${normalized}`)
         return true
       } catch {
@@ -2386,7 +2434,7 @@ export const useDuoChaos = () => {
         return false
       }
     },
-    [noteServerNow, room, setPhase, setState, toLocal, updatePlayer],
+    [noteServerNow, pushAvatarToServer, room, setPhase, setState, toLocal, updatePlayer],
   )
 
   const startGame = useCallback(async () => {
