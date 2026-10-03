@@ -189,6 +189,19 @@ export function Battle({
     return () => document.removeEventListener('fullscreenchange', onChange)
   }, [])
 
+  // TAM EKRANDA SAYFA KAYDIRMAYI KİLİTLE.
+  // `.battle-wrap.is-fullscreen` `position: fixed; inset: 0` ile viewport'u
+  // kaplar; ancak arka plandaki sayfa hâlâ kaydırılabilir. Mobilde parmakla
+  // kaydırma, sabit katmanın viewport'a göre hizasını bozar ve "ekran senkron
+  // değil / bazı yerlere gidemiyorum" hissi yaratır. Gövdeye bir sınıf ekleyip
+  // `overflow: hidden` uygularız; çıkışta geri alırız.
+  useEffect(() => {
+    if (!fullscreen) return
+    const body = document.body
+    body.classList.add('fs-locked')
+    return () => body.classList.remove('fs-locked')
+  }, [fullscreen])
+
   const toggleFullscreen = () => {
     const node = wrapRef.current
     if (!node) return
@@ -236,15 +249,47 @@ export function Battle({
     // (resize/fullscreen) yeniden ölçeriz.
     let arenaW = 0
     let arenaH = 0
+    // TAM EKRAN SENKRONU (kök sorun): Arena boyutu tam ekrana girince/çıkınca
+    // DEĞİŞİR. Önceden yalnızca pencere `resize` olayında yeniden ölçüyorduk.
+    // Ancak CSS yedek modunda (`cssFs`, iOS Safari ve API reddi) PENCERE boyutu
+    // hiç değişmez — yalnızca elemanın yerleşimi değişir. Bu yüzden `resize`
+    // hiç tetiklenmiyor, `arenaW/arenaH` BAYAT kalıyor ve avatarlar eski (küçük)
+    // arena ölçüleriyle konumlandığı için ekranın bazı bölgelerine gidilemiyordu
+    // ("tam ekranda ilerleyemiyorum" hatası). Çözüm: `ResizeObserver` ile arena
+    // elemanının GERÇEK boyut değişimini izle; bu, native VE CSS tam ekranı
+    // kapsar. Boyut değişince konumları da yeniden tohumla ki avatar bir kare
+    // bile yanlış yerde görünmesin.
+    const seedPositions = () => {
+      const arena = arenaRef.current
+      if (!arena || arenaW === 0 || arenaH === 0) return
+      const meNode = meRef.current
+      const mePos = livePos.current
+      if (meNode && mePos) {
+        meNode.style.transform = `translate3d(${(mePos.x / 100) * arenaW}px, ${(mePos.y / 100) * arenaH}px, 0)`
+      }
+      const rivalNode = rivalRef.current
+      const rivalPos = liveRivalPos.current
+      if (rivalNode && rivalPos) {
+        rivalNode.style.transform = `translate3d(${(rivalPos.x / 100) * arenaW}px, ${(rivalPos.y / 100) * arenaH}px, 0)`
+      }
+    }
     const measure = () => {
       const arena = arenaRef.current
       if (!arena) return
       const rect = arena.getBoundingClientRect()
       arenaW = rect.width
       arenaH = rect.height
+      // Yeni ölçüyle konumları hemen düzelt (tam ekran geçişinde desync olmasın).
+      seedPositions()
     }
     measure()
     window.addEventListener('resize', measure)
+    // Arena elemanının boyutunu izle: tam ekran (native + CSS) geçişlerinde
+    // pencere `resize` olayı gelmese bile bu tetiklenir.
+    const arenaNode = arenaRef.current
+    const observer =
+      typeof ResizeObserver !== 'undefined' && arenaNode ? new ResizeObserver(() => measure()) : null
+    if (observer && arenaNode) observer.observe(arenaNode)
 
     // Watcher'ların son gördüğü değerler (gereksiz `setState`'i önlemek için).
     let lastDiamondAt = 0
@@ -324,8 +369,12 @@ export function Battle({
     return () => {
       window.cancelAnimationFrame(raf)
       window.removeEventListener('resize', measure)
+      observer?.disconnect()
     }
-  }, [celebrateRef, diamondPopRef, comboRef, scorePopRef, shakeRef, livePos, liveRivalPos])
+    // `fullscreen` bağımlılığı: tam ekrana girince/çıkınca efekt yeniden kurulur,
+    // arena bir kez daha ölçülür ve konumlar tohumlanır. Böylece CSS yedek
+    // modunda (pencere boyutu değişmese bile) ölçü güncel kalır.
+  }, [celebrateRef, diamondPopRef, comboRef, scorePopRef, shakeRef, livePos, liveRivalPos, fullscreen])
 
   // İLK KONUM TOHUMU: Avatar düğümleri ilk kez DOM'a girdiğinde konumlarını
   // bir kez (paint'ten ÖNCE) yazarız. Böylece avatar bir kare bile (0,0)
@@ -344,7 +393,10 @@ export function Battle({
     }
     seed(meRef.current, livePos.current ?? { x: state.players[0]?.x ?? 0, y: state.players[0]?.y ?? 0 })
     seed(rivalRef.current, liveRivalPos.current ?? { x: state.players[1]?.x ?? 0, y: state.players[1]?.y ?? 0 })
-  }, [livePos, liveRivalPos, state.players])
+    // `fullscreen` bağımlılığı: tam ekrana girince/çıkınca arena boyutu değişir;
+    // paint'ten ÖNCE konumları yeni ölçüyle tohumlarız ki avatar bir kare bile
+    // eski (küçük) arena ölçüsünde görünmesin (tam ekran desync'i).
+  }, [livePos, liveRivalPos, state.players, fullscreen])
 
   // YEREL STATE SIRASI: index 0 = "ben", index 1 = "rakip" (iki istemcide de).
   const me = state.players[0]

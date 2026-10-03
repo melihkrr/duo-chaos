@@ -44,6 +44,8 @@
 
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-t: env(safe-area-inset-top, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
 }
 
 * {
@@ -1747,6 +1749,14 @@ h3 {
 
 /* Joystick arena içindeki dokunma konumunda belirir. */
 
+/* Tam ekran sırasında gövde kaydırmayı kilitle. Sabit katman viewport'u
+   kaplarken arka planın kayması hizayı bozar ("ekran senkron değil" hissi). */
+body.fs-locked {
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: none;
+}
+
 /* --- Tam ekran modu ---
    Arena tüm ekranı kaplar; HUD üstte sabit kalır, diğer kontroller gizlenir. */
 .battle-wrap.is-fullscreen {
@@ -1758,7 +1768,10 @@ h3 {
   height: 100vh;
   height: 100dvh;
   margin: 0;
-  padding: 10px;
+  /* Güvenli alan (çentik/gesture bar) yalnızca tam ekranda uygulanır; böylece
+     arena viewport'un tamamına oturur ve hiçbir bölge erişilemez kalmaz. */
+  padding: calc(10px + var(--safe-t)) calc(10px + var(--safe-r)) calc(10px + var(--safe-b))
+    calc(10px + var(--safe-l));
   gap: 10px;
   background: linear-gradient(160deg, var(--purple-soft), var(--pink-soft));
   overflow: hidden;
