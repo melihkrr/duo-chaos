@@ -11,10 +11,12 @@ import {
   MOVE_SEND_MS,
   MOVE_SPEED,
   PHASE_TICK_MS,
+  REMOTE_BUFFER_MAX,
+  REMOTE_BUFFER_MIN,
+  REMOTE_FALLBACK_SMOOTHING_K,
   REMOTE_HARD_TTL_MS,
-  REMOTE_POS_TTL,
+  REMOTE_INTERP_DELAY_MS,
   REMOTE_SMOOTHING_K,
-  REMOTE_VEL_DECAY_K,
   getCoinValue,
   isRiskyCoin,
   riskyCoinValue,
@@ -121,13 +123,28 @@ export const useGameLoop = (deps: LoopDeps) => {
   const lastHeartbeat = useRef(0)
   const lastPhase = useRef<State['phase']>('home')
   const lastRound = useRef<number>(-1)
-  // Rakip için yumuşatılmış (interpolasyonlu) konum. Broadcast hedefi ile
-  // bu değer arasında her karede yumuşak geçiş yapılır.
+  // Rakip için EKRANA BASILAN (interpolasyonlu) konum. `Battle` bunu doğrudan
+  // DOM transform'una yazar.
   const remoteTarget = useRef<{ x: number; y: number } | null>(null)
-  // Rakibin son broadcast örneği (hız tahmini / dead-reckoning için).
-  const remoteSample = useRef<{ x: number; y: number; at: number } | null>(null)
-  // Rakibin tahmini hızı (arena %/s). Paketler arasında hedefi ileri taşır.
-  const remoteVel = useRef<{ x: number; y: number }>({ x: 0, y: 0 })
+  // RENDER-TIME INTERPOLASYON TAMPONU (profesyonel netcode).
+  //
+  // KÖK SORUN ("rakip laglı/dona dona/kasa kasa hareket ediyor"): Eskiden
+  // yalnızca EN YENİ broadcast paketi hedef alınıyordu. Supabase Realtime
+  // "best-effort" olduğundan paketler DÜZENSİZ varır (jitter): bazen 3 paket
+  // aynı anda, bazen 200 ms boşluk. Hedef her varışta sıçradığı için rakip
+  // titriyor, paket kaybında ise donuyordu.
+  //
+  // ÇÖZÜM: Gelen her örneği `{ x, y, at }` olarak tampona yazarız. Çizim
+  // anında `now - REMOTE_INTERP_DELAY_MS` zamanına karşılık gelen konumu, o
+  // anı ÇEVRELEYEN iki GERÇEK örnek arasında doğrusal interpolasyonla
+  // hesaplarız. Böylece çizim, paketlerin VARİŞ anına değil, örneklerin
+  // ZAMAN ÇİZELGESİNE bağlı olur → jitter ekranda görünmez.
+  const remoteBuffer = useRef<Array<{ x: number; y: number; at: number }>>([])
+  // Tamponun ait olduğu rakip slotu. Slot değişirse (yeniden eşleşme) tamponu
+  // temizleriz ki eski oyuncunun örnekleri yeni rakibe karışmasın.
+  const remoteBufferSlot = useRef<string | null>(null)
+  // Tampon boşaldığında (sert kopma / ilk kare) kullanılan yumuşatma hedefi.
+  const remoteFallback = useRef<{ x: number; y: number } | null>(null)
   // Yerel oyuncunun ANLIK konumu. React render'ını beklemeden her karede
   // güncellenir; böylece `state` bir kare geride kalsa bile hareket akıcı kalır
   // ("donma + birden ilerleme" sorununun kökü buydu: döngü, commit edilmemiş
@@ -383,11 +400,12 @@ export const useGameLoop = (deps: LoopDeps) => {
         // görünmesini engeller).
         livePos.current = { x: me.x, y: me.y }
         objectiveHold.current = 0
-        // Rakip interpolasyon durumunu sıfırla: yeni turda eski hız/örnek
-        // kalırsa rakip yanlış yöne "sürüklenir" (dead-reckoning artığı).
+        // Rakip interpolasyon durumunu sıfırla: yeni turda eski örnekler
+        // kalırsa rakip yanlış konumdan "sürüklenir" (interpolasyon artığı).
         remoteTarget.current = null
-        remoteSample.current = null
-        remoteVel.current = { x: 0, y: 0 }
+        remoteBuffer.current = []
+        remoteBufferSlot.current = null
+        remoteFallback.current = null
         // Yeni turda combo serisini ve uçan puan rozetlerini sıfırla.
         comboRef.current = { count: 0, at: 0 }
         scorePopRef.current = []
@@ -437,32 +455,27 @@ export const useGameLoop = (deps: LoopDeps) => {
     // DOM'a yazar; React render'ı beklemez → akıcı hareket.
     livePos.current = { x: nextX, y: nextY }
 
-    // --- Rakip interpolasyonu (profesyonel, kare hızından bağımsız). ---
+    // --- Rakip interpolasyonu: RENDER-TIME ENTITY INTERPOLATION. ---
     //
-    // Hedef önceliği: taze broadcast konumu (`remotePos`) > sunucu snapshot'ı
-    // (`state.players[1]`). Broadcast 60Hz geldiği için asıl akıcılık kaynağı
-    // odur; snapshot yalnızca broadcast kesildiğinde (yeniden bağlanma) devreye
-    // girer.
+    // Profesyonel netcode tekniği. Rakibi HER ZAMAN `now - REMOTE_INTERP_DELAY_MS`
+    // anındaki konumda çizeriz ve elimizdeki iki GERÇEK örnek arasında doğrusal
+    // interpolasyon yaparız.
     //
-    // NEDEN ESKİ YÖNTEM LAGLIYDI:
-    //   1. `remote.x += (goalX - remote.x) * 0.35` SABİT bir katsayı kullanıyordu;
-    //      kare hızı düşünce (mobil, arka plan sekmesi) yakınsama yavaşlıyor,
-    //      yükselince titriyordu. Kare hızından BAĞIMSIZ olmalı.
-    //   2. Hız (velocity) extrapolasyonu yoktu: rakip hep hedefin GERİSİNDE
-    //      kalıyordu (smoothing gecikmesi). Bu da "rakip laglı hareket ediyor"
-    //      hissinin ana kaynağıydı.
+    // NEDEN ESKİ YÖNTEM LAGLIYDI ("kasa kasa / dona dona"):
+    //   * Hedef, EN YENİ paketin konumuydu. Supabase Realtime "best-effort"
+    //     olduğundan paketler DÜZENSİZ varır (jitter): bazen 3 paket aynı anda,
+    //     bazen 200 ms boşluk. Hedef her varışta sıçradığı için rakip titriyor,
+    //     paket kaybında ise donuyordu.
+    //   * Dead-reckoning hızı `Date.now()` varış farklarından hesaplanıyordu;
+    //     ağ jitter'ı doğrudan hızı bozuyor, rakip ileri-geri savruluyordu.
     //
-    // ÇÖZÜM:
-    //   - Üstel yumuşatma katsayısını `dt` ile ölçekleriz:
-    //     `alpha = 1 - exp(-k * dt)` → her kare hızında AYNI yakınsama süresi.
-    //   - Son iki broadcast örneğinden hızı tahmin edip hedefi ileri taşırız
-    //     (dead-reckoning). Böylece rakip, paketler arasında da akıcı ilerler.
+    // ÇÖZÜM: Çizimi paketlerin VARİŞ anına değil, örneklerin ZAMAN ÇİZELGESİNE
+    // bağlarız. Jitter ekranda tamamen görünmez; 20Hz yayınla bile 60/120Hz
+    // ekranda akıcı hareket elde edilir.
     const rivalTarget = state.players[1]
     if (rivalTarget) {
       // ÖNEMLİ: `move` broadcast'i gönderenin SLOTU ile anahtarlanır (`p1`/`p2`).
-      // Yerel oyuncu `p2` olduğunda rakip `p1`'dir; eski kod yalnızca `'rival'`
-      // veya `'p2'` aradığı için `p1` anahtarını ASLA bulamıyordu → "rakip
-      // hareketi bende hiç görünmüyor" hatası. Artık rakibin GERÇEK slotuyla
+      // Yerel oyuncu `p2` olduğunda rakip `p1`'dir. Rakibin GERÇEK slotuyla
       // ararız; `'rival'` anahtarı yalnızca geriye dönük uyumluluk içindir.
       const rivalSlot = rivalTarget.id
       // DİKKAT: Bu değişken adı `broadcast` OLAMAZ — `step` başındaki
@@ -472,95 +485,99 @@ export const useGameLoop = (deps: LoopDeps) => {
         remotePos.current?.get(rivalSlot) ??
         remotePos.current?.get('rival') ??
         remotePos.current?.get(rivalSlot === 'p1' ? 'p2' : 'p1')
-      const fresh = rivalBroadcast && now - rivalBroadcast.at < REMOTE_POS_TTL
-      // HEDEF SEÇİMİ — İKİ KADEMELİ (KÖK SORUNLAR: "rakip donuyor" VE "rakip
-      // ışınlanıyor"):
-      //
-      //  1. TAZE broadcast (≤ REMOTE_POS_TTL): hedef = broadcast konumu. Akıcı.
-      //  2. KISA kopma (REMOTE_POS_TTL < yaş ≤ REMOTE_HARD_TTL_MS): hedef = SON
-      //     BİLİNEN broadcast konumu. Rakip kısa süre durur ama IŞINLANMAZ.
-      //     (Sunucu snapshot'ı ~1 sn gecikmeli olduğu için burada ona düşmek
-      //     rakibi geriye çekip ileri-geri zıplatıyordu.)
-      //  3. UZUN kopma (> REMOTE_HARD_TTL_MS): hedef = sunucu snapshot'ı. Gerçek
-      //     kopma/yeniden bağlanma; sunucunun son bildiği konuma yumuşakça oturur.
-      //
-      // NOT: Bayat veriyle dead-reckoning YAPMAYIZ (aşağıda `vel` `fresh`'e bağlı).
-      const broadcastAge = rivalBroadcast ? now - rivalBroadcast.at : Infinity
+
+      // Slot değiştiyse (yeniden eşleşme) tamponu temizle: eski oyuncunun
+      // örnekleri yeni rakibe karışmasın.
+      if (remoteBufferSlot.current !== rivalSlot) {
+        remoteBufferSlot.current = rivalSlot
+        remoteBuffer.current = []
+        remoteTarget.current = null
+        remoteFallback.current = null
+      }
+
+      // --- Tampona yeni örnek ekle (yalnızca GERÇEKTEN yeni paket). ---
+      // Aynı `at` damgasına sahip paket tekrar okunursa (RAF, paketten hızlı
+      // çalışır) yeniden eklemeyiz; aksi halde tampon aynı örnekle dolar.
+      if (rivalBroadcast) {
+        const buf = remoteBuffer.current
+        const last = buf.length > 0 ? buf[buf.length - 1] : null
+        if (!last || rivalBroadcast.at !== last.at) {
+          buf.push({ x: rivalBroadcast.x, y: rivalBroadcast.y, at: rivalBroadcast.at })
+          // Tamponu sınırla (eski örnekleri at).
+          if (buf.length > REMOTE_BUFFER_MAX) buf.splice(0, buf.length - REMOTE_BUFFER_MAX)
+        }
+      }
+
+      const buf = remoteBuffer.current
+      const newest = buf.length > 0 ? buf[buf.length - 1] : null
+      const broadcastAge = newest ? now - newest.at : Infinity
       const hardStale = broadcastAge > REMOTE_HARD_TTL_MS
-      const goalX = rivalBroadcast && !hardStale ? rivalBroadcast.x : rivalTarget.x
-      const goalY = rivalBroadcast && !hardStale ? rivalBroadcast.y : rivalTarget.y
+
+      // --- HEDEF SEÇİMİ ---
+      //
+      //  1. TAMPON DOLU (≥ REMOTE_BUFFER_MIN örnek): render-time interpolasyon.
+      //     `renderTime = now - REMOTE_INTERP_DELAY_MS` anını çevreleyen iki
+      //     örneği bulup aralarında lerp yaparız. Bu, akıcılığın ANA kaynağıdır.
+      //  2. TAMPON YETERSİZ (oyunun ilk anı / sert kopma): en yeni örneğe
+      //     (veya sunucu snapshot'ına) üstel yumuşatmayla yaklaşırız.
+      let goalX: number
+      let goalY: number
+      let interpolated = false
+      if (buf.length >= REMOTE_BUFFER_MIN && !hardStale) {
+        const renderTime = now - REMOTE_INTERP_DELAY_MS
+        // `renderTime`ı çevreleyen örnek çiftini bul.
+        let from = buf[0]
+        let to = buf[buf.length - 1]
+        for (let i = 0; i < buf.length - 1; i += 1) {
+          if (buf[i].at <= renderTime && buf[i + 1].at >= renderTime) {
+            from = buf[i]
+            to = buf[i + 1]
+            break
+          }
+        }
+        // `renderTime` tamponun tamamından YENİ ise (paket gecikmesi): son iki
+        // örnek arasında ilerlemeye devam et (kısa extrapolasyon) — böylece
+        // paket gecikmesinde rakip DONMAZ, akıcı süzülür.
+        if (renderTime >= buf[buf.length - 1].at && buf.length >= 2) {
+          from = buf[buf.length - 2]
+          to = buf[buf.length - 1]
+        }
+        const span = to.at - from.at
+        const t = span > 0 ? Math.min(1.5, Math.max(0, (renderTime - from.at) / span)) : 1
+        goalX = from.x + (to.x - from.x) * t
+        goalY = from.y + (to.y - from.y) * t
+        interpolated = true
+      } else if (newest && !hardStale) {
+        // Tampon yetersiz ama taze veri var: en yeni örneğe yumuşak yaklaş.
+        goalX = newest.x
+        goalY = newest.y
+      } else {
+        // Sert kopma: sunucu snapshot'ına düş (gerçek yeniden bağlanma).
+        goalX = rivalTarget.x
+        goalY = rivalTarget.y
+      }
+
       const remote = remoteTarget.current
       if (!remote) {
+        // İlk kare: doğrudan tohumla (avatar (0,0)'dan kaymasın).
         remoteTarget.current = { x: goalX, y: goalY }
+      } else if (interpolated) {
+        // İNTERPOLASYON: hedef zaten zaman-çizelgesinde yumuşak olduğundan
+        // doğrudan yazarız. Küçük bir üstsel yumuşatma, örnek aralığı
+        // değişimlerindeki (50ms → 80ms) mikro sıçramaları da yutar.
+        const alpha = 1 - Math.exp(-REMOTE_SMOOTHING_K * dt)
+        remote.x += (goalX - remote.x) * alpha
+        remote.y += (goalY - remote.y) * alpha
       } else {
-        // --- Hız tahmini (dead-reckoning) ---
-        // Yeni bir broadcast örneği geldiyse hızı güncelle; aksi halde son
-        // bilinen hızı koru (paket gecikmesinde de akıcı kalsın).
-        const prevSample = remoteSample.current
-        if (fresh && rivalBroadcast && (!prevSample || rivalBroadcast.at !== prevSample.at)) {
-          const dtSample = prevSample
-            ? Math.max(1, rivalBroadcast.at - prevSample.at) / 1000
-            : 0
-          if (prevSample && dtSample > 0) {
-            // Ani ışınlanmalarda (respawn) sahte hız üretmemek için sınırla.
-            const rawVx = (rivalBroadcast.x - prevSample.x) / dtSample
-            const rawVy = (rivalBroadcast.y - prevSample.y) / dtSample
-            const speed = Math.hypot(rawVx, rawVy)
-            const maxSpeed = MOVE_SPEED * 1.6
-            const scale = speed > maxSpeed ? maxSpeed / speed : 1
-            remoteVel.current = { x: rawVx * scale, y: rawVy * scale }
-          }
-          remoteSample.current = { x: rivalBroadcast.x, y: rivalBroadcast.y, at: rivalBroadcast.at }
-        }
-        // Hedefi hız ile ileri taşı (dead-reckoning).
-        //
-        // KÖK SORUN ("rakip sık sık donuyor"): Önceden hız YALNIZCA `fresh`
-        // (yaş < REMOTE_POS_TTL = 1.5 sn) iken uygulanıyordu; bayat bir pakette
-        // `vel = 0` yapılıp rakip SON BİLİNEN konumda DONDURULUYORDU. Supabase
-        // Realtime "best-effort" olduğundan mobilde paketler sık sık 1.5 sn'yi
-        // aşar; rakip gerçekte hareket ederken ekranda donuyordu.
-        //
-        // ÇÖZÜM: Yumuşak-bayat pencerede (yaş ≤ REMOTE_HARD_TTL_MS) son bilinen
-        // hızı KORU ve zamanla ÜSTEL olarak söndür. Böylece kısa paket
-        // kayıplarında rakip akıcı ilerlemeye devam eder; gerçek kopmada
-        // (hard-stale) hız sıfırlanır ve sunucu snapshot'ına yumuşakça oturur.
-        // Ek ağ trafiği YOKTUR — yalnızca mevcut verinin daha iyi kullanımı.
-        const vel = hardStale
-          ? { x: 0, y: 0 }
-          : fresh
-            ? remoteVel.current
-            : // Yumuşak-bayat: son hızı zamanla söndür (tahmin ufkunu sınırla).
-              (() => {
-                const decay = Math.exp(-REMOTE_VEL_DECAY_K * (broadcastAge - REMOTE_POS_TTL) / 1000)
-                return { x: remoteVel.current.x * decay, y: remoteVel.current.y * decay }
-              })()
-        const leadX = goalX + vel.x * dt
-        const leadY = goalY + vel.y * dt
-        const dist = Math.hypot(remote.x - leadX, remote.y - leadY)
-        // KÖK SORUN ("bazen rakip bir başka konuma ışınlanıyor"):
-        // Eskiden `dist > REMOTE_SNAP_DISTANCE && !fresh` iken rakibi ANINDA
-        // hedefe zıplatıyorduk. Bu, "gerçek respawn/yeniden bağlanma" için
-        // düşünülmüştü; ancak artık bayat broadcast'te hedef SUNUCU snapshot'ına
-        // düştüğü için (bkz. yukarıdaki HEDEF SEÇİMİ), sunucu konumu bir an
-        // geride kaldığında bu dal NORMAL HAREKET sırasında tetikleniyor ve
-        // rakibi ileri-geri IŞINLIYORDU. Sunucu snapshot'ı ~1 sn gecikmeli
-        // olduğundan fark kolayca 18 birimi aşıyordu.
-        //
-        // ÇÖZÜM: Ani zıplamayı TAMAMEN kaldırırız; her zaman yumuşak yaklaşırız.
-        // Gerçek respawn/yeni tur zaten `remoteTarget.current = null` ile
-        // sıfırlanır (aşağıdaki tur değişimi bloğu) ve bir sonraki kare hedefi
-        // doğrudan tohumlar — yani ışınlanma orada, doğru yerde olur. Burada
-        // yumuşatma (`REMOTE_SMOOTHING_K = 12`) büyük düzeltmeleri bile ~250 ms'de
-        // sindirir; kullanıcı zıplama değil hızlı bir kayma görür.
+        // Tampon yok: üstsel yumuşatmayla hedefe yaklaş (ani zıplama YOK).
+        const dist = Math.hypot(remote.x - goalX, remote.y - goalY)
         if (dist > REMOTE_SETTLE) {
-          // Kare hızından bağımsız üstel yumuşatma.
-          const alpha = 1 - Math.exp(-REMOTE_SMOOTHING_K * dt)
-          remote.x += (leadX - remote.x) * alpha
-          remote.y += (leadY - remote.y) * alpha
+          const alpha = 1 - Math.exp(-REMOTE_FALLBACK_SMOOTHING_K * dt)
+          remote.x += (goalX - remote.x) * alpha
+          remote.y += (goalY - remote.y) * alpha
         } else if (dist > 0) {
-          // Hedefe çok yakın: otur.
-          remote.x = leadX
-          remote.y = leadY
+          remote.x = goalX
+          remote.y = goalY
         }
       }
       // Rakip konumunu da doğrudan DOM'a yazarız (state'e değil) — böylece

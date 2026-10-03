@@ -6,8 +6,21 @@ export const COUNTDOWN_MS = 3_000
 export const MATCH_ROUNDS = 3
 
 // --- Ağ / döngü aralıkları ---
-// 16ms ≈ 60Hz: pozisyon yayını kare hızıyla eşleşir, rakip akıcı görünür.
-export const MOVE_SEND_MS = 16
+/**
+ * Pozisyon yayın aralığı (ms).
+ *
+ * KÖK SORUN ("rakip laglı/dona dona hareket ediyor"): Eskiden 16 ms (≈60Hz)
+ * idi. Supabase Realtime broadcast WebSocket tabanlı ve "best-effort"tur;
+ * saniyede 60 paket göndermek kanalı DOYURUYOR, paketler kuyruğa giriyor,
+ * jitter ve kayıp artıyordu. Alıcı tarafta hedef konum düzensiz sıçradığı için
+ * rakip "kasa kasa / dona dona" görünüyordu.
+ *
+ * ÇÖZÜM: Yayın hızını 50 ms'ye (≈20Hz) düşürürüz. Alıcı taraf artık paketleri
+ * HAM hedef olarak kullanmaz; iki örnek arasında RENDER-TIME interpolasyon
+ * yapar (bkz. `REMOTE_INTERP_DELAY_MS`). Böylece 20Hz veriyle bile 60/120Hz
+ * ekranda TAM akıcı hareket elde edilir ve kanal rahatlar.
+ */
+export const MOVE_SEND_MS = 50
 // Hareketsizken bile bu aralıkla konum (canlılık) yayınlarız. `move` yayını
 // aynı zamanda "buradayım" sinyalidir; hareketsiz oyuncudan hiç sinyal
 // gitmezse rakip yanlışlıkla "ayrıldı" sanır. 1sn, `RIVAL_ALIVE_TTL_MS`'ten
@@ -118,6 +131,44 @@ export const REMOTE_SMOOTHING_K = 12
  * gerçek kopmada rakip doğal biçimde durur, kısa kayıpta ise akıcı kalır.
  */
 export const REMOTE_VEL_DECAY_K = 3
+/**
+ * RENDER-TIME INTERPOLASYON GECİKMESİ (ms).
+ *
+ * Profesyonel netcode tekniği ("entity interpolation"): Rakibi HER ZAMAN
+ * `now - REMOTE_INTERP_DELAY_MS` anındaki konumda çizeriz ve elimizdeki iki
+ * GERÇEK örnek arasında doğrusal interpolasyon yaparız. Böylece:
+ *
+ *   * Paket jitter'ı (düzensiz varış) ekranda GÖRÜNMEZ — çünkü çizim, varış
+ *     anına değil, örneklerin ZAMAN ÇİZELGESİNE bağlıdır.
+ *   * Paket kaybında rakip donmaz; bir sonraki örnek gelene kadar son iki
+ *     örnek arasında yumuşakça ilerler.
+ *   * 20Hz yayınla bile 60/120Hz ekranda TAM akıcı hareket elde edilir.
+ *
+ * Bedeli: sabit ~120 ms görsel gecikme. Rekabetçi bir "coin toplama" oyunu
+ * için bu, akıcılığın yanında ihmal edilebilir; "kasa kasa" görünümünü
+ * tamamen ortadan kaldırır.
+ *
+ * 120 ms, 50 ms'lik yayın aralığının ~2.4 katıdır: bir paket kaybolsa bile
+ * tamponda her zaman iki örnek bulunur ve interpolasyon kesintisiz sürer.
+ */
+export const REMOTE_INTERP_DELAY_MS = 120
+/**
+ * Rakip örnek tamponunun tuttuğu en fazla örnek sayısı. 50 ms aralıkla
+ * ~1 sn'lik geçmişe denk gelir; fazlası bellek/CPU israfıdır.
+ */
+export const REMOTE_BUFFER_MAX = 24
+/**
+ * Tamponun "dolu" sayılması için gereken en az örnek sayısı. Bu sayıya
+ * ulaşana kadar interpolasyon yerine en yeni örneğe yumuşak yaklaşırız
+ * (oyunun ilk anında rakip aniden belirmesin).
+ */
+export const REMOTE_BUFFER_MIN = 2
+/**
+ * İnterpolasyon penceresi dışında (örnekler arası boşluk > bu süre) kalan
+ * durumlarda uygulanan üstsel yumuşatma oranı (1/saniye). Yalnızca tampon
+ * boşaldığında / sert kopmada devreye girer.
+ */
+export const REMOTE_FALLBACK_SMOOTHING_K = 14
 // NOT: Eskiden `REMOTE_SNAP_DISTANCE` vardı; büyük farklarda rakibi ANINDA
 // hedefe zıplatıyordu. Bu, sunucu snapshot'ına düşülen durumlarda NORMAL
 // hareket sırasında tetiklenip rakibi ileri-geri ışınlıyordu ("bazen rakip bir
